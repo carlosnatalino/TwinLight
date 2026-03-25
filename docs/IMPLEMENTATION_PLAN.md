@@ -970,7 +970,7 @@ The following items were identified during analysis. Most are addressed by the e
 
 ---
 
-## Current Implementation Status (Updated 2026-02-28)
+## Current Implementation Status (Updated 2026-03-12)
 
 ### Phases Completed
 - **Phase 1** (Topology + TAPI Read): ✓ Complete
@@ -998,19 +998,6 @@ The following items were identified during analysis. Most are addressed by the e
 - Dashboard, Topology, Device Detail, Link Detail, Monitoring, Services, Add Service,
   Equipment, Spectrum, Spectrum Grid, Path Computation, Settings — all functional
 - Constellation/Eye diagram placeholders exist but not rendering
-
----
-
-## Known Physics Model Corrections — Status
-
-All priority fixes from `paper/ANALYSIS_AND_PROPOSALS.md` have been implemented.
-
-| Priority | Fix | File | Status |
-|----------|-----|------|--------|
-| **P1** | EEPN: Shieh-Ho dispersion-dependent formula | `phase_noise.py` + `cascade.py` | ✓ Done |
-| **P2** | PDL: Lichtman 1995 linear-ratio penalty | `polarization.py` | ✓ Done |
-| **P3** | EDFA: Bononi exponential step (stateful EdfaStateTracker) | `edfa_reservoir.py` + `context.py` + `internal.py` | ✓ Done |
-| **P4** | Fix 28 dB p-p attribution (Tancevski 1999, not Sun 1997) | `paper/outline.md` refs | ✓ Done |
 
 ---
 
