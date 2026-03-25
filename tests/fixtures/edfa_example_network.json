@@ -1,0 +1,105 @@
+{
+  "elements": [
+    {
+      "uid": "trx Brest_1",
+      "type": "Transceiver",
+      "metadata": {
+        "location": {"city": "Brest", "region": "Brittany", "latitude": 48.39, "longitude": -4.49}
+      }
+    },
+    {
+      "uid": "roadm Brest",
+      "type": "Roadm",
+      "params": {
+        "target_pch_out_db": -20
+      },
+      "metadata": {
+        "location": {"city": "Brest", "region": "Brittany", "latitude": 48.39, "longitude": -4.49}
+      }
+    },
+    {
+      "uid": "fiber (Brest → Morlaix)-F",
+      "type": "Fiber",
+      "type_variety": "SSMF",
+      "params": {
+        "length": 80.0,
+        "loss_coef": 0.2,
+        "length_units": "km",
+        "con_in": 0.5,
+        "con_out": 0.5
+      },
+      "metadata": {
+        "location": {"city": "Brest", "region": "Brittany", "latitude": 48.39, "longitude": -4.49}
+      }
+    },
+    {
+      "uid": "east edfa in Brest to Morlaix",
+      "type": "Edfa",
+      "type_variety": "std_medium_gain",
+      "operational": {
+        "gain_target": 16,
+        "tilt_target": 0,
+        "out_voa": 0
+      },
+      "metadata": {
+        "location": {"city": "Brest", "region": "Brittany", "latitude": 48.39, "longitude": -4.49}
+      }
+    },
+    {
+      "uid": "fiber (Morlaix → Brest)-F",
+      "type": "Fiber",
+      "type_variety": "SSMF",
+      "params": {
+        "length": 80.0,
+        "loss_coef": 0.2,
+        "length_units": "km",
+        "con_in": 0.5,
+        "con_out": 0.5
+      },
+      "metadata": {
+        "location": {"city": "Morlaix", "region": "Brittany", "latitude": 48.58, "longitude": -3.83}
+      }
+    },
+    {
+      "uid": "west edfa in Morlaix to Brest",
+      "type": "Edfa",
+      "type_variety": "std_medium_gain",
+      "operational": {
+        "gain_target": 16,
+        "tilt_target": 0,
+        "out_voa": 0
+      },
+      "metadata": {
+        "location": {"city": "Morlaix", "region": "Brittany", "latitude": 48.58, "longitude": -3.83}
+      }
+    },
+    {
+      "uid": "roadm Morlaix",
+      "type": "Roadm",
+      "params": {
+        "target_pch_out_db": -20
+      },
+      "metadata": {
+        "location": {"city": "Morlaix", "region": "Brittany", "latitude": 48.58, "longitude": -3.83}
+      }
+    },
+    {
+      "uid": "trx Morlaix_1",
+      "type": "Transceiver",
+      "metadata": {
+        "location": {"city": "Morlaix", "region": "Brittany", "latitude": 48.58, "longitude": -3.83}
+      }
+    }
+  ],
+  "connections": [
+    {"from_node": "trx Brest_1", "to_node": "roadm Brest"},
+    {"from_node": "roadm Brest", "to_node": "fiber (Brest → Morlaix)-F"},
+    {"from_node": "fiber (Brest → Morlaix)-F", "to_node": "east edfa in Brest to Morlaix"},
+    {"from_node": "east edfa in Brest to Morlaix", "to_node": "roadm Morlaix"},
+    {"from_node": "roadm Morlaix", "to_node": "fiber (Morlaix → Brest)-F"},
+    {"from_node": "fiber (Morlaix → Brest)-F", "to_node": "west edfa in Morlaix to Brest"},
+    {"from_node": "west edfa in Morlaix to Brest", "to_node": "roadm Brest"},
+{"from_node": "trx Morlaix_1", "to_node": "roadm Morlaix"},
+    {"from_node": "roadm Morlaix", "to_node": "trx Morlaix_1"}
+]
+}

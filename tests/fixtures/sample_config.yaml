@@ -1,0 +1,15 @@
+# Minimal valid config for tests
+gnpy:
+  topology: "dummy_topology.json"
+  equipment: "dummy_equipment.json"
+
+server:
+  rest_port: 9090
+
+simulation:
+  clock_mode: "accelerated"
+  time_scale: 10.0
+
+rmsa:
+  k_shortest_paths: 5
+  qot_margin_db: 2.0
