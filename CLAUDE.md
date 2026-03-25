@@ -88,11 +88,6 @@ examples/
   twin_config.yaml       Small example — edfa_example_network.json (2 nodes)
   coronet_conus_config.yaml  CORONET CONUS — 75 ROADMs, 198 fiber spans
 
-related-projects/        Reference only — do NOT modify
-  oopt-gnpy/             GNPy source (reference for API/data structures)
-  TAPI/                  YANG, OAS, and PROTOBUF schemas
-  optical-networking-gym/ ONG reference (RMSA heuristics)
-  mininet-optical/       Reference emulator
 ```
 
 ---
@@ -120,10 +115,9 @@ Backend health check: `curl http://localhost:8080/health`
 ## Key Constraints
 
 1. **Do NOT modify anything in `related-projects/`.**  These are reference-only copies.
-2. **GNPy is installed from PyPI** (`pip install gnpy`, currently 2.14.0), NOT from
-   `related-projects/oopt-gnpy/`.  The related-projects copy is for reading the API.
+2. **GNPy is installed from PyPI** (`pip install gnpy`, currently 2.14.0). The documentation is available at https://gnpy.readthedocs.io/
 3. **Python 3.12 venv** — the project requires Python 3.12 for gnpy compatibility.
-4. **Tailwind CSS v3** in the frontend — NOT v4.  Do not upgrade.
+4. **Tailwind CSS v3** in the frontend — NOT v4. Do not upgrade.
 5. **Package manager: npm** (not bun, not pnpm) for the frontend.
 6. **TAPI JSON keys are hyphenated** (`"modulation-format"`, `"end-point"`, etc.).
    Pydantic models use `alias=` with `by_alias=True` on serialization.
@@ -465,7 +459,7 @@ The transient models use literature-accurate analytical formulas. Remaining simp
 
 ## Literature
 
-Physics model references live in `literature/deep research/`:
+Physics model references:
 - `Analytical Models for Time-Varying Optical Impairments…` — EDFA reservoir, PMD,
   PDL, phase noise, environmental models (primary reference for transients)
 - `Optical network emulator and digital twin.md` — DT architecture survey
