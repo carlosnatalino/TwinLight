@@ -1,0 +1,105 @@
+# =============================================================================
+# T-API Network Digital Twin — Configuration File
+# =============================================================================
+# YAML superset config that references GNPy JSON files by path and adds
+# twin-specific sections. All relative paths resolve from THIS file's directory.
+#
+# Usage:
+#   tapi-twin --config twin_config.yaml
+#   tapi-twin --config twin_config.yaml --rest-port 9090 -vv   # CLI overrides
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# GNPy integration: references to external GNPy JSON files
+# ---------------------------------------------------------------------------
+gnpy:
+  topology: "../related-projects/oopt-gnpy/gnpy/example-data/edfa_example_network.json"
+  equipment: "../related-projects/oopt-gnpy/gnpy/example-data/eqpt_config.json"
+  sim_params: null                     # null => not used (required for Raman)
+  extra_equipment: []                  # list of additional equipment JSON files
+  extra_config: []                     # list of additional GNPy config files
+  no_insert_edfas: false               # set true to skip automatic EDFA insertion
+
+# ---------------------------------------------------------------------------
+# Server configuration
+# ---------------------------------------------------------------------------
+server:
+  rest_host: "0.0.0.0"
+  rest_port: 8080
+  grpc_port: 50051
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+    - "http://localhost:5173"
+
+# ---------------------------------------------------------------------------
+# Simulation engine
+# ---------------------------------------------------------------------------
+simulation:
+  clock_mode: "wall"                   # wall | accelerated | step
+  time_scale: 1.0                      # multiplier for accelerated mode
+  auto_snapshot_interval: 60           # seconds between auto-snapshots (0 = disabled)
+  snapshot_dir: "snapshots/"
+
+# ---------------------------------------------------------------------------
+# Transient models: per-model enable/disable + tunable parameters
+# Defaults follow: literature/deep research/
+#   "Analytical Models for Time-Varying Optical Impairments in WDM Systems - A Digital Twin Foundation.md"
+# ---------------------------------------------------------------------------
+transients:
+  edfa_reservoir:
+    enabled: true
+    tau_ms: 10.0                       # erbium metastable lifetime [ms]; Sun-Saleh-Zyskind, Analytical Models §1
+    drift_period_multiplier: 100.0     # drift period = tau_ms * this / 1000 [s]
+    gain_drift_amp_db: 0.3             # peak-to-peak EDFA gain [dB]; cascade ~28 dB p-p w/o AGC (Tancevski-Bononi-Rusch, IEEE JLT 1999)
+    solver_method: "RK45"              # scipy.integrate.solve_ivp method
+    solver_max_step_ms: 0.1            # max solver step [ms]
+
+  polarization:
+    enabled: true
+    pmd_coeff_ps_per_sqrt_km: 0.04     # ITU-T G.652 SSMF (Gordon-Kogelnik, PNAS 2000)
+    pdl_per_element_db: 0.1            # per-element PDL [dB]; Mecozzi-Shtaif IEEE PTL 2002
+    sop_drift_rate_rad_per_s: 1000.0   # ~1 krad/s buried fiber; Czegledi et al. Scientific Reports 2016
+    pmd_drift_period_s: 90.0           # PMD/SOP drift cycle [s]; field-timescale
+    pmd_drift_amplitude: 0.1           # per-fiber PMD drift fraction (e.g. 0.1 = 10%)
+    pdl_variation_period_s: 300.0      # PDL time variation period [s]
+    pdl_variation_amplitude: 0.2       # PDL variation ±fraction (e.g. 0.2 = ±20%)
+    pdl_penalty_factor_db: 0.333       # GSNR penalty per unit PDL [dB/dB]; ITU-T G.7710 ≈ 1/3
+
+  phase_noise:
+    enabled: true
+    tx_linewidth_hz: 100000.0          # typical 100 kHz coherent; Henry IEEE JQE 1982, Analytical Models §4
+    lo_linewidth_hz: 100000.0          # LO linewidth [Hz]; EEPN Shieh-Ho Opt. Express 2008
+    linewidth_variation_period_s: 120.0   # linewidth time variation period [s]
+    linewidth_variation_amplitude: 0.1    # linewidth variation ±fraction (e.g. 0.1 = ±10%)
+
+  environmental:
+    enabled: false                     # disabled by default
+    temp_variation_c: 5.0              # ambient temperature variation [deg C]
+    temp_cycle_period_s: 86400.0       # diurnal cycle period [s] (24 h)
+    timezone_offset: 0.0               # hours to shift diurnal cycle relative to wall clock
+    cd_temp_coeff_ps_nm_km_c: 0.002   # dD/dT [ps/(nm·km·°C)]; G.652, Kato et al. Opt. Lett. 2000
+    alpha_temp_coeff_db_km_c: 0.0002  # dα/dT [dB/(km·°C)]; deployed G.652, Analytical Models §6
+
+# ---------------------------------------------------------------------------
+# RMSA (Routing, Modulation, and Spectrum Assignment)
+# ---------------------------------------------------------------------------
+rmsa:
+  k_shortest_paths: 3
+  qot_margin_db: 1.5                  # system margin [dB]
+  default_guardband_slots: 1           # guard band in 6.25 GHz slots
+
+# ---------------------------------------------------------------------------
+# Spectrum grid
+# ---------------------------------------------------------------------------
+spectrum:
+  num_slots: 768                       # C-band: 768 x 6.25 GHz = 4.8 THz
+  slot_width_ghz: 6.25
+  center_frequency_thz: 193.1         # ITU-T center frequency
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  level: "INFO"                        # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Network nodes -->
+  <circle cx="32" cy="10" r="8" fill="#3b82f6"/>
+  <circle cx="10" cy="48" r="8" fill="#22c55e"/>
+  <circle cx="54" cy="48" r="8" fill="#22c55e"/>
+  <!-- Links -->
+  <line x1="32" y1="18" x2="16" y2="42" stroke="#6b7280" stroke-width="2.5"/>
+  <line x1="32" y1="18" x2="48" y2="42" stroke="#6b7280" stroke-width="2.5"/>
+  <line x1="18" y1="48" x2="46" y2="48" stroke="#6b7280" stroke-width="2.5"/>
+</svg>

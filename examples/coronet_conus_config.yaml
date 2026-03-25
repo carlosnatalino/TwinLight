@@ -1,0 +1,110 @@
+# =============================================================================
+# T-API Network Digital Twin — CORONET CONUS Configuration
+# =============================================================================
+# Uses the CORONET_CONUS topology from oopt-gnpy's example-data.
+# CORONET CONUS is a 75-node, 75-ROADM US continental backbone network
+# with 198 fiber spans and 546 directed connections.
+#
+# Topology and equipment: examples/gnpy-data/ (from pip-installed gnpy).
+# Path finding: GNPy compute_constrained_path (weighted by fiber length) when
+# equipment is loaded; else NetworkX k-shortest. GNPy used for propagation (QoT).
+#
+# Usage (run from project root with venv active):
+#   tapi-twin --config examples/coronet_conus_config.yaml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# GNPy integration
+# ---------------------------------------------------------------------------
+gnpy:
+  topology: "gnpy-data/CORONET_CONUS_Topology.json"
+  equipment: "gnpy-data/eqpt_config.json"
+  sim_params: null                     # null => not used (no Raman fibers in CORONET)
+  extra_equipment: []
+  extra_config: []
+  # CORONET has bare Fiber spans with no pre-placed EDFAs; set true to prevent
+  # the TAPI builder from treating missing EDFAs as an error condition.
+  no_insert_edfas: true
+
+# ---------------------------------------------------------------------------
+# Server configuration
+# ---------------------------------------------------------------------------
+server:
+  rest_host: "0.0.0.0"
+  rest_port: 8080
+  grpc_port: 50051
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+    - "http://localhost:5173"
+
+# ---------------------------------------------------------------------------
+# Simulation engine
+# ---------------------------------------------------------------------------
+simulation:
+  clock_mode: "wall"
+  time_scale: 1.0
+  auto_snapshot_interval: 60
+  snapshot_dir: "snapshots/"
+
+# ---------------------------------------------------------------------------
+# Transient models (defaults: literature/deep research/
+#   "Analytical Models for Time-Varying Optical Impairments in WDM Systems - A Digital Twin Foundation.md")
+# ---------------------------------------------------------------------------
+transients:
+  edfa_reservoir:
+    enabled: true
+    tau_ms: 10.0                       # Sun-Saleh-Zyskind τ ≈ 10 ms; Analytical Models §1
+    drift_period_multiplier: 100.0
+    gain_drift_amp_db: 0.3             # Tancevski-Bononi-Rusch IEEE JLT 1999 (cascade ref)
+    solver_method: "RK45"
+    solver_max_step_ms: 0.1
+
+  polarization:
+    enabled: true
+    pmd_coeff_ps_per_sqrt_km: 0.04     # ITU-T G.652 SSMF; Gordon-Kogelnik PNAS 2000
+    pdl_per_element_db: 0.1            # Mecozzi-Shtaif IEEE PTL 2002
+    sop_drift_rate_rad_per_s: 1000.0   # Czegledi et al. Scientific Reports 2016
+    pmd_drift_period_s: 90.0
+    pmd_drift_amplitude: 0.1
+    pdl_variation_period_s: 300.0
+    pdl_variation_amplitude: 0.2
+    pdl_penalty_factor_db: 0.333       # ITU-T G.7710 ≈ 1/3
+
+  phase_noise:
+    enabled: true
+    tx_linewidth_hz: 100000.0          # Henry IEEE JQE 1982; Analytical Models §4
+    lo_linewidth_hz: 100000.0          # Shieh-Ho Opt. Express 2008 (EEPN)
+    linewidth_variation_period_s: 120.0
+    linewidth_variation_amplitude: 0.1
+
+  environmental:
+    enabled: false
+    temp_variation_c: 5.0
+    temp_cycle_period_s: 86400.0
+    timezone_offset: 0.0
+    cd_temp_coeff_ps_nm_km_c: 0.002   # G.652; Kato et al. Opt. Lett. 2000
+    alpha_temp_coeff_db_km_c: 0.0002  # deployed G.652; Analytical Models §6
+
+# ---------------------------------------------------------------------------
+# RMSA — tuned for a large backbone (more candidate paths)
+# ---------------------------------------------------------------------------
+rmsa:
+  k_shortest_paths: 5                  # more candidates for a 75-node mesh
+  qot_margin_db: 1.5
+  default_guardband_slots: 1
+
+# ---------------------------------------------------------------------------
+# Spectrum grid (standard C-band)
+# ---------------------------------------------------------------------------
+spectrum:
+  num_slots: 768                       # 768 x 6.25 GHz = 4.8 THz
+  slot_width_ghz: 6.25
+  center_frequency_thz: 193.1
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
