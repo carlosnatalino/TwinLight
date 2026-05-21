@@ -7,8 +7,8 @@ a final measurements dict suitable for the API response.
 Models and primary references:
   1. EDFA reservoir: Bononi-Rusch JLT 1998 Eq. 5/19/29; Sun 1997
   2. PMD drift: Gordon-Kogelnik PNAS 2000 (Maxwell DGD)
-  3. PDL penalty: Mecozzi-Shtaif PTL 2002 (accumulation);
-     Lichtman 1995 / Bruyère-Audouin PTL 1994 (penalty formula)
+  3. PDL OSNR penalty: Zarkosvky & Shtaif Opt. Lett. 45(5):1224 (2020)
+     hinge model Eq. 3-5; D'Amico OFC 2023 / Miotto OFC 2025 (OSNR penalty)
   4. Phase noise (EEPN): Shieh-Ho Opt. Express 2008 Eq. 33-41
   5. Environmental: Kato et al. Opt. Lett. 2000 (dD/dT)
 
@@ -96,16 +96,15 @@ def apply_all_transients(
         osnr += d
 
     # 2. Polarization: PMD drift (Gordon-Kogelnik 2000) +
-    #    PDL penalty (Lichtman 1995 / Mecozzi-Shtaif 2002)
-    #    PDL affects both GSNR and OSNR: it causes signal power
-    #    fluctuation that degrades both ASE-limited and NLI-limited SNR.
+    #    PDL OSNR penalty (Zarkosvky-Shtaif 2020 hinge model, Eq. 3-5)
+    #    PDL affects both GSNR and OSNR: the polarization-dependent signal
+    #    power fluctuation degrades both ASE-limited and NLI-limited SNR.
     if cfg.polarization.enabled:
-        all_uids = baseline.fiber_uids + baseline.edfa_uids
         pmd += polarization.delta_pmd_ps(
             t, baseline.fiber_uids, baseline.pmd_ps, cfg.polarization
         )
-        pdl_penalty = polarization.delta_gsnr_from_pdl_db(
-            t, all_uids, cfg.polarization,
+        pdl_penalty = polarization.delta_osnr_from_pdl_db(
+            t, baseline.pdl_elements, cfg.polarization,
         )
         gsnr += pdl_penalty
         osnr += pdl_penalty

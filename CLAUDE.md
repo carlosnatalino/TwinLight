@@ -51,7 +51,7 @@ src/tapi_twin/           Backend Python package
     ber_conversion.py    gsnr_to_ber(), ber_to_q_db() — Gaussian approx via scipy erfc
     transients/
       edfa_reservoir.py  Per-EDFA gain drift → ΔGSNR (sinusoidal, stateless)
-      polarization.py    PMD random-walk + PDL penalty
+      polarization.py    PMD random-walk + PDL OSNR penalty (hinge model)
       phase_noise.py     EEPN-aware linewidth penalty
       environmental.py   Thermal CD drift (uses timezone_offset config)
       cascade.py         Compose all four models → measurements dict; hash_phase()
@@ -87,7 +87,6 @@ tapi-twin-ui/            React SPA
 examples/
   twin_config.yaml       Small example — edfa_example_network.json (2 nodes)
   coronet_conus_config.yaml  CORONET CONUS — 75 ROADMs, 198 fiber spans
-
 ```
 
 ---
@@ -260,7 +259,7 @@ for sinusoidal models are seeded via MD5 hash of `(uid, metric)` for per-element
 | Model | Effect | Mechanism | Timescale |
 |-------|--------|-----------|-----------|
 | EDFA reservoir | ±ΔGSNR, ±ΔOSNR | Bononi-Rusch exponential step response (stateful `EdfaStateTracker`); falls back to sinusoidal when no tracker | µs–ms (add ~10 µs, drop ~100 µs) |
-| Polarization | ΔPMD + PDL penalty (GSNR+OSNR) | PMD: per-fiber sinusoidal drift, quadrature sum; PDL: Lichtman 1995 linear-ratio formula | 90 s / 300 s |
+| Polarization | ΔPMD + PDL OSNR penalty (GSNR+OSNR) | PMD: per-fiber sinusoidal drift, quadrature sum; PDL: Zarkosvky-Shtaif 2020 hinge model (Eq. 3-5), per-hinge transfer cascaded over ROADM/EDFA hinges, each with a UID-seeded Maxwell-distributed PDL and an incommensurate drift period | 90 s / 300 s |
 | Phase noise (EEPN) | ΔGSNR only | Shieh-Ho dispersion-dependent: `α = π·c/(2f₀²)·|D_t|·B·Δν_LO`; LO linewidth only | ~120 s |
 | Environmental | ΔCD + loss penalty (GSNR+OSNR) | Kato dD/dT thermal CD drift + fiber loss variation | diurnal (86 400 s) |
 
@@ -348,7 +347,8 @@ gnpy:
 
 transients:
   edfa_reservoir: { enabled: true, tau_ms: 10.0 }
-  polarization:   { enabled: true, pdl_per_element_db: 0.1 }
+  polarization:   { enabled: true, pdl_per_roadm_db: 0.5, pdl_per_edfa_db: 0.1,
+                    ase_distribution: distributed }
   phase_noise:    { enabled: true, tx_linewidth_hz: 100000.0 }
   environmental:  { enabled: false, temp_variation_c: 5.0,
                     temp_cycle_period_s: 86400.0, timezone_offset: 0.0 }
@@ -389,7 +389,7 @@ rmsa:
 - GNPy propagation baseline with 88-channel C-band SI
 - All four analytical transient models with literature-accurate formulas:
   EDFA Bononi exponential step (stateful tracker), Shieh-Ho EEPN,
-  Lichtman PDL penalty, Kato environmental drift
+  Zarkosvky-Shtaif hinge-model PDL OSNR penalty, Kato environmental drift
 - `/internal/services/{uuid}` path topology endpoint
 - `/internal/path-info` path computation with QoT estimate
 - gNMI gRPC server (ONCE / STREAM / POLL subscribe modes, Capabilities RPC)
@@ -450,7 +450,7 @@ The transient models use literature-accurate analytical formulas. Remaining simp
 |-------|----------------------|-----------------|--------|
 | **EDFA reservoir** | Bononi-Rusch exponential step response (Eq. 19/29 [16]) with stateful `EdfaStateTracker`, asymmetric τ_add/τ_drop, linear dB cascade (Sun 1997) | Full ODE dr/dt (Bononi Eq. 5) with spectral hole burning, gain clamping | Fixed — exponential step is accurate for channel add/drop; full ODE is future work |
 | **Phase noise (EEPN)** | Shieh-Ho dispersion-dependent: `α = π·c/(2f₀²)·|D_t|·B·Δν_LO`, penalty uses pre-EEPN GSNR, LO linewidth only | Shieh-Ho 2008 Eq. 33-41 | Fixed — matches literature |
-| **PDL penalty** | Lichtman 1995 linear-ratio formula: `penalty = -10·log10(1/(1-Γ_lin²/3))` with Mecozzi-Shtaif quadrature accumulation | Mecozzi-Shtaif 2002 + Lichtman 1995 | Fixed — matches literature |
+| **PDL OSNR penalty** | Zarkosvky-Shtaif 2020 hinge model: per-hinge transfer `aⱼ = (1+γⱼ·cosθⱼ)/√(1−γⱼ²)` (Eq. 5) cascaded over ROADM/EDFA hinges; per-hinge PDL is UID-seeded Maxwell-distributed (Miotto 2025) and each hinge drifts with an incommensurate period for ergodic joint coverage; OSNR penalty depends on ASE distribution (D'Amico 2023 / Miotto 2025) | Zarkosvky-Shtaif 2020 Eq. 3-5; coherent-system usage per D'Amico OFC 2023, Miotto OFC 2025 | Fixed — coherent hinge model (replaces IMDD-era Lichtman formula); deterministic time-drift covers the alignment ensemble without explicit Monte Carlo |
 | **PMD drift** | Sinusoidal, 10% amplitude, 90 s period | Gordon-Kogelnik 2000: Maxwell-distributed DGD; quadrature accumulation correct; drift timescale not specified (field-dependent) | Low severity — reasonable approximation |
 | **BER conversion** | erfc-based Gaussian approximation per format | Standard textbook M-QAM (correct); Curri 2022 uses b2b thresholds instead | Correct |
 | **QoT combiner** | GSNR receives all 4 models; OSNR receives EDFA + PDL + Env loss only (not EEPN) | EEPN is DSP-domain, should not affect OSNR | Correct routing |
@@ -466,4 +466,5 @@ Physics model references:
 
 Key citation keys in code comments: `Carena_2014` (GN model), `Curri_2022` (LP GSNR),
 `Bononi-Rusch` (EDFA reservoir, Eq. 19/29), `Shieh-Ho` (EEPN), `Gordon-Kogelnik` (PMD),
-`Mecozzi-Shtaif` (PDL accumulation), `Lichtman` (PDL penalty), `Kato` (thermal CD drift).
+`Zarkosvky-Shtaif 2020` (PDL hinge model, Eq. 3-5), `D'Amico OFC 2023` /
+`Miotto OFC 2025` (PDL→OSNR penalty), `Kato` (thermal CD drift).
