@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useConnectionStore } from "@/store/connection";
 import { createClient } from "@/api/client";
@@ -58,6 +58,22 @@ export default function SpectrumGridPage() {
     x: number;
     y: number;
   } | null>(null);
+
+  // Hiding the popup is deferred so the cursor can travel from the slot cell
+  // to the popup (which sits a few px below) without it disappearing.
+  const hideTimer = useRef<number | null>(null);
+  const cancelHide = () => {
+    if (hideTimer.current != null) {
+      window.clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+  };
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimer.current = window.setTimeout(() => setHoverCell(null), 120);
+  };
+  useEffect(() => cancelHide, []);
+
   useEffect(() => {
     const log = (msg: string, detail?: unknown) => {
       console.info("[SpectrumGrid]", msg, detail !== undefined ? detail : "");
@@ -256,6 +272,7 @@ export default function SpectrumGridPage() {
                         colSpan={run.count}
                         onMouseEnter={(e) => {
                           if (run.value) {
+                            cancelHide();
                             const rect = (e.target as HTMLElement).getBoundingClientRect();
                             setHoverCell({
                               linkIdx,
@@ -266,7 +283,7 @@ export default function SpectrumGridPage() {
                             });
                           }
                         }}
-                        onMouseLeave={() => setHoverCell(null)}
+                        onMouseLeave={scheduleHide}
                       />
                     );
                   })}
@@ -290,6 +307,8 @@ export default function SpectrumGridPage() {
                 left: hoverCell.x,
                 top: hoverCell.y + 4,
               }}
+              onMouseEnter={cancelHide}
+              onMouseLeave={scheduleHide}
             >
               <p className="text-xs text-gray-500 mb-1">Service</p>
               <p className="font-mono text-xs text-gray-800 break-all mb-2">
