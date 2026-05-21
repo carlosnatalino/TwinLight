@@ -50,6 +50,10 @@ class OpmBaseline:
     total_fiber_km: float      # Total fiber length [km]
     edfa_uids: list[str] = field(default_factory=list)   # Ordered EDFA UIDs on path
     fiber_uids: list[str] = field(default_factory=list)  # Ordered Fiber UIDs on path
+    # Ordered (uid, kind) of PDL hinges on the path, kind in {"Roadm", "Edfa"}.
+    # Hinge model of Zarkosvky & Shtaif, Opt. Lett. 45(5):1224 (2020): PDL is
+    # dominated by a discrete set of components; fibers contribute negligibly.
+    pdl_elements: list[tuple[str, str]] = field(default_factory=list)
 
 
 def build_gnpy_network(
@@ -169,6 +173,14 @@ def compute_path_baseline(
         total_fiber_km=_sum_fiber_km(path_items),
         edfa_uids=[uid for uid, el in path_items if type(el).__name__ == "Edfa"],
         fiber_uids=[uid for uid, el in path_items if type(el).__name__ == "Fiber"],
+        # PDL hinges in propagation order — Zarkosvky & Shtaif, Opt. Lett.
+        # 45(5):1224 (2020). ROADMs/WSSs and EDFAs are discrete PDL elements;
+        # fibers are excluded (negligible intrinsic PDL per the hinge model).
+        pdl_elements=[
+            (uid, type(el).__name__)
+            for uid, el in path_items
+            if type(el).__name__ in ("Roadm", "Edfa")
+        ],
     )
 
 

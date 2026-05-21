@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -133,9 +133,15 @@ class PolarizationConfig(BaseModel):
         default=0.04, ge=0,
         description="PMD coefficient [ps/√km]. Default: ITU-T G.652 SSMF (Gordon-Kogelnik, PNAS 2000).",
     )
-    pdl_per_element_db: float = Field(
+    # --- PDL: hinge model of Zarkosvky & Shtaif, Opt. Lett. 45(5):1224 (2020),
+    #     Eqs. 3-5; OSNR-penalty usage per D'Amico OFC 2023 / Miotto OFC 2025.
+    pdl_per_roadm_db: float = Field(
+        default=0.5, ge=0,
+        description="Mean of the per-ROADM/WSS Maxwell-distributed PDL [dB]; each hinge draws an individual value seeded by its UID (Miotto OFC 2025). Default: D'Amico OFC 2023 measured 0.2-0.8 dB per WSS.",
+    )
+    pdl_per_edfa_db: float = Field(
         default=0.1, ge=0,
-        description="Per-element PDL [dB]. Default: typical for EDFA/fiber/connector (Mecozzi-Shtaif, IEEE PTL 2002).",
+        description="Mean of the per-EDFA Maxwell-distributed PDL [dB]; each hinge draws an individual value seeded by its UID. Default: small residual PDL of an inline amplifier.",
     )
     sop_drift_rate_rad_per_s: float = Field(
         default=1000.0, ge=0,
@@ -149,21 +155,13 @@ class PolarizationConfig(BaseModel):
         default=0.1, ge=0, le=1.0,
         description="Per-fiber PMD drift amplitude as fraction of baseline (e.g. 0.1 = 10%). Default: Analytical Models §5.",
     )
-    pdl_variation_period_s: float = Field(
+    sop_drift_period_s: float = Field(
         default=300.0, gt=0,
-        description="Period [s] of per-element PDL time variation (temperature/alignment). Default: minutes-scale.",
+        description="Base period [s] over which each hinge's SOP alignment cosθ sweeps [-1,1] as fiber birefringence drifts. Each hinge is detuned by a small UID-dependent factor (±25%) so periods are incommensurate and the joint alignment space is ergodically covered. Default: minutes-scale.",
     )
-    pdl_variation_amplitude: float = Field(
-        default=0.2, ge=0, le=1.0,
-        description="PDL variation ±fraction around nominal (e.g. 0.2 = ±20%). Default: alignment/temperature variation.",
-    )
-    pdl_penalty_factor_db: float = Field(
-        default=1.0 / 3.0, gt=0,
-        description=(
-            "Deprecated: kept for config compatibility. "
-            "PDL penalty now uses Lichtman 1995 formula with "
-            "linear PDL ratio (see polarization.py)."
-        ),
+    ase_distribution: Literal["distributed", "rx", "tx"] = Field(
+        default="distributed",
+        description="ASE injection assumption for the PDL/OSNR interplay (D'Amico OFC 2023): 'distributed' = equal ASE at each path EDFA (Miotto OFC 2025); 'rx' = all ASE at receiver (worst case); 'tx' = all ASE at transmitter (OSNR conserved).",
     )
 
 
