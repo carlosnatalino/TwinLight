@@ -65,7 +65,7 @@ t-api-network-digital-twin/
 │       │   ├── ber_conversion.py        # GSNR → pre-FEC BER → Q-factor → post-FEC BER
 │       │   └── transients/              # Time-varying analytical models
 │       │       ├── edfa_reservoir.py    # Sun-Saleh-Zyskind reservoir ODE
-│       │       ├── polarization.py      # PMD (Gordon-Kogelnik/hinge), PDL (Mecozzi-Shtaif)
+│       │       ├── polarization.py      # PMD (Gordon-Kogelnik), PDL hinge model (Zarkosvky-Shtaif)
 │       │       ├── phase_noise.py       # Henry linewidth + Wiener + EEPN
 │       │       ├── environmental.py     # Thermal dispersion, microbending
 │       │       └── cascade.py           # Network-level transient propagation
@@ -283,7 +283,7 @@ sequenceDiagram
         Cache-->>Ctx: OpmBaseline (GSNR, OSNR, CD, PMD)
         Ctx->>Trans: apply_all_transients(t, baseline, path_uids)
         Trans->>Trans: edfa_reservoir(t, tracker) → ΔGSNR, ΔOSNR
-        Trans->>Trans: polarization(t, uids) → ΔPMD, PDL penalty
+        Trans->>Trans: polarization(t, uids) → ΔPMD, PDL OSNR penalty
         Trans->>Trans: phase_noise(t, baseline) → EEPN penalty
         Trans->>Trans: environmental(t, uids) → ΔCD, loss penalty
         Trans->>Trans: combine QoT (GSNR/OSNR tracks)
@@ -637,7 +637,7 @@ PMD_LP = sqrt(sum(delta_PMD_i^2 * L_i))  [ps]
 **Files created/modified**:
 
 - `src/tapi_twin/physics/transients/edfa_reservoir.py` — Bononi exponential step + EdfaStateTracker
-- `src/tapi_twin/physics/transients/polarization.py` — PMD drift + Lichtman PDL penalty
+- `src/tapi_twin/physics/transients/polarization.py` — PMD drift + Zarkosvky-Shtaif hinge-model PDL OSNR penalty
 - `src/tapi_twin/physics/transients/phase_noise.py` — Shieh-Ho EEPN
 - `src/tapi_twin/physics/transients/environmental.py` — Kato thermal CD + loss
 - `src/tapi_twin/physics/transients/cascade.py` — QoT combiner with GSNR/OSNR tracks
@@ -663,15 +663,17 @@ PMD_LP = sqrt(sum(delta_PMD_i^2 * L_i))  [ps]
 
 `EdfaStateTracker` tracks per-EDFA channel count and last event; wired into `TapiContext.add_service()` / `delete_service()`. Falls back to sinusoidal when no tracker.
 
-#### 4b. Polarization [Gordon-Kogelnik 2000, Mecozzi-Shtaif 2002, Lichtman 1995]
+#### 4b. Polarization [Gordon-Kogelnik 2000, Zarkosvky-Shtaif 2020, D'Amico OFC 2023, Miotto OFC 2025]
 
 ```python
 # PMD drift: per-fiber sinusoidal, quadrature sum (Gordon-Kogelnik)
-# PDL accumulation: <Γ²> = N * <γ²> (Mecozzi-Shtaif, quadrature)
-# PDL penalty (Lichtman 1995):
-#   pdl_lin_power = 10^(total_pdl_db / 10)
-#   gamma_lin = (pdl_lin_power - 1) / (pdl_lin_power + 1)
-#   penalty = -10 * log10(1 / (1 - gamma_lin² / 3))
+# PDL hinge model (Zarkosvky-Shtaif 2020, Eq. 3-5):
+#   per-hinge transfer:  aⱼ = (1 + γⱼ·cosθⱼ) / √(1 - γⱼ²)
+#   γⱼ  ← UID-seeded Maxwell-distributed per-hinge PDL (Miotto OFC 2025)
+#   θⱼ  ← UID-detuned incommensurate drift period → ergodic alignment
+#   cascade aⱼ over ROADM/EDFA hinges; fibers excluded (negligible PDL)
+# OSNR penalty depends on ASE distribution (D'Amico OFC 2023):
+#   'distributed' (equal ASE per EDFA) | 'rx' (worst case) | 'tx'
 ```
 
 #### 4c. Phase Noise (EEPN) [Shieh-Ho, Opt. Express 2008, Eq. 33-41]
@@ -703,7 +705,7 @@ PMD_LP = sqrt(sum(delta_PMD_i^2 * L_i))  [ps]
 # BER  ← recomputed from perturbed GSNR via gsnr_to_ber()
 ```
 
-**Tests**: 27 tests in `tests/test_physics/` covering all four models + cascade composition. EDFA exponential decay, asymmetric time constants, cascade accumulation, PDL penalty linearity, EEPN CD-dependence, BER recomputation.
+**Tests**: 40 tests in `tests/test_physics/` covering all four models + cascade composition. EDFA exponential decay, asymmetric time constants, cascade accumulation, PDL hinge-model OSNR penalty (per-hinge cascade, ergodic drift, ASE-distribution dependence), EEPN CD-dependence, BER recomputation.
 
 ---
 
@@ -890,7 +892,7 @@ Each implemented model should cite its source in code comments:
 | EDFA reservoir | Bononi-Rusch (deep research) | `dr/dt = Qp - Qp_out + sum(Qs) - r/tau` |
 | EDFA cascade | Sun-Zyskind (deep research) | N coupled ODEs, 28 dB p-p without AGC |
 | PMD | Gordon-Kogelnik (deep research) | Maxwell DGD distribution |
-| PDL | Mecozzi-Shtaif (deep research) | `<Gamma^2> = N*<gamma^2>` |
+| PDL | Zarkosvky-Shtaif 2020 | hinge cascade `a_j = (1 + g_j*cos(th_j)) / sqrt(1 - g_j^2)` |
 | Phase noise | Henry (deep research) | `dnu = dnu_ST*(1+alpha^2)` |
 | EEPN | Shieh-Ho (deep research) | `sigma^2 = 2*pi*dnu_LO*|beta2|*L*B^2` |
 | SRS tilt | Vanholsbeeck_2005 | 10-Lorentzian Raman response, Eq. 16 |
@@ -976,7 +978,7 @@ The following items were identified during analysis. Most are addressed by the e
 - **Phase 1** (Topology + TAPI Read): ✓ Complete
 - **Phase 2** (GNPy Steady-State QoT): ✓ Complete
 - **Phase 3** (RMSA + Connectivity): ✓ Complete (includes path computation RPC)
-- **Phase 4** (Transient Models): ✓ Complete (literature-accurate formulas: Bononi exponential step EDFA, Shieh-Ho EEPN, Lichtman PDL, Kato environmental)
+- **Phase 4** (Transient Models): ✓ Complete (literature-accurate formulas: Bononi exponential step EDFA, Shieh-Ho EEPN, Zarkosvky-Shtaif hinge-model PDL, Kato environmental)
 - **Phase 5** (Output + Streaming): Partially complete (OPM metrics + gNMI done; eye/constellation not yet)
 - **Phase 6** (Simulation Engine + Client): Not started
 
@@ -989,10 +991,10 @@ The following items were identified during analysis. Most are addressed by the e
 - RESTCONF error format (`ietf-restconf:errors`)
 - Physics model corrections (P1–P3 all done):
   - EEPN: Shieh-Ho dispersion-dependent formula (α = π·c/(2f₀²)·|D_t|·B·Δν_LO)
-  - PDL: Lichtman 1995 linear-ratio penalty (penalty = -10·log10(1/(1-Γ²/3)))
+  - PDL: Zarkosvky-Shtaif 2020 hinge model — per-hinge transfer aⱼ = (1+γⱼ·cosθⱼ)/√(1−γⱼ²) cascaded over ROADM/EDFA hinges, UID-seeded Maxwell-distributed per-hinge PDL, ASE-distribution-aware OSNR penalty (D'Amico OFC 2023 / Miotto OFC 2025)
   - EDFA: Bononi-Rusch exponential step with stateful EdfaStateTracker, asymmetric τ_add/τ_drop
   - QoT combiner: separate GSNR/OSNR tracks (EEPN → GSNR only; PDL+Env loss → both)
-- 27 new physics unit tests (test_physics/ directory)
+- 40 physics unit tests (test_physics/ directory)
 
 ### Frontend Features Implemented (full list)
 - Dashboard, Topology, Device Detail, Link Detail, Monitoring, Services, Add Service,
