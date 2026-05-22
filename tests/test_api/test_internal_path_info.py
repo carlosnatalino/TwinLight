@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 def _get_two_sip_uuids(app) -> tuple[str, str]:
-    from fastapi.testclient import TestClient
     data = app.get("/data/tapi-common:context/service-interface-point").json()
     sips = data["tapi-common:context"]["service-interface-point"]
     assert len(sips) >= 2
@@ -11,7 +10,6 @@ def _get_two_sip_uuids(app) -> tuple[str, str]:
 
 
 def test_path_info_returns_hops_and_optional_measurements(app) -> None:
-    from fastapi.testclient import TestClient
     sip_a, sip_z = _get_two_sip_uuids(app)
     resp = app.get(
         f"/internal/path-info?sip_a={sip_a}&sip_z={sip_z}&modulation=DP-QPSK"
@@ -39,7 +37,6 @@ def test_path_info_422_when_missing_params(app) -> None:
 
 
 def test_path_info_404_when_sip_not_found(app) -> None:
-    from fastapi.testclient import TestClient
     sip_a, _ = _get_two_sip_uuids(app)
     resp = app.get(
         f"/internal/path-info?sip_a={sip_a}&sip_z=00000000-0000-0000-0000-000000000000"

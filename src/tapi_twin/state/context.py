@@ -31,7 +31,6 @@ from tapi_twin.models.topology import (
     Node,
     NodeEdgePoint,
     Topology,
-    TopologyContext,
 )
 from tapi_twin.state.spectrum_state import SpectrumState
 from tapi_twin.state.topology_state import TopologyGraph

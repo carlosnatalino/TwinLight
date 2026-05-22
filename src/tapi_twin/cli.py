@@ -158,7 +158,11 @@ def _resolve_path_list(values: List[Any] | None, base_dir: Path) -> List[str]:
     """Resolve a list of paths relative to base_dir."""
     if not values:
         return []
-    return [_resolve_path(v, base_dir) for v in values]
+    return [
+        resolved
+        for v in values
+        if (resolved := _resolve_path(v, base_dir)) is not None
+    ]
 
 
 def _resolve_paths(data: Dict[str, Any], base_dir: Path) -> Dict[str, Any]:

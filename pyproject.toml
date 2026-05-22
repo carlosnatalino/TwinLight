@@ -25,7 +25,9 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "ruff>=0.7",
+    "mypy>=1.13",
 ]
 
 [project.scripts]
@@ -42,3 +44,42 @@ asyncio_mode = "auto"
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# Generated protobuf/gRPC code — not linted (regenerated from .proto files).
+extend-exclude = ["src/tapi_twin/streaming/proto"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+plugins = ["pydantic.mypy"]
+warn_redundant_casts = true
+warn_unused_ignores = true
+# Generated protobuf/gRPC code is not type-checked.
+exclude = ["src/tapi_twin/streaming/proto/"]
+
+# Generated protobuf/gRPC modules: treated as opaque (Any) by the type checker.
+[[tool.mypy.overrides]]
+module = "tapi_twin.streaming.proto.*"
+follow_imports = "skip"
+ignore_errors = true
+
+# Third-party packages that ship no type information.
+[[tool.mypy.overrides]]
+module = [
+    "grpc.*",
+    "google.protobuf.*",
+    "networkx.*",
+    "yaml",
+    "gnpy.*",
+    "scipy.*",
+]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+precision = 1
+# Regression floor — current coverage is ~65%; raise as coverage improves.
+fail_under = 60

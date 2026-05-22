@@ -22,7 +22,9 @@ def test_spectrum_grid_links_are_roadm_to_roadm_subset(app) -> None:
     """Spectrum grid links are a subset of /internal/links (same ROADM–ROADM filter)."""
     links_resp = app.get("/internal/links")
     assert links_resp.status_code == 200
-    roadm_link_uuids = {l["link-uuid"] for l in links_resp.json()["links"]}
+    roadm_link_uuids = {
+        link["link-uuid"] for link in links_resp.json()["links"]
+    }
 
     grid_resp = app.get("/internal/spectrum-grid")
     assert grid_resp.status_code == 200

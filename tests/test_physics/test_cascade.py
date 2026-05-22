@@ -1,6 +1,5 @@
 """Tests for the cascade transient composition module."""
 
-import pytest
 
 from tapi_twin.config import TransientsConfig
 from tapi_twin.physics.gnpy_adapter import OpmBaseline

@@ -1,8 +1,6 @@
 """Tests for the EEPN phase noise model (Shieh-Ho 2008)."""
 
-import math
 
-import pytest
 
 from tapi_twin.config import PhaseNoiseConfig
 from tapi_twin.physics.transients.phase_noise import delta_gsnr_db

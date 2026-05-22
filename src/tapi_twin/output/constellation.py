@@ -87,6 +87,7 @@ def synthesize_constellation(
     symbol_indices = rng.integers(0, len(ideal), size=n_symbols)
     tx_symbols = ideal[symbol_indices]
 
+    phase_noise: np.ndarray | float
     if phase_sigma > 0:
         phase_noise = rng.normal(0.0, phase_sigma, size=n_symbols)
     else:

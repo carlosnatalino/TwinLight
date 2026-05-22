@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from scipy.special import erfc, erfcinv  # type: ignore[import-untyped]
+from scipy.special import erfc, erfcinv
 
 from tapi_twin.physics.modulation import ModulationFormat, get_params
 

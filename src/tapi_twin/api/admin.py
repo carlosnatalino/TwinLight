@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request, status
 
@@ -99,7 +100,7 @@ async def list_snapshots(request: Request) -> dict:
     """Return list of available snapshot files (path + timestamp), newest first."""
     directory = _snapshot_dir(request)
     candidates = list(directory.glob("*.json"))
-    entries = [
+    entries: list[dict[str, Any]] = [
         {"path": str(p), "timestamp": p.stat().st_mtime}
         for p in candidates
     ]
