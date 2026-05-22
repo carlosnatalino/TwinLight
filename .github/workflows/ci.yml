@@ -42,13 +42,19 @@ jobs:
 
       - name: Run tests with coverage
         if: ${{ !cancelled() }}
-        run: pytest --cov --cov-report=term-missing
+        run: |
+          pytest --cov --cov-report=term-missing \
+            --md-report --md-report-color=never | tee pytest-output.txt
 
-      # Render the coverage table on the workflow run's "Summary" page.
-      - name: Coverage summary
+      # Render the test-results and coverage tables on the run's "Summary" page.
+      - name: Test & coverage summary
         if: ${{ !cancelled() }}
         run: |
           {
+            echo "## Test results"
+            echo
+            grep '^|' pytest-output.txt || echo "_No test report._"
+            echo
             echo "## Test coverage"
             echo
             coverage report --format=markdown --fail-under=0 \
