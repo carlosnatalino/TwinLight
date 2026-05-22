@@ -26,6 +26,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
+    "pytest-md-report>=0.6",
     "ruff>=0.7",
     "mypy>=1.13",
 ]
@@ -77,9 +78,11 @@ ignore_missing_imports = true
 [tool.coverage.run]
 source = ["src"]
 branch = true
+# Generated protobuf/gRPC code is not hand-written — exclude it from coverage.
+omit = ["src/tapi_twin/streaming/proto/*"]
 
 [tool.coverage.report]
 show_missing = true
 precision = 1
-# Regression floor — current coverage is ~65%; raise as coverage improves.
+# Regression floor — current coverage is ~70%; raise as coverage improves.
 fail_under = 60
