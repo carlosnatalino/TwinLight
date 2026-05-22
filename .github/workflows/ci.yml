@@ -42,14 +42,18 @@ jobs:
 
       - name: Run tests with coverage
         if: ${{ !cancelled() }}
-        run: pytest --cov --cov-report=term-missing --cov-report=xml
+        run: pytest --cov --cov-report=term-missing
 
-      - name: Upload coverage report
+      # Render the coverage table on the workflow run's "Summary" page.
+      - name: Coverage summary
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-xml
-          path: coverage.xml
+        run: |
+          {
+            echo "## Test coverage"
+            echo
+            coverage report --format=markdown --fail-under=0 \
+              || echo "_No coverage data._"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   frontend:
     name: Frontend (vitest + build)
