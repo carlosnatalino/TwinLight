@@ -1,10 +1,5 @@
 """Tests for the Bononi exponential step EDFA reservoir model."""
 
-import math
-import time
-
-import pytest
-
 from tapi_twin.config import EdfaReservoirConfig
 from tapi_twin.physics.transients.edfa_reservoir import (
     EdfaStateTracker,
@@ -64,6 +59,9 @@ class TestEdfaStateTracker:
         )
         # Steady state for 1 channel: -1 * 0.3 = -0.3 dB
         assert abs(late - (-0.3)) < 0.01
+        # Right after the event the transient has barely started, so `early`
+        # is much further from the -0.3 dB steady state than `late`.
+        assert abs(early - (-0.3)) > abs(late - (-0.3))
 
     def test_asymmetric_time_constants(self):
         """Add should be faster than drop (smaller tau_eff)."""

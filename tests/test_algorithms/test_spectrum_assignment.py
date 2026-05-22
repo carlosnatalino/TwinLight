@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from tapi_twin.algorithms.spectrum_assignment import first_fit, path_uids_to_edges
 from tapi_twin.state.spectrum_state import SpectrumState

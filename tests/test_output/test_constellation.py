@@ -10,7 +10,6 @@ References:
 
 from __future__ import annotations
 
-import math
 
 import numpy as np
 import pytest
@@ -135,7 +134,6 @@ class TestNoiseMappingFromGsnr:
                 measurements, "DP-QPSK", n_symbols=50000, linewidth_hz=0.0
             )
             ideal = _ideal_constellation("DP-QPSK")
-            avg_power_ideal = np.mean(np.abs(ideal) ** 2)
 
             distances = []
             for sym in result:

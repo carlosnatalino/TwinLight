@@ -90,8 +90,8 @@ async def compute_path(body: dict, request: Request) -> dict:
         path_list.append(
             PathCandidate(
                 link=[
-                    LinkRef(topology_uuid=t, link_uuid=l)
-                    for t, l in link_refs
+                    LinkRef(topology_uuid=t, link_uuid=lk)
+                    for t, lk in link_refs
                 ],
                 node=[
                     NodeRef(topology_uuid=t, node_uuid=n)

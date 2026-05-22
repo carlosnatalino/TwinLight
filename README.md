@@ -147,3 +147,67 @@ for mod in formats:
         print('Gave up after 100 attempts:', mod, name)
 "
 ```
+
+## Development
+
+Install the development dependencies (test, lint, and type-check tools):
+
+```bash
+pip install -e ".[dev]"
+```
+
+The checks below are the same ones CI runs on every pull request
+(`.github/workflows/ci.yml`):
+
+```bash
+pytest                  # backend test suite
+pytest --cov            # backend tests with a coverage report
+ruff check .            # lint
+mypy                    # static type checking
+npm --prefix tapi-twin-ui test -- run  # web UI tests (vitest)
+```
+
+The generated gRPC/protobuf code under `src/tapi_twin/streaming/proto/` is
+committed and excluded from linting and type checking — regenerate it from the
+`.proto` files rather than editing it by hand.
+
+### Recompiling the protobuf / gRPC code
+
+The gNMI streaming interface is generated from `gnmi.proto` and `gnmi_ext.proto`
+in `src/tapi_twin/streaming/proto/`. Only regenerate after editing those `.proto`
+files. The compiler (`grpc_tools.protoc`) ships with `grpcio-tools`, which is a
+project dependency, so it is available once the package is installed.
+
+1. From the repo root, with the virtual environment active, run the compiler
+   (the include path is the proto directory, so the `.proto` files' bare
+   `import "gnmi_ext.proto"` resolves):
+
+   ```bash
+   PROTO_DIR=src/tapi_twin/streaming/proto
+   python -m grpc_tools.protoc \
+     -I "$PROTO_DIR" \
+     --python_out="$PROTO_DIR" \
+     --grpc_python_out="$PROTO_DIR" \
+     "$PROTO_DIR/gnmi.proto" "$PROTO_DIR/gnmi_ext.proto"
+   ```
+
+2. Fix the cross-module imports. `protoc` emits bare imports (`import gnmi_pb2`)
+   that fail when the modules are imported as part of the `tapi_twin` package,
+   so rewrite them to absolute imports:
+
+   ```bash
+   sed -i.bak -E \
+     's/^import (gnmi[a-z_]*_pb2) as/from tapi_twin.streaming.proto import \1 as/' \
+     "$PROTO_DIR/gnmi_pb2.py" "$PROTO_DIR/gnmi_pb2_grpc.py"
+   rm -f "$PROTO_DIR"/*.bak
+   ```
+
+3. Verify the regenerated modules import and the test suite still passes:
+
+   ```bash
+   python -c "from tapi_twin.streaming.proto import gnmi_pb2, gnmi_pb2_grpc"
+   pytest
+   ```
+
+Then commit the regenerated `*_pb2.py` / `*_pb2_grpc.py` files alongside the
+`.proto` changes.

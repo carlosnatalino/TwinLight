@@ -122,6 +122,23 @@ Backend health check: `curl http://localhost:8080/health`
 `tapi-twin` and `tapi-client` are both console scripts (`[project.scripts]` in
 `pyproject.toml`); they appear on `PATH` after `pip install -e .`.
 
+### Quality checks
+
+CI (`.github/workflows/ci.yml`) runs these on every pull request — run them
+locally before pushing:
+
+```bash
+pip install -e ".[dev]"   # pytest, pytest-asyncio, pytest-cov, ruff, mypy
+pytest                    # backend test suite
+pytest --cov              # … with coverage (fails under 60%; see [tool.coverage])
+ruff check .              # lint        (config in [tool.ruff])
+mypy                      # type-check  (config in [tool.mypy])
+npm --prefix tapi-twin-ui test -- run   # frontend tests (vitest)
+```
+
+mypy uses the Pydantic plugin (hyphenated-alias models) and treats the
+generated `streaming/proto/` package as opaque.
+
 ---
 
 ## Key Constraints
@@ -140,6 +157,9 @@ Backend health check: `curl http://localhost:8080/health`
    path metadata, admin utilities, WebSocket feeds, etc. — belongs in separate files
    (`api/internal.py`, `api/admin.py`, `api/streaming.py`, …) on separate URL prefixes
    (`/internal/`, `/admin/`, `/ws/`).  Never mix proprietary endpoints into TAPI routes.
+9. **Generated gRPC/protobuf code** in `src/tapi_twin/streaming/proto/` is committed
+   (the package imports it directly — there is no codegen build step) but is **excluded
+   from ruff and mypy**. Do not hand-edit it; regenerate it from the `.proto` files.
 
 ---
 

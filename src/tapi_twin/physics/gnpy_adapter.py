@@ -21,7 +21,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -134,7 +134,7 @@ def compute_path_baseline(
 
     # Deep-copy only the path elements (not the whole network) to avoid
     # mutating cached element state during propagation.
-    path_items: list[tuple[str, object]] = [
+    path_items: list[tuple[str, Any]] = [
         (uid, copy.deepcopy(uid_map[uid])) for uid in path_uids
     ]
 
@@ -192,7 +192,7 @@ def _count_type(network: "nx.DiGraph", type_name: str) -> int:
     return sum(1 for n in network.nodes() if type(n).__name__ == type_name)
 
 
-def _sum_fiber_km(path_items: list[tuple[str, object]]) -> float:
+def _sum_fiber_km(path_items: list[tuple[str, Any]]) -> float:
     """Sum fiber lengths [km] along a path."""
     total = 0.0
     for _uid, el in path_items:

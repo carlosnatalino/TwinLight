@@ -90,7 +90,9 @@ class TestGetLink:
         data = app.get(f"{PREFIX}/topology={topo_uuid}").json()
         links = data["tapi-topology:topology"][0]["link"]
         # At least one link with fiber has latency-characteristic (total-size in ns)
-        with_latency = [l for l in links if l.get("latency-characteristic")]
+        with_latency = [
+            link for link in links if link.get("latency-characteristic")
+        ]
         assert len(with_latency) >= 1
         for link in with_latency:
             lc = link["latency-characteristic"][0]

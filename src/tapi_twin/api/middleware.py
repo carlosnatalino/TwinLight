@@ -25,14 +25,14 @@ class PathDecodeMiddleware(BaseHTTPMiddleware):
     sees it, ensuring the route patterns match correctly.
     """
 
-    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+    async def dispatch(self, request: Request, call_next):
         if "%" in request.scope.get("path", ""):
             request.scope["path"] = unquote(request.scope["path"])
         return await call_next(request)
 
 
 class RestconfContentTypeMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+    async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
         ct = response.headers.get("content-type", "")
         if request.url.path.startswith("/data/") and "json" in ct:
