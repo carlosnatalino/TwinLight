@@ -107,6 +107,7 @@ def synthesize_eye(
     samples_per_symbol: int = 64,
     roll_off: float = 0.2,
     n_symbols_display: int = 2,
+    seed: int | None = None,
 ) -> EyeDiagramData:
     """Synthesize an eye diagram from OPM measurements.
 
@@ -117,6 +118,10 @@ def synthesize_eye(
         samples_per_symbol: Time resolution per symbol period.
         roll_off: Raised-cosine roll-off factor (0.0–1.0).
         n_symbols_display: Number of symbol periods to display (1–3).
+        seed: Optional RNG seed. When given, the traces are reproducible;
+            when None (default) each call draws fresh random traces. Two
+            calls with the same seed draw the same bit patterns and noise,
+            so they differ only by parameters such as PMD jitter.
 
     Returns:
         EyeDiagramData with time_ns, traces, and metadata.
@@ -136,13 +141,16 @@ def synthesize_eye(
     half_span = n_symbols_display * t_sym / 2
     t = np.linspace(-half_span, half_span, n_samples)
 
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed)
     traces = np.zeros((n_traces, n_samples))
 
     n_context_bits = n_symbols_display + 2
     for i in range(n_traces):
         bits = rng.integers(0, 2, size=n_context_bits)
-        jitter = rng.normal(0.0, jitter_sigma) if jitter_sigma > 0 else 0.0
+        # Always draw the jitter sample (scale is 0.0 when there is no PMD)
+        # so the RNG stream stays aligned regardless of pmd-ps — two seeded
+        # calls then differ only by the jitter magnitude.
+        jitter = rng.normal(0.0, jitter_sigma)
         t_jittered = t - jitter
 
         waveform = _generate_pulse_sequence(bits, t_jittered, t_sym, roll_off)
