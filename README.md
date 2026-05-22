@@ -110,13 +110,13 @@ npm --prefix tapi-twin-ui run dev
 
 ### Create three services (one per modulation format) between random node pairs
 
-Requires the backend to be running (e.g. on port 8080, or 8081 for CORONET). For each modulation format (DP-QPSK, DP-16QAM, DP-64QAM), picks random endpoint pairs and retries until a service is created (or up to 100 attempts per format). Service names include a random suffix so you can run the command multiple times:
+Requires the backend to be running (e.g. on port 8080). For each modulation format (DP-QPSK, DP-16QAM, DP-64QAM), picks random endpoint pairs and retries until a service is created (or up to 100 attempts per format). Service names include a random suffix so you can run the command multiple times:
 
 ```bash
 python3 -c "
 import urllib.request, json, random
 from urllib.error import HTTPError
-BASE = 'http://localhost:8080'  # use 8081 for CORONET
+BASE = 'http://localhost:8080'
 r = urllib.request.urlopen(BASE + '/data/tapi-common:context/service-interface-point')
 sips = json.loads(r.read())['tapi-common:context']['service-interface-point']
 if len(sips) < 2:
