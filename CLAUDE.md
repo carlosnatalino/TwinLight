@@ -73,6 +73,12 @@ src/tapi_twin/           Backend Python package
   streaming/
     gnmi_service.py      GnmiServicer: Capabilities + Subscribe (ONCE/STREAM/POLL)
 
+src/tapi_client/         Companion Python client library (installed package)
+  client.py              TapiClient — async REST wrapper for T-API endpoints
+  streaming.py           GnmiConsumer — async gNMI Subscribe consumer
+  cli.py                 `tapi-client` CLI: pick a service, stream its live OPM
+  __main__.py            `python -m tapi_client` entry point
+
 tapi-twin-ui/            React SPA
   src/
     api/client.ts        TapiApiClient (fetch wrapper, all REST calls)
@@ -100,6 +106,10 @@ tapi-twin --config examples/twin_config.yaml
 # or for the large CORONET topology:
 tapi-twin --config examples/coronet_conus_config.yaml
 
+# Client CLI — pick a service, stream its live (transient-aware) OPM
+tapi-client                                       # defaults to localhost
+tapi-client --rest-url http://host:8080 --gnmi-target host:50051
+
 # Frontend (dev server)
 npm --prefix tapi-twin-ui run dev   # http://localhost:5173
 
@@ -108,6 +118,9 @@ npm --prefix tapi-twin-ui run build
 ```
 
 Backend health check: `curl http://localhost:8080/health`
+
+`tapi-twin` and `tapi-client` are both console scripts (`[project.scripts]` in
+`pyproject.toml`); they appear on `PATH` after `pip install -e .`.
 
 ---
 
@@ -319,10 +332,15 @@ tapi-common:context                   → /data/tapi-common:context
 tapi-common:context/tapi-topology:topology-context
                                       → /data/tapi-common:context/tapi-topology:topology-context
 topology[uuid=X]                      → topology=X  (key → =value)
+…/connectivity-service[uuid=X]/opm    → /internal/opm/X  (live OPM, dynamic)
+opm                                   → /internal/opm    (all services)
 ```
 
-OPM and connectivity paths are **not** in `_PATH_MAP` yet — add entries there when
-extending gNMI coverage to those resources.
+OPM paths are resolved **dynamically** in `_gnmi_path_to_rest()` (they carry a
+per-service UUID, so they cannot live in the static `_PATH_MAP`): any path ending
+in an `opm` element maps to the transient-aware `/internal/opm` endpoint, so each
+gNMI sample reflects the live signal quality (GNPy baseline + the four transient
+models). Other connectivity paths still fall back to `/data/<joined>`.
 
 ### Middleware Notes
 Two Starlette middlewares in `api/middleware.py` (applied in `app.py`):
@@ -421,7 +439,8 @@ rmsa:
 - Eye diagram placeholder (component exists, rendering not implemented)
 
 ### Not Yet Implemented
-- gNMI OPM/connectivity path subscriptions (only topology paths currently in `_PATH_MAP`)
+- gNMI subscriptions for connectivity-service objects (OPM and topology paths work;
+  the bare connectivity-service path falls back to `/data/<joined>`)
 - Eye diagram and constellation diagram rendering (placeholders exist in UI)
 - Event-driven simulation engine (clock, event queue)
 - WebSocket OPM fallback

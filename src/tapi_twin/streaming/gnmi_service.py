@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import AsyncIterator
@@ -15,7 +14,9 @@ from tapi_twin.streaming.proto import gnmi_pb2, gnmi_pb2_grpc
 
 logger = logging.getLogger(__name__)
 
-# Mapping of gNMI path elements to REST API paths
+# Mapping of gNMI path elements to REST API paths.
+# OPM paths carry a per-service UUID, so they are resolved dynamically in
+# _gnmi_path_to_rest() rather than via this static map.
 _PATH_MAP: dict[str, str] = {
     "tapi-common:context": "/data/tapi-common:context",
     "tapi-topology:topology-context": (
@@ -31,16 +32,30 @@ def _gnmi_path_to_rest(path: gnmi_pb2.Path) -> str:
       /tapi-common:context
       /tapi-common:context/tapi-topology:topology-context
       /tapi-common:context/tapi-topology:topology-context/topology[uuid=X]
+      /tapi-connectivity:connectivity-context/connectivity-service[uuid=X]/opm
+        → live, transient-aware OPM measurements for service X
+      /opm  → OPM measurements for every service
     """
     parts: list[str] = []
+    service_uuid: str | None = None
     for elem in path.elem:
         name = elem.name
         if elem.key:
             # e.g. topology[uuid=X] → topology=X
             key_val = next(iter(elem.key.values()), "")
+            if name == "connectivity-service":
+                service_uuid = key_val
             parts.append(f"{name}={key_val}")
         else:
             parts.append(name)
+
+    # Live OPM — signal quality WITH transient fluctuations. The internal
+    # OPM endpoint composes the four transient models (EDFA reservoir,
+    # polarization, phase noise, environmental) on top of the GNPy QoT
+    # baseline, so each gNMI sample reflects the instantaneous signal
+    # quality rather than a static baseline.
+    if parts and parts[-1] == "opm":
+        return f"/internal/opm/{service_uuid}" if service_uuid else "/internal/opm"
 
     joined = "/".join(parts)
 

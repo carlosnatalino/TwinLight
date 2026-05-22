@@ -30,6 +30,7 @@ dev = [
 
 [project.scripts]
 tapi-twin = "tapi_twin.main:main"
+tapi-client = "tapi_client.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

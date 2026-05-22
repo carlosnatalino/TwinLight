@@ -1,6 +1,6 @@
 # GNPy example data
 
-These files are copied from the **pip-installed** `gnpy` package (`gnpy/example-data/`) so the digital twin can run with full GNPy propagation (QoT) without cloning `related-projects/oopt-gnpy`.
+These files are copied from the **pip-installed** `gnpy` package (`gnpy/example-data/`) so the digital twin can run with full GNPy propagation (QoT) without cloning `oopt-gnpy`.
 
 - **CORONET_CONUS_Topology.json** — 75-node US backbone topology
 - **eqpt_config.json** — EDFA types, transceiver specs, fiber parameters
