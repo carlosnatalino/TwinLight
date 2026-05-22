@@ -32,6 +32,12 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# The frontend has source/test directories literally named "lib"; the Python
+# "lib/" rule above must not ignore them (they are tracked source, not build
+# artifacts). Negations must follow the "lib/" rule to take effect.
+!tapi-twin-ui/src/lib/
+!tapi-twin-ui/src/__tests__/lib/
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
