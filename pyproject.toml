@@ -18,7 +18,8 @@ dependencies = [
     "grpcio-tools>=1.67",
     "protobuf>=5.28",
     "gnpy>=2.14",
-    "matplotlib>=3.7"
+    "matplotlib>=3.7",
+    "prometheus-client>=0.21"
 ]
 
 [project.optional-dependencies]

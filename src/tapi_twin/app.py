@@ -20,6 +20,7 @@ from tapi_twin.api import (
     diagrams,
     equipment,
     internal,
+    metrics as metrics_api,
     path_computation,
     photonic_media,
     topology,
@@ -103,6 +104,7 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.include_router(diagrams.router)
     app.include_router(admin.router)
     app.include_router(config_api.router)
+    app.include_router(metrics_api.router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict:
