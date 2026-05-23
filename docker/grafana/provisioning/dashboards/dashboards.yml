@@ -1,0 +1,17 @@
+# Grafana dashboard provisioning — picks up every .json file under
+# /var/lib/grafana/dashboards on startup (and on the configured update
+# interval) and makes it available in the "T-API Twin" folder.
+
+apiVersion: 1
+
+providers:
+  - name: tapi-twin
+    orgId: 1
+    folder: "T-API Twin"
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

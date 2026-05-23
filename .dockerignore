@@ -1,0 +1,41 @@
+# Keep the build context small: copy only what the image needs.
+
+# Local virtualenv (image builds its own /opt/venv).
+venv/
+.venv/
+
+# React frontend — the image is backend-only.
+tapi-twin-ui/
+
+# Read-only reference checkouts (e.g. optical-networking-gym).
+related-projects/
+
+# Python bytecode + caches.
+__pycache__/
+*.py[codz]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Editors / OS noise.
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Git history & CI metadata are not needed in the image.
+.git/
+.github/
+.gitignore
+
+# Documentation, snapshots, and ad-hoc notes.
+docs/
+snapshots/
+notes/
+literature/
+
+# Test data is only needed in the dev tree, not the runtime image.
+tests/

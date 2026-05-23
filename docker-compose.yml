@@ -1,0 +1,92 @@
+# One-shot observability stack for the T-API Network Digital Twin.
+#
+# Boots three services on a shared network:
+#   * twin       — the digital twin (FastAPI :8080 + gRPC :50051).
+#   * prometheus — scrapes twin:8080/metrics every 15s.
+#   * grafana    — pre-provisioned with the Prometheus data source and
+#                  the dashboard from examples/grafana-dashboard.json.
+#
+# Usage:
+#   docker compose up --build
+# then open:
+#   http://localhost:8080/health      — twin health
+#   http://localhost:8080/metrics     — raw Prometheus exposition
+#   http://localhost:9090             — Prometheus UI
+#   http://localhost:3000             — Grafana (admin / admin)
+#
+# Override the twin config (default: CORONET CONUS):
+#   docker compose run --rm twin tapi-twin \
+#       --config /app/examples/twin_config.yaml --rest-host 0.0.0.0
+
+services:
+
+  twin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tapi-twin:latest
+    container_name: tapi-twin
+    ports:
+      - "8080:8080"   # REST (TAPI + /config + /metrics + /admin)
+      - "50051:50051" # gNMI gRPC
+    volumes:
+      # /admin/snapshot writes land here on the host so they survive
+      # container rebuilds. Created on first up if it doesn't exist.
+      - ./snapshots:/app/snapshots
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: tapi-twin-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # 7-day local retention is plenty for the experimental workloads
+      # this stack targets; bump if you keep the stack up for longer
+      # campaigns.
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      twin:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: tapi-twin-grafana
+    environment:
+      # Override on the command line for any real deployment.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      # Hide the welcome wizard so the user lands directly on the
+      # provisioned dashboard.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_DEFAULT_THEME: light
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Dashboard JSON is served via the file provider; mount the
+      # example dashboard read-only.
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+
+volumes:
+  prometheus-data:
+  grafana-data:
