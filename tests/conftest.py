@@ -78,3 +78,13 @@ def gnpy_context(gnpy_twin_config: TwinConfig):
     from tapi_twin.state.context import TapiContext
 
     return TapiContext(gnpy_twin_config)
+
+
+@pytest.fixture
+def gnpy_app(gnpy_twin_config: TwinConfig) -> TestClient:
+    """FastAPI TestClient with a real GNPy network loaded.
+
+    Use this for endpoint tests that need GNPy-dependent features
+    (/config, OPM with real baselines, etc.).
+    """
+    return TestClient(create_app(gnpy_twin_config))
