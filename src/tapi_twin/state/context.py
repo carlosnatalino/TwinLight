@@ -108,42 +108,14 @@ class TapiContext:
                     self._sip_to_gnpy_uid[sip.uuid] = n.value
                     break
 
-        # -- GNPy network (for propagation and path computation) ------------
-        # See https://gnpy.readthedocs.io/ — topology.request.compute_constrained_path
-        # uses weighted shortest path (fiber length); we keep the network for that.
-        self._gnpy_available: bool = False
-        self._gnpy_uid_map: dict = {}   # uid → gnpy element object
-        self._gnpy_network = None       # DiGraph of elements (for GNPy path computation)
-        # Retained for /config/set redesign=true so we can re-run
-        # gnpy.tools.worker_utils.designed_network without re-reading the
-        # equipment file from disk on every override.
-        self._gnpy_equipment: Any = None
+        # -- Physical-layer backend (GNPy today; EGN in a later milestone) ---
+        # All QoT propagation, per-element parameter writes, and the
+        # equipment/network handles needed by ``redesign`` live on the
+        # backend. ``TapiContext`` exposes ``_gnpy_*`` properties below
+        # so existing call sites and tests don't have to change.
+        from tapi_twin.physics.gnpy_backend import GnpyBackend
 
-        if config.gnpy.equipment is not None:
-            try:
-                from tapi_twin.physics.gnpy_adapter import (
-                    build_gnpy_network,
-                    build_uid_map,
-                )
-
-                network, equipment = build_gnpy_network(
-                    config.gnpy.topology, config.gnpy.equipment
-                )
-                self._gnpy_uid_map = build_uid_map(network)
-                self._gnpy_network = network
-                self._gnpy_equipment = equipment
-                self._gnpy_available = True
-                logger.info(
-                    "GNPy network loaded: %d elements", len(self._gnpy_uid_map)
-                )
-            except ImportError:
-                logger.warning(
-                    "gnpy package not found — OPM will use sinusoidal mock data"
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("GNPy network load failed (%s) — using mock data", exc)
-        else:
-            logger.info("No GNPy equipment file configured — using mock OPM data")
+        self._backend = GnpyBackend(config)
 
         # -- Per-service caches and serialization lock ---------------------
         self._route_cache: dict[tuple[str, str], list[str]] = {}
@@ -197,8 +169,30 @@ class TapiContext:
         # when a fiber fails. Topologies with multiple fibers per TAPI link
         # are handled the same way: failing any one fiber disables the link.
         self._fiber_to_link_refs: dict[str, list[tuple[str, str]]] = {}
-        if self._gnpy_available:
+        if self._backend.available:
             self._build_fiber_to_link_index()
+
+    # -- Backend pass-throughs ------------------------------------------
+    # These three properties existed as direct attributes before the
+    # ``PhysicalBackend`` refactor; keeping them as read-only aliases
+    # avoids churning every call site (and every test) that already
+    # reads ``ctx._gnpy_uid_map`` / ``ctx._gnpy_network`` etc.
+
+    @property
+    def _gnpy_available(self) -> bool:
+        return self._backend.available
+
+    @property
+    def _gnpy_uid_map(self) -> dict[str, Any]:
+        return self._backend.uid_map
+
+    @property
+    def _gnpy_network(self):
+        return self._backend.network
+
+    @property
+    def _gnpy_equipment(self) -> Any:
+        return getattr(self._backend, "equipment", None)
 
     # -- Query methods ---------------------------------------------------
 
@@ -481,26 +475,18 @@ class TapiContext:
             if svc.uuid in self._baseline_cache:
                 return self._baseline_cache[svc.uuid]
 
-            try:
-                from tapi_twin.physics.gnpy_adapter import compute_path_baseline
-
-                baseline = compute_path_baseline(
-                    self._gnpy_uid_map,
-                    path,
-                    svc.modulation_format.value,
-                )
-                self._baseline_cache[svc.uuid] = baseline
-                logger.debug(
-                    "Computed baseline for service %s: GSNR=%.2f dB",
-                    svc.uuid,
-                    baseline.gsnr_db,
-                )
-                return baseline
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Baseline computation failed for service %s: %s", svc.uuid, exc
-                )
+            baseline = await self._backend.compute_baseline(
+                path, svc.modulation_format.value,
+            )
+            if baseline is None:
                 return None
+            self._baseline_cache[svc.uuid] = baseline
+            logger.debug(
+                "Computed baseline for service %s: GSNR=%.2f dB",
+                svc.uuid,
+                baseline.gsnr_db,
+            )
+            return baseline
 
     def invalidate_baseline(self, service_uuid: str) -> None:
         """Remove a cached baseline so it is recomputed on next OPM request."""
@@ -535,22 +521,19 @@ class TapiContext:
             ParamValidationError: An attribute or value violates the
                 allow-list. No mutations are applied.
         """
-        if not self._gnpy_available:
+        if not self._backend.available:
             raise RuntimeError(
-                "GNPy network not loaded — element overrides require GNPy"
+                "Physical-layer backend not loaded — element overrides require it"
             )
-
-        from tapi_twin.physics.element_params import write_attr
 
         # Validate first: resolve every UID and (attr, value) without writing.
         # ``failed`` keys are split out and dispatched to set_link_failed
-        # below; everything else goes through the element-params allow-list.
-        resolved: list[tuple[str, object, str, Any]] = []
+        # below; everything else goes through the backend's allow-list.
+        resolved: list[tuple[str, str, Any]] = []
         failure_actions: list[tuple[str, bool]] = []
         for uid, attrs in updates.items():
-            el = self._gnpy_uid_map.get(uid)
-            if el is None:
-                raise KeyError(f"Unknown GNPy element UID: {uid!r}")
+            if uid not in self._backend.uid_map:
+                raise KeyError(f"Unknown element UID: {uid!r}")
             for attr, value in attrs.items():
                 if attr == "failed":
                     if not isinstance(value, bool):
@@ -560,15 +543,16 @@ class TapiContext:
                         )
                     failure_actions.append((uid, value))
                     continue
-                # write_attr does the heavy validation; validation failures
-                # surface as ParamValidationError from inside the write loop
-                # below. Earlier good values stay applied — partial-batch
-                # semantics match how RMSA also handles failures.
-                resolved.append((uid, el, attr, value))
+                # backend.write_attribute does the heavy validation;
+                # validation failures surface as ParamValidationError
+                # from inside the write loop below. Earlier good values
+                # stay applied — partial-batch semantics match how RMSA
+                # also handles failures.
+                resolved.append((uid, attr, value))
 
         invalidated: dict[str, set[str]] = {}
-        for uid, el, attr, value in resolved:
-            write_attr(el, attr, value)
+        for uid, attr, value in resolved:
+            self._backend.write_attribute(uid, attr, value)
             self._element_overrides.setdefault(uid, {})[attr] = value
             affected = set(self._element_to_services.get(uid, ()))
             for svc_uuid in affected:
@@ -587,25 +571,14 @@ class TapiContext:
         # Per-UID route cache stays valid for parameter-only edits (length /
         # topology didn't change); set_link_failed clears it when needed.
 
-        # Optional re-design pass: re-run gnpy.tools.worker_utils.designed_network
-        # to re-equalise ROADM and EDFA operating points against the mutated
-        # parameters (e.g. a fiber-loss bump now propagates into EDFA
-        # power-mode delta_p targets). This is opt-in because it is
-        # expensive on large topologies and resets some operator-set state.
-        # After redesign, every baseline must be recomputed — clear the
-        # whole cache, not just the per-element entries.
-        if redesign and self._gnpy_available:
-            from gnpy.tools.worker_utils import designed_network
-
-            network, _ref_req, _ref_chan = designed_network(
-                self._gnpy_equipment, self._gnpy_network
-            )
-            # ``designed_network`` may return the same network object or a
-            # new one; either way, keep our handles in sync with it.
-            self._gnpy_network = network
-            from tapi_twin.physics.gnpy_adapter import build_uid_map
-
-            self._gnpy_uid_map = build_uid_map(network)
+        # Optional re-design pass: re-equalise the backend's design state
+        # against the mutated parameters (GNPy: ``designed_network``;
+        # other backends may no-op or raise). This is opt-in because it
+        # is expensive on large topologies and resets some operator-set
+        # state. After redesign, every baseline must be recomputed —
+        # clear the whole cache, not just the per-element entries.
+        if redesign and self._backend.available:
+            self._backend.redesign()
             self._baseline_cache.clear()
             # Reverse-index entries were keyed by UIDs that did not change
             # across redesign, so they stay valid; same for failed-links.
@@ -888,26 +861,13 @@ class TapiContext:
         Uses same GNPy propagation as get_or_compute_baseline. Returns None if
         GNPy unavailable or path not found.
         """
-        if not self._gnpy_available:
+        if not self._backend.available:
             return None
         path = self.get_service_path(sip_a, sip_z)
         if not path:
             return None
         async with self._propagation_lock:
-            try:
-                from tapi_twin.physics.gnpy_adapter import compute_path_baseline
-
-                return compute_path_baseline(
-                    self._gnpy_uid_map,
-                    path,
-                    modulation_format,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Path baseline computation failed %s -> %s: %s",
-                    sip_a[:8], sip_z[:8], exc,
-                )
-                return None
+            return await self._backend.compute_baseline(path, modulation_format)
 
     def _build_gnpy_topology_ref_indexes(self) -> None:
         """Build gnpy_uid -> (topo_uuid, node_uuid) and (src,dst) -> (topo_uuid, link_uuid)."""

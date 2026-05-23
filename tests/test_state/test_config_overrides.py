@@ -141,7 +141,7 @@ class TestApplyElementOverrides:
         )
 
     def test_unknown_uid_rejected(self, gnpy_context: TapiContext) -> None:
-        with pytest.raises(KeyError, match="Unknown GNPy element UID"):
+        with pytest.raises(KeyError, match="Unknown element UID"):
             gnpy_context.apply_element_overrides({"no-such-uid": {"loss_coef": 0.2}})
 
     def test_invalid_attribute_rejected(self, gnpy_context: TapiContext) -> None:
