@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from tapi_twin.api import (
     admin,
     common,
+    config as config_api,
     connectivity,
     diagrams,
     equipment,
@@ -101,6 +102,7 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.include_router(internal.router)
     app.include_router(diagrams.router)
     app.include_router(admin.router)
+    app.include_router(config_api.router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict:
