@@ -639,6 +639,12 @@ class TapiContext:
         the walk dead-ends or loops. Used by ``_build_fiber_to_link_index``.
         """
         g = self._topo_graph.graph
+        # GNPy's designed_network() may split a long fiber into
+        # sub-span Fiber nodes (e.g. ``fiber (A → B)-_(1/4)``) that
+        # exist in the GNPy uid_map but not in the parsed topo_graph.
+        # Walking from such a node is meaningless here; bail.
+        if start_uid not in g:
+            return None
         cur = start_uid
         seen = {cur}
         while True:
