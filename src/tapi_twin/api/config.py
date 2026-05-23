@@ -157,10 +157,14 @@ async def set_config(request: Request, body: dict[str, Any]) -> dict[str, Any]:
             detail="'devices' and 'twin' must be JSON objects",
         )
 
+    redesign = bool(body.get("redesign"))
+
     invalidated: dict[str, set[str]] = {}
-    if devices:
+    if devices or redesign:
         try:
-            invalidated = ctx.apply_element_overrides(devices)
+            invalidated = ctx.apply_element_overrides(
+                devices, redesign=redesign,
+            )
         except (ParamValidationError, ValueError) as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -183,19 +187,11 @@ async def set_config(request: Request, body: dict[str, Any]) -> dict[str, Any]:
                 detail=str(e),
             ) from e
 
-    # M5 will hook the redesign flag through; for now reject with a clear
-    # 501 if a client sets it, so an early integration doesn't believe it
-    # took effect.
-    if body.get("redesign"):
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="redesign=true is not yet implemented (planned for M5)",
-        )
-
     return {
         "applied": {
             "devices": devices,
             "twin": to_nested(twin_applied),
+            "redesign": redesign,
         },
         "invalidated_services": {
             uid: sorted(svcs) for uid, svcs in invalidated.items()

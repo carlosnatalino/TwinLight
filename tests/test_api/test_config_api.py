@@ -161,14 +161,44 @@ class TestSetConfig:
         )
         assert r.status_code == 400
 
-    def test_redesign_flag_501(self, gnpy_app: TestClient) -> None:
-        # M5 wires this; for now it must clearly fail rather than silently
-        # appear to take effect.
+    def test_redesign_flag_runs_designed_network_and_clears_baselines(
+        self, gnpy_app: TestClient, monkeypatch
+    ) -> None:
+        # Prime the baseline cache so we can verify it was cleared.
+        svc_uuid = _create_service_via_api(gnpy_app)
+        ctx = gnpy_app.app.state.context
+        # Force a baseline to be cached.
+        import asyncio
+        baseline = asyncio.new_event_loop().run_until_complete(
+            ctx.get_or_compute_baseline(ctx.get_service(svc_uuid))
+        )
+        assert baseline is not None
+        assert svc_uuid in ctx._baseline_cache
+
+        # Spy on gnpy.tools.worker_utils.designed_network so we can assert
+        # it was actually invoked (otherwise the flag is silently dead).
+        import gnpy.tools.worker_utils as wu
+        call_count = {"n": 0}
+        original = wu.designed_network
+
+        def spy(*args, **kwargs):
+            call_count["n"] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(wu, "designed_network", spy)
+
         r = gnpy_app.post(
             "/config/set",
             json={"redesign": True, "devices": {}},
         )
-        assert r.status_code == 501
+        assert r.status_code == 200, r.text
+        assert call_count["n"] == 1
+        # Whole-cache flush on redesign.
+        assert svc_uuid not in ctx._baseline_cache
+        body = r.json()
+        assert body["applied"]["redesign"] is True
+        # The redesign entry reports every existing service as invalidated.
+        assert svc_uuid in body["invalidated_services"].get("__redesign__", [])
 
     def test_empty_body_is_noop(self, gnpy_app: TestClient) -> None:
         r = gnpy_app.post("/config/set", json={})
