@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from tapi_twin.config import TwinConfig
 from tapi_twin.loader.gnpy_topology import load_gnpy_topology
 from tapi_twin.loader.tapi_builder import TapiBuilder
+from tapi_twin.physics.backend import element_kind_name as _kind_name
 from tapi_twin.models.common import ServiceInterfacePoint
 from tapi_twin.models.connectivity import ConnectivityService
 from tapi_twin.models.topology import (
@@ -654,7 +655,7 @@ class TapiContext:
             el = self._gnpy_uid_map.get(nxt)
             if el is None:
                 return None
-            kind = type(el).__name__
+            kind = _kind_name(el)
             if kind in ("Roadm", "Transceiver"):
                 return nxt
             if kind not in ("Edfa", "Fiber"):
@@ -662,11 +663,9 @@ class TapiContext:
             cur = nxt
 
     def _build_fiber_to_link_index(self) -> None:
-        """Populate ``_fiber_to_link_refs`` for every Fiber in the GNPy network."""
-        from gnpy.core.elements import Fiber
-
+        """Populate ``_fiber_to_link_refs`` for every Fiber in the network."""
         for uid, el in self._gnpy_uid_map.items():
-            if not isinstance(el, Fiber):
+            if _kind_name(el) != "Fiber":
                 continue
             a = self._walk_to_terminal(uid, "pred")
             z = self._walk_to_terminal(uid, "succ")
@@ -703,15 +702,16 @@ class TapiContext:
         Raises:
             KeyError: ``fiber_uid`` is not a Fiber in the GNPy network.
         """
-        from gnpy.core.elements import Fiber
         from tapi_twin.models.common import OperationalState
 
-        el = self._gnpy_uid_map.get(fiber_uid)
-        if not isinstance(el, Fiber):
+        if not self._backend.is_fiber(fiber_uid):
             raise KeyError(
                 f"{fiber_uid!r} is not a Fiber (link failure only applies "
                 f"to fiber spans)"
             )
+        # The backend's uid_map may carry GNPy element objects (GnpyBackend)
+        # or lightweight stubs (EgnBackend) — both expose ``.uid``.
+        el = self._backend.uid_map.get(fiber_uid)
 
         # Idempotent: no-op if state is already what was requested.
         if failed and fiber_uid in self._failed_links:
@@ -766,6 +766,10 @@ class TapiContext:
             if link is not None:
                 link.operational_state = new_op
 
+        # Backend-side notification (no-op for GNPy, updates _failed_fibers
+        # for EGN since it has no DiGraph to remove edges from).
+        self._backend.notify_fiber_failed(fiber_uid, failed)
+
         return affected
 
     def is_path_failed(self, path_uids: list[str]) -> bool:
@@ -796,7 +800,7 @@ class TapiContext:
         for uid in path_uids:
             el = self._gnpy_uid_map.get(uid) if self._gnpy_uid_map else None
             if el is not None:
-                el_type = type(el).__name__
+                el_type = _kind_name(el)
             else:
                 parsed = elements_by_uid.get(uid)
                 el_type = getattr(parsed, "type", "") if parsed else ""
@@ -938,7 +942,7 @@ class TapiContext:
             for uid in path_uids:
                 el = self._gnpy_uid_map.get(uid) if self._gnpy_uid_map else None
                 if el is not None:
-                    el_type = type(el).__name__
+                    el_type = _kind_name(el)
                 else:
                     parsed = elements_by_uid.get(uid)
                     el_type = getattr(parsed, "type", "") if parsed else ""
@@ -969,7 +973,7 @@ class TapiContext:
 
         if self._gnpy_uid_map:
             for uid, el in self._gnpy_uid_map.items():
-                el_type = type(el).__name__
+                el_type = _kind_name(el)
                 item: dict = {
                     "uuid": uid,
                     "name": [{"value-name": "element-uid", "value": uid}],

@@ -116,6 +116,20 @@ class GnpyBackend:
 
         return schema()
 
+    # -- Element kind queries (backend-neutral surface) -------------------
+
+    def is_fiber(self, uid: str) -> bool:
+        from gnpy.core.elements import Fiber
+
+        return isinstance(self.uid_map.get(uid), Fiber)
+
+    def notify_fiber_failed(self, uid: str, failed: bool) -> None:
+        """Called by ``TapiContext.set_link_failed`` after the routing
+        graphs are mutated. The GNPy backend learns about failure
+        through the DiGraph edge removal that ``TapiContext`` does
+        directly on ``self.network``, so this hook is a no-op here —
+        kept so the Protocol surface stays uniform across backends."""
+
     # -- Re-design (opt-in equalisation after parameter changes) ---------
 
     def redesign(self) -> None:

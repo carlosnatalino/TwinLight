@@ -63,15 +63,15 @@ class TestBuildBackend:
         assert backend.name == "gnpy"
         assert backend.available is True
 
-    def test_egn_dispatch_raises_import_error_until_m4(self) -> None:
-        # M4 will land the EgnBackend implementation. Until then,
-        # selecting ``egn`` must surface a clear error rather than
-        # silently falling back to GNPy. Once EgnBackend exists this
-        # test should switch to ``pytest.importorskip`` for the EGN lib.
+    def test_egn_dispatch_returns_egnbackend(self) -> None:
+        from tapi_twin.physics.egn_backend import EgnBackend
+
         cfg = self._gnpy_config()
         cfg.physics.backend = "egn"
-        with pytest.raises(ImportError, match="\\[egn\\]"):
-            build_backend(cfg)
+        backend = build_backend(cfg)
+        assert isinstance(backend, EgnBackend)
+        assert backend.name == "egn"
+        assert backend.available is True
 
 
 class TestCliOverride:
