@@ -55,6 +55,9 @@ class TestSnapshot:
         assert "element_overrides" in content
         assert "failed_links" in content
         assert "twin_overrides" in content
+        # Physics backend identity (used by restore to reject mismatched
+        # snapshots — see TestCrossBackendRestore).
+        assert '"backend"' in content
 
 
 class TestRestore:
