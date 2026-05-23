@@ -170,3 +170,52 @@ class TestSnapshotV2RoundTrip:
         ctx.restore_from(path)
         assert ctx.get_failed_links() == set()
         assert ctx.get_element_overrides() == {}
+
+
+class TestCrossBackendRestore:
+    """Cross-backend restore is rejected (M6).
+
+    Snapshot records ``backend`` and restore_from refuses to apply a
+    snapshot whose backend differs from the running process — services
+    were admitted under different QoT thresholds and silently
+    cross-restoring would falsify whatever experiment the snapshot
+    represents.
+    """
+
+    def test_snapshot_records_backend_name(
+        self, gnpy_context: TapiContext, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "snap.json"
+        gnpy_context.snapshot(path)
+        data = json.loads(path.read_text())
+        assert data["backend"] == "gnpy"
+
+    def test_restore_rejects_mismatched_backend(
+        self,
+        gnpy_twin_config,
+        tmp_path: Path,
+    ) -> None:
+        from tapi_twin.config import PhysicsConfig
+        from tapi_twin.state.context import TapiContext
+
+        # Snapshot under GNPy.
+        gnpy_ctx = TapiContext(gnpy_twin_config)
+        path = tmp_path / "gnpy-snap.json"
+        gnpy_ctx.snapshot(path)
+
+        # Spin up a fresh context with EGN selected and try to restore.
+        egn_cfg = gnpy_twin_config.model_copy(deep=True)
+        egn_cfg.physics = PhysicsConfig(backend="egn")
+        egn_ctx = TapiContext(egn_cfg)
+        with pytest.raises(ValueError, match="--physics-backend gnpy"):
+            egn_ctx.restore_from(path)
+
+    def test_restore_accepts_matching_backend(
+        self, gnpy_context: TapiContext, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "snap.json"
+        gnpy_context.snapshot(path)
+        # Same backend → restore succeeds (this is the happy path the
+        # rest of the snapshot suite already exercises; just an
+        # explicit assertion for clarity).
+        gnpy_context.restore_from(path)

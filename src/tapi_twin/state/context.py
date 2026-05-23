@@ -1021,6 +1021,11 @@ class TapiContext:
         data = {
             "version": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            # Backend name lets restore reject mismatched snapshots
+            # (services admitted under different QoT thresholds would
+            # be replayed against the wrong physics — silently
+            # falsifying experiments). Same string as physics.backend.
+            "backend": self._backend.name,
             "spectrum": self._spectrum_state.to_dict(),
             "services": [s.model_dump(by_alias=True) for s in self._services.values()],
             "service_allocation": allocation_ser,
@@ -1046,6 +1051,18 @@ class TapiContext:
         if version != 1:
             raise ValueError(
                 f"Unsupported snapshot version: {version!r} (expected 1)"
+            )
+        # Cross-backend restore is rejected: the snapshot's services
+        # were admitted under the recorded backend's QoT thresholds,
+        # and replaying them against a different physics engine would
+        # silently falsify whatever experiment the snapshot represents.
+        snap_backend = data.get("backend")
+        if snap_backend and snap_backend != self._backend.name:
+            raise ValueError(
+                f"Snapshot was taken under physics backend "
+                f"{snap_backend!r} but the running process is "
+                f"{self._backend.name!r} — start the twin with "
+                f"--physics-backend {snap_backend} to restore this snapshot"
             )
 
         # Clear existing live state. Restore replaces, never merges:
