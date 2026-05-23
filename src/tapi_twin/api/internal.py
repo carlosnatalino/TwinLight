@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import math
 import time
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -46,6 +47,24 @@ def _mock_path_factor(service_uuid: str) -> float:
         f"{service_uuid}:path_factor".encode(), usedforsecurity=False
     ).hexdigest()
     return 0.5 + (int(digest[:8], 16) % 1000) / 1000.0
+
+
+def _link_failed_measurements() -> dict[str, Any]:
+    """OPM payload for a service whose path crosses a failed fiber.
+
+    Returns the standard six-metric dict with ``None`` for every numeric
+    value plus a worst-case ``pre-fec-ber`` of 1.0, so UI charts can render
+    a clear "service down" line rather than zeros that look like a real
+    measurement. The caller adds a top-level ``"status": "link-failed"``.
+    """
+    return {
+        "osnr-db": None,
+        "gsnr-db": None,
+        "q-factor-db": None,
+        "chromatic-dispersion-ps-per-nm": None,
+        "pmd-ps": None,
+        "pre-fec-ber": 1.0,
+    }
 
 
 def _mock_measurements(service_uuid: str, t: float) -> dict:
@@ -95,12 +114,16 @@ async def get_all_opm(request: Request) -> dict:
 
     for svc in ctx.get_services():
         baseline = await ctx.get_or_compute_baseline(svc)
-        if baseline is None:
-            measurements = _mock_measurements(svc.uuid, t)
+        entry: dict[str, Any] = {"service-uuid": svc.uuid, "timestamp": t}
+        if baseline is not None and baseline.status == "link-failed":
+            entry["status"] = "link-failed"
+            entry["measurements"] = _link_failed_measurements()
+        elif baseline is None:
+            entry["measurements"] = _mock_measurements(svc.uuid, t)
         else:
             from tapi_twin.physics.transients.cascade import apply_all_transients
 
-            measurements = apply_all_transients(
+            entry["measurements"] = apply_all_transients(
                 baseline,
                 svc.uuid,
                 svc.modulation_format.value,
@@ -108,13 +131,7 @@ async def get_all_opm(request: Request) -> dict:
                 cfg.transients,
                 edfa_tracker=ctx.edfa_tracker,
             )
-        results.append(
-            {
-                "service-uuid": svc.uuid,
-                "timestamp": t,
-                "measurements": measurements,
-            }
-        )
+        results.append(entry)
 
     return {"services": results, "timestamp": t}
 
@@ -134,12 +151,19 @@ async def get_service_opm(service_uuid: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=f"Service {service_uuid} not found")
 
     baseline = await ctx.get_or_compute_baseline(svc)
-    if baseline is None:
-        measurements = _mock_measurements(service_uuid, t)
+    response: dict[str, Any] = {
+        "service-uuid": service_uuid,
+        "timestamp": t,
+    }
+    if baseline is not None and baseline.status == "link-failed":
+        response["status"] = "link-failed"
+        response["measurements"] = _link_failed_measurements()
+    elif baseline is None:
+        response["measurements"] = _mock_measurements(service_uuid, t)
     else:
         from tapi_twin.physics.transients.cascade import apply_all_transients
 
-        measurements = apply_all_transients(
+        response["measurements"] = apply_all_transients(
             baseline,
             svc.uuid,
             svc.modulation_format.value,
@@ -148,11 +172,7 @@ async def get_service_opm(service_uuid: str, request: Request) -> dict:
             edfa_tracker=ctx.edfa_tracker,
         )
 
-    return {
-        "service-uuid": service_uuid,
-        "timestamp": t,
-        "measurements": measurements,
-    }
+    return response
 
 
 @router.get("/services/{service_uuid}")

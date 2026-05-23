@@ -54,6 +54,11 @@ class OpmBaseline:
     # Hinge model of Zarkosvky & Shtaif, Opt. Lett. 45(5):1224 (2020): PDL is
     # dominated by a discrete set of components; fibers contribute negligibly.
     pdl_elements: list[tuple[str, str]] = field(default_factory=list)
+    # Non-OK propagation state. ``None`` means the metrics above are valid
+    # GNPy-computed values; ``"link-failed"`` means an element on the path
+    # (e.g. a failed fiber) prevented propagation and the numeric fields are
+    # sentinel zeros — callers must check ``status`` before reporting metrics.
+    status: str | None = None
 
 
 def build_gnpy_network(
