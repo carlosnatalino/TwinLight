@@ -114,6 +114,10 @@ class TapiContext:
         self._gnpy_available: bool = False
         self._gnpy_uid_map: dict = {}   # uid → gnpy element object
         self._gnpy_network = None       # DiGraph of elements (for GNPy path computation)
+        # Retained for /config/set redesign=true so we can re-run
+        # gnpy.tools.worker_utils.designed_network without re-reading the
+        # equipment file from disk on every override.
+        self._gnpy_equipment: Any = None
 
         if config.gnpy.equipment is not None:
             try:
@@ -122,11 +126,12 @@ class TapiContext:
                     build_uid_map,
                 )
 
-                network, _equipment = build_gnpy_network(
+                network, equipment = build_gnpy_network(
                     config.gnpy.topology, config.gnpy.equipment
                 )
                 self._gnpy_uid_map = build_uid_map(network)
                 self._gnpy_network = network
+                self._gnpy_equipment = equipment
                 self._gnpy_available = True
                 logger.info(
                     "GNPy network loaded: %d elements", len(self._gnpy_uid_map)
@@ -504,7 +509,9 @@ class TapiContext:
     # -- /config plane: runtime device & twin parameter mutation -------------
 
     def apply_element_overrides(
-        self, updates: dict[str, dict[str, Any]]
+        self,
+        updates: dict[str, dict[str, Any]],
+        redesign: bool = False,
     ) -> dict[str, set[str]]:
         """Mutate live GNPy element parameters from a {uid: {attr: value}} dict.
 
@@ -579,6 +586,32 @@ class TapiContext:
 
         # Per-UID route cache stays valid for parameter-only edits (length /
         # topology didn't change); set_link_failed clears it when needed.
+
+        # Optional re-design pass: re-run gnpy.tools.worker_utils.designed_network
+        # to re-equalise ROADM and EDFA operating points against the mutated
+        # parameters (e.g. a fiber-loss bump now propagates into EDFA
+        # power-mode delta_p targets). This is opt-in because it is
+        # expensive on large topologies and resets some operator-set state.
+        # After redesign, every baseline must be recomputed — clear the
+        # whole cache, not just the per-element entries.
+        if redesign and self._gnpy_available:
+            from gnpy.tools.worker_utils import designed_network
+
+            network, _ref_req, _ref_chan = designed_network(
+                self._gnpy_equipment, self._gnpy_network
+            )
+            # ``designed_network`` may return the same network object or a
+            # new one; either way, keep our handles in sync with it.
+            self._gnpy_network = network
+            from tapi_twin.physics.gnpy_adapter import build_uid_map
+
+            self._gnpy_uid_map = build_uid_map(network)
+            self._baseline_cache.clear()
+            # Reverse-index entries were keyed by UIDs that did not change
+            # across redesign, so they stay valid; same for failed-links.
+            for svc_uuid in list(self._services):
+                invalidated.setdefault("__redesign__", set()).add(svc_uuid)
+
         return invalidated
 
     def apply_twin_overrides(self, updates: dict[str, Any]) -> dict[str, Any]:
