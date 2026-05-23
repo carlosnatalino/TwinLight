@@ -21,6 +21,18 @@ gnpy:
   no_insert_edfas: false               # set true to skip automatic EDFA insertion
 
 # ---------------------------------------------------------------------------
+# Physical-layer backend
+# ---------------------------------------------------------------------------
+# Selects which propagation engine computes QoT baselines. Override at
+# the CLI with --physics-backend {gnpy,egn}.
+#   gnpy: gnpy 2.x split-step propagation (default; needs gnpy.equipment).
+#   egn:  closed-form GN/EGN model. Self-contained — no extra install
+#         required and works without the gnpy.equipment file.
+# Snapshots taken under one backend cannot be restored under the other.
+physics:
+  backend: gnpy
+
+# ---------------------------------------------------------------------------
 # Server configuration
 # ---------------------------------------------------------------------------
 server:
