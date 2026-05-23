@@ -207,6 +207,14 @@ Internal endpoints are only created and used if the T-API endpoints cannot be us
 | GET | `/internal/services/{uuid}` | Name, modulation-format, path hops, total-fiber-km |
 | GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops, total-fiber-km, GSNR/OPM estimate (Path UI) |
 
+### Prometheus / Observability
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/metrics` | Prometheus text-format exposition; one snapshot per scrape. Emits per-service OPM (GSNR, OSNR, Q, BER, CD, PMD), per-element /config values (fiber loss, EDFA NF, failed indicator), twin knobs (RMSA margin, transient enable flags), and a `tapi_twin_info{backend=…}` label. |
+
+Example scrape config in `examples/prometheus-scrape.yaml`; ready-made Grafana dashboard in `examples/grafana-dashboard.json` (uses a `${DS_PROMETHEUS}` data-source placeholder so it imports cleanly against any Prometheus DS).
+
 ### Admin Endpoints (checkpoints)
 
 | Method | Path | Notes |

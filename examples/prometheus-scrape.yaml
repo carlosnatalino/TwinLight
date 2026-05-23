@@ -1,0 +1,23 @@
+# Example Prometheus scrape configuration for the T-API Twin.
+#
+# Drop the `scrape_configs[0]` block into your prometheus.yml. The
+# scrape interval is deliberately conservative — the twin's transient
+# models move on minutes-to-tens-of-seconds timescales, so sub-second
+# polling adds load without revealing new physics.
+#
+# Pair this with examples/grafana-dashboard.json (imported into
+# Grafana) for the live-OPM + /config dashboard.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: tapi-twin
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "localhost:8080"
+        labels:
+          deployment: dev
