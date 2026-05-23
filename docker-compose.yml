@@ -25,6 +25,11 @@ services:
       context: .
       dockerfile: Dockerfile
     image: tapi-twin:latest
+    # gnpy's oopt-gnpy-libyang has no manylinux aarch64 wheel; the
+    # image is built for linux/amd64 and runs under Rosetta/qemu on
+    # Apple Silicon hosts. Declared here too so compose doesn't warn
+    # about the mismatch on every up.
+    platform: linux/amd64
     container_name: tapi-twin
     ports:
       - "8080:8080"   # REST (TAPI + /config + /metrics + /admin)
