@@ -1058,6 +1058,12 @@ class TapiContext:
             "spectrum": self._spectrum_state.to_dict(),
             "services": [s.model_dump(by_alias=True) for s in self._services.values()],
             "service_allocation": allocation_ser,
+            # /config plane state. Stored in *user units* — the same
+            # values the user supplied — so restore replays via
+            # apply_element_overrides without any unit re-derivation.
+            "element_overrides": self.get_element_overrides(),
+            "failed_links": sorted(self._failed_links),
+            "twin_overrides": dict(self._twin_overrides),
         }
         path.write_text(json.dumps(data, indent=2))
         logger.info("Snapshot written: %s (%d services)", path, len(self._services))
@@ -1070,14 +1076,23 @@ class TapiContext:
         Clears existing services and spectrum, then applies the snapshot.
         """
         data = json.loads(path.read_text())
-        if data.get("version") != 1:
-            raise ValueError(f"Unsupported snapshot version: {data.get('version')}")
+        version = data.get("version")
+        if version != 1:
+            raise ValueError(
+                f"Unsupported snapshot version: {version!r} (expected 1)"
+            )
 
-        # Clear existing
+        # Clear existing live state. Restore replaces, never merges:
+        # un-fail every currently-failed link, drop overrides + caches,
+        # then re-apply whatever the snapshot recorded.
         self._services.clear()
         self._service_allocation.clear()
         self._baseline_cache.clear()
         self._element_to_services.clear()
+        for fiber_uid in list(self._failed_links):
+            self.set_link_failed(fiber_uid, False)
+        self._element_overrides.clear()
+        self._twin_overrides.clear()
 
         # Restore spectrum
         self._spectrum_state = SpectrumState.from_dict(data["spectrum"])
@@ -1103,10 +1118,27 @@ class TapiContext:
                 for uid in uids:
                     self._element_to_services.setdefault(uid, set()).add(uuid)
 
+        # Re-apply /config plane state. Order matters: element overrides
+        # first (so a span's failed-by-override state isn't masked by a
+        # stale baseline), then link failures (mutates the routing graph),
+        # then twin overrides (no side effects on baselines).
+        element_overrides = data.get("element_overrides") or {}
+        if element_overrides:
+            self.apply_element_overrides(element_overrides)
+        for fiber_uid in data.get("failed_links") or []:
+            if fiber_uid in self._gnpy_uid_map:
+                self.set_link_failed(fiber_uid, True)
+        twin_overrides = data.get("twin_overrides") or {}
+        if twin_overrides:
+            self.apply_twin_overrides(twin_overrides)
+
         logger.info(
-            "Restored from %s: %d services",
+            "Restored from %s: %d services, %d element overrides, "
+            "%d failed links",
             path,
             len(self._services),
+            len(self._element_overrides),
+            len(self._failed_links),
         )
 
     def _get_transceiver_node_refs(self) -> set[tuple[str, str]]:
