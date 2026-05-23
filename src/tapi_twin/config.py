@@ -251,6 +251,22 @@ class LoggingConfig(BaseModel):
     format: str = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 
+# -- Physics backend section ------------------------------------------------
+
+class PhysicsConfig(BaseModel):
+    """Selects which propagation engine computes QoT baselines.
+
+    ``gnpy`` (default): the gnpy 2.x library that the project shipped with.
+    ``egn``: the EGN engine from ``optical-networking-gym`` (installed
+    via the ``[egn]`` extra). Selection is a startup choice — once the
+    process is running, all baselines come from the same backend.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    backend: Literal["gnpy", "egn"] = "gnpy"
+
+
 # -- Root config ------------------------------------------------------------
 
 class TwinConfig(BaseModel):
@@ -264,5 +280,6 @@ class TwinConfig(BaseModel):
     transients: TransientsConfig = Field(default_factory=TransientsConfig)
     rmsa: RmsaConfig = Field(default_factory=RmsaConfig)
     spectrum: SpectrumConfig = Field(default_factory=SpectrumConfig)
+    physics: PhysicsConfig = Field(default_factory=PhysicsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     restore_path: Optional[Path] = Field(default=None, exclude=True)

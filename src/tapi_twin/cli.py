@@ -104,6 +104,19 @@ def build_parser() -> argparse.ArgumentParser:
     rmsa_group.add_argument("--qot-margin-db", type=float, default=None)
     rmsa_group.add_argument("--guardband-slots", type=int, default=None)
 
+    # -- Physics backend --------------------------------------------------
+    physics_group = parser.add_argument_group(
+        "Physics",
+        "QoT propagation engine selection. EGN requires the [egn] extra.",
+    )
+    physics_group.add_argument(
+        "--physics-backend",
+        type=str,
+        default=None,
+        choices=["gnpy", "egn"],
+        help="Propagation engine for QoT baselines (default: gnpy).",
+    )
+
     # -- Spectrum ---------------------------------------------------------
     spec_group = parser.add_argument_group("Spectrum")
     spec_group.add_argument("--num-slots", type=int, default=None)
@@ -232,6 +245,11 @@ def _apply_cli_overrides(
         rmsa["qot_margin_db"] = args.qot_margin_db
     if args.guardband_slots is not None:
         rmsa["default_guardband_slots"] = args.guardband_slots
+
+    # Physics backend
+    physics = data.setdefault("physics", {})
+    if args.physics_backend is not None:
+        physics["backend"] = args.physics_backend
 
     # Spectrum
     spec = data.setdefault("spectrum", {})

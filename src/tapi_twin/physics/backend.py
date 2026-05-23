@@ -81,3 +81,36 @@ class PhysicalBackend(Protocol):
         Backends without a redesign step raise ``NotImplementedError`` and
         the /config router converts that to a 501.
         """
+
+
+def build_backend(config: "TwinConfig") -> PhysicalBackend:
+    """Construct the configured backend. Imported lazily to keep optional
+    deps (the EGN library) off the import path when they're not used.
+
+    Raises ``ValueError`` if the configured backend name is unknown, or
+    ``ImportError`` if the EGN extra was selected without installing it.
+    """
+    name = config.physics.backend
+    if name == "gnpy":
+        from tapi_twin.physics.gnpy_backend import GnpyBackend
+
+        return GnpyBackend(config)
+    if name == "egn":
+        try:
+            # EgnBackend lands in M4 of the egn_backend branch; until then
+            # this import always fails. The error path below surfaces a
+            # clear message to the user.
+            from tapi_twin.physics.egn_backend import (  # type: ignore[import-untyped]
+                EgnBackend,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "Physics backend 'egn' selected but the EGN library is "
+                "not installed. Install with: pip install -e \".[egn]\""
+            ) from exc
+        return EgnBackend(config)
+    raise ValueError(f"Unknown physics backend: {name!r}")
+
+
+if TYPE_CHECKING:
+    from tapi_twin.config import TwinConfig  # noqa: F401
