@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "timestamp": "2026-05-23T10:20:14.072941+00:00",
+  "spectrum": {
+    "num_slots": 768,
+    "slots": {}
+  },
+  "services": [],
+  "service_allocation": {}
+}
