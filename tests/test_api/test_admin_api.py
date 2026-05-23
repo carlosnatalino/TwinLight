@@ -51,6 +51,10 @@ class TestSnapshot:
         assert "services" in content
         assert "spectrum" in content
         assert "service_allocation" in content
+        # /config plane state.
+        assert "element_overrides" in content
+        assert "failed_links" in content
+        assert "twin_overrides" in content
 
 
 class TestRestore:
