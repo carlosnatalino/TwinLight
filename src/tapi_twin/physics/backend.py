@@ -82,6 +82,36 @@ class PhysicalBackend(Protocol):
         the /config router converts that to a 501.
         """
 
+    def is_fiber(self, uid: str) -> bool:
+        """True if ``uid`` is a fiber span. Used by ``TapiContext.set_link_failed``
+        to validate the input without backend-specific isinstance checks."""
+
+    def notify_fiber_failed(self, uid: str, failed: bool) -> None:
+        """Called after ``TapiContext`` mutates the routing graphs, so a
+        backend can update any failure state it keeps internally.
+        GNPy backend has none — graph-edge removal is sufficient. The
+        EGN backend tracks a set used by ``compute_baseline`` to
+        short-circuit to ``status="link-failed"``."""
+
+
+def element_kind_name(el: Any) -> str:
+    """Return ``"Fiber"`` / ``"Edfa"`` / ``"Roadm"`` / ``"Transceiver"`` for
+    either a real GNPy element object (via ``type(el).__name__``) or an
+    EGN ``_UidStub`` (which carries the kind in its ``.type`` attribute).
+
+    Several call sites in ``TapiContext`` and the API layer key off the
+    element's kind name. The GNPy backend's uid_map holds real GNPy
+    element instances; the EGN backend's uid_map holds lightweight
+    stand-ins (no real Fiber/Edfa class hierarchy). This helper hides
+    that difference.
+    """
+    if el is None:
+        return ""
+    cls_name = type(el).__name__
+    if cls_name == "_UidStub":
+        return getattr(el, "type", "")
+    return cls_name
+
 
 def build_backend(config: "TwinConfig") -> PhysicalBackend:
     """Construct the configured backend. Imported lazily to keep optional
@@ -100,9 +130,7 @@ def build_backend(config: "TwinConfig") -> PhysicalBackend:
             # EgnBackend lands in M4 of the egn_backend branch; until then
             # this import always fails. The error path below surfaces a
             # clear message to the user.
-            from tapi_twin.physics.egn_backend import (  # type: ignore[import-untyped]
-                EgnBackend,
-            )
+            from tapi_twin.physics.egn_backend import EgnBackend
         except ImportError as exc:
             raise ImportError(
                 "Physics backend 'egn' selected but the EGN library is "

@@ -24,11 +24,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 
+from tapi_twin.physics.backend import element_kind_name as _kind_name
 from tapi_twin.physics.element_params import (
     ParamValidationError,
-    read_all,
-    schema,
-    specs_for,
 )
 from tapi_twin.state.twin_overrides import (
     TWIN_ALLOWED,
@@ -41,20 +39,30 @@ router = APIRouter(prefix="/config", tags=["config"])
 
 
 def _device_state(ctx: Any) -> list[dict[str, Any]]:
-    """One entry per writable GNPy element: uid, type, attrs, failed flag."""
-    if not ctx._gnpy_uid_map:
+    """One entry per writable element: uid, type, attrs, failed flag.
+
+    Iterates the live backend's allow-list (GnpyBackend exposes the
+    GNPy element_params schema; EgnBackend exposes its smaller
+    Fiber/Edfa subset). Elements whose kind has no entry in the schema
+    (e.g. ROADM under EGN) are skipped.
+    """
+    backend = ctx._backend
+    if not backend.uid_map:
         return []
+    schema = backend.supported_attributes()
     failed = ctx.get_failed_links()
     devices: list[dict[str, Any]] = []
-    for uid, el in ctx._gnpy_uid_map.items():
-        if not specs_for(el):
+    for uid, el in backend.uid_map.items():
+        kind = _kind_name(el)
+        attrs_for_kind = schema.get(kind) or {}
+        if not attrs_for_kind:
             continue
         entry: dict[str, Any] = {
             "uid": uid,
-            "type": type(el).__name__,
-            "attributes": read_all(el),
+            "type": kind,
+            "attributes": backend.read_all_attributes(uid),
         }
-        if type(el).__name__ == "Fiber":
+        if kind == "Fiber":
             entry["failed"] = uid in failed
         devices.append(entry)
     return devices
@@ -71,17 +79,21 @@ async def get_config(request: Request) -> dict[str, Any]:
     clients can build form UIs without hard-coding the allow-list.
     """
     ctx = request.app.state.context
-    if not ctx._gnpy_available:
+    if not ctx._backend.available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="GNPy network not loaded — /config requires GNPy",
+            detail=(
+                f"Physical-layer backend {ctx._backend.name!r} not "
+                f"loaded — /config requires a working backend"
+            ),
         )
     return {
+        "backend": ctx._backend.name,
         "devices": _device_state(ctx),
         "failed_links": sorted(ctx.get_failed_links()),
         "element_overrides": ctx.get_element_overrides(),
         "twin": to_nested(ctx.get_twin_overrides()),
-        "allowed_attributes": schema(),
+        "allowed_attributes": ctx._backend.supported_attributes(),
         "allowed_twin_keys": sorted(TWIN_ALLOWED),
     }
 
@@ -90,33 +102,39 @@ async def get_config(request: Request) -> dict[str, Any]:
 async def get_device(uid: str, request: Request) -> dict[str, Any]:
     """Single-device current state (attributes, type, failed flag)."""
     ctx = request.app.state.context
-    if not ctx._gnpy_available:
+    backend = ctx._backend
+    if not backend.available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="GNPy network not loaded — /config requires GNPy",
+            detail=(
+                f"Physical-layer backend {backend.name!r} not loaded — "
+                f"/config requires a working backend"
+            ),
         )
-    el = ctx._gnpy_uid_map.get(uid)
+    el = backend.uid_map.get(uid)
     if el is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Unknown GNPy element UID: {uid!r}",
+            detail=f"Unknown element UID: {uid!r}",
         )
-    if not specs_for(el):
+    kind = _kind_name(el)
+    schema = backend.supported_attributes()
+    if not schema.get(kind):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
-                f"Element {uid!r} (type {type(el).__name__}) has no "
-                f"runtime-mutable attributes"
+                f"Element {uid!r} (type {kind}) has no runtime-mutable "
+                f"attributes under backend {backend.name!r}"
             ),
         )
     entry: dict[str, Any] = {
         "uid": uid,
-        "type": type(el).__name__,
-        "attributes": read_all(el),
+        "type": kind,
+        "attributes": backend.read_all_attributes(uid),
         "overrides": ctx.get_element_overrides().get(uid, {}),
         "affected_services": sorted(ctx.services_for_element(uid)),
     }
-    if type(el).__name__ == "Fiber":
+    if kind == "Fiber":
         entry["failed"] = uid in ctx.get_failed_links()
     return entry
 
@@ -138,10 +156,13 @@ async def set_config(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     baselines were invalidated as a result.
     """
     ctx = request.app.state.context
-    if not ctx._gnpy_available:
+    if not ctx._backend.available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="GNPy network not loaded — /config requires GNPy",
+            detail=(
+                f"Physical-layer backend {ctx._backend.name!r} not "
+                f"loaded — /config requires a working backend"
+            ),
         )
 
     if not isinstance(body, dict):
@@ -174,6 +195,14 @@ async def set_config(request: Request, body: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(e).strip("'\""),
+            ) from e
+        except NotImplementedError as e:
+            # ``redesign=true`` on a backend that has no equalisation
+            # step (EGN). Surface as 501 so the client knows the call
+            # was understood but the operation isn't supported here.
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=str(e),
             ) from e
 
     twin_applied: dict[str, Any] = {}

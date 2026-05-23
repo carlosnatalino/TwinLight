@@ -12,6 +12,10 @@ __pycache__/
 # Runtime snapshots (admin /admin/snapshot output, accidental test artifacts)
 snapshots/
 
+# Read-only reference checkouts (e.g. optical-networking-gym used as a
+# code basis for the EGN backend port — never imported at runtime).
+related-projects/
+
 # Node JS
 node_modules/
 
