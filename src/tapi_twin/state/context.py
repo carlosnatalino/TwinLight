@@ -180,6 +180,20 @@ class TapiContext:
         # traverses it. Maintained in add_service / delete_service so a
         # parameter mutation can invalidate only the affected baselines.
         self._element_to_services: dict[str, set[str]] = {}
+        # NetworkX edges removed by set_link_failed, keyed by fiber UID, so
+        # set_link_failed(False) can restore them exactly. Each entry is a
+        # list of per-graph stashes — the two routing graphs (topo_graph
+        # and the GNPy network) key nodes differently, so we store
+        # (graph_ref, node_key, in_edges, out_edges) for each.
+        self._removed_edges: dict[str, list[tuple]] = {}
+        # Fiber UID → list of TAPI (topology_uuid, link_uuid) refs the fiber
+        # backs. Built once below by walking through inline EDFAs out to the
+        # nearest ROADM/TRX on each side. Used to flip Link.operational_state
+        # when a fiber fails. Topologies with multiple fibers per TAPI link
+        # are handled the same way: failing any one fiber disables the link.
+        self._fiber_to_link_refs: dict[str, list[tuple[str, str]]] = {}
+        if self._gnpy_available:
+            self._build_fiber_to_link_index()
 
     # -- Query methods ---------------------------------------------------
 
@@ -435,9 +449,27 @@ class TapiContext:
 
         sip_a = endpoints[0].service_interface_point.service_interface_point_uuid
         sip_z = endpoints[1].service_interface_point.service_interface_point_uuid
-        path = self.get_service_path(sip_a, sip_z)
+        # Prefer the path recorded at admission over re-deriving from the
+        # current graph: failing a fiber must surface as "link-failed" on
+        # the affected service, not as a silent auto-reroute through some
+        # alternate path.
+        path = self._allocated_path_uids(svc.uuid) or self.get_service_path(
+            sip_a, sip_z
+        )
         if not path:
             return None
+
+        # Link-failure short-circuit: any UID on the path is in
+        # ``_failed_links`` → emit a sentinel baseline so the OPM layer can
+        # report ``status="link-failed"`` without invoking GNPy propagation
+        # (which would crash on a missing edge anyway).
+        if self.is_path_failed(path):
+            from tapi_twin.physics.gnpy_adapter import OpmBaseline
+
+            return OpmBaseline(
+                gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
+                latency_ms=0.0, total_fiber_km=0.0, status="link-failed",
+            )
 
         async with self._propagation_lock:
             # Re-check after acquiring lock (another coroutine may have computed it)
@@ -482,10 +514,10 @@ class TapiContext:
         whose path traverses a mutated element (looked up via the reverse
         index built in ``add_service``).
 
-        The ``"failed"`` key is reserved for fiber link failure (M3) and is
-        routed through ``set_link_failed`` separately by the API layer; if
-        present in an updates dict here it is silently ignored so the API
-        can pass a single body through both paths.
+        The ``"failed"`` key on a Fiber UID is routed through
+        ``set_link_failed`` so the API can pass a single ``{uid: {attr:
+        value}}`` body through one method and have both parameter writes
+        and link failure handled together.
 
         Returns:
             ``{element_uid: set_of_invalidated_service_uuids}`` for the
@@ -504,22 +536,27 @@ class TapiContext:
         from tapi_twin.physics.element_params import write_attr
 
         # Validate first: resolve every UID and (attr, value) without writing.
+        # ``failed`` keys are split out and dispatched to set_link_failed
+        # below; everything else goes through the element-params allow-list.
         resolved: list[tuple[str, object, str, Any]] = []
+        failure_actions: list[tuple[str, bool]] = []
         for uid, attrs in updates.items():
             el = self._gnpy_uid_map.get(uid)
             if el is None:
                 raise KeyError(f"Unknown GNPy element UID: {uid!r}")
             for attr, value in attrs.items():
                 if attr == "failed":
-                    continue  # handled by set_link_failed in M3
-                # write_attr does the heavy validation; but we want to fail
-                # the whole batch before mutating, so we do a dry-run by
-                # capturing the spec lookup error path here. The simplest
-                # way is to call write_attr immediately on a no-op pass and
-                # roll back on error — but rollback is hard. Instead we
-                # accept that validation is per-write: a later bad value
-                # leaves earlier good values applied. This matches how the
-                # rest of TapiContext handles partial state (e.g. RMSA).
+                    if not isinstance(value, bool):
+                        raise ValueError(
+                            f"{uid}.failed must be bool, got "
+                            f"{type(value).__name__}"
+                        )
+                    failure_actions.append((uid, value))
+                    continue
+                # write_attr does the heavy validation; validation failures
+                # surface as ParamValidationError from inside the write loop
+                # below. Earlier good values stay applied — partial-batch
+                # semantics match how RMSA also handles failures.
                 resolved.append((uid, el, attr, value))
 
         invalidated: dict[str, set[str]] = {}
@@ -531,9 +568,17 @@ class TapiContext:
                 self.invalidate_baseline(svc_uuid)
             if affected:
                 invalidated[uid] = affected
-        # Any per-UID route cache that included a mutated element stays
-        # valid (length / topology hasn't changed), so we don't flush
-        # ``_route_cache`` here — only link failure does.
+
+        # Apply link failure / restore after parameter writes so an operator
+        # can bump a span's loss and immediately fail it in one /config/set
+        # call (parameter bump is durable, failure can be cleared later).
+        for uid, failed in failure_actions:
+            affected = self.set_link_failed(uid, failed)
+            if affected:
+                invalidated.setdefault(uid, set()).update(affected)
+
+        # Per-UID route cache stays valid for parameter-only edits (length /
+        # topology didn't change); set_link_failed clears it when needed.
         return invalidated
 
     def apply_twin_overrides(self, updates: dict[str, Any]) -> dict[str, Any]:
@@ -567,6 +612,166 @@ class TapiContext:
     def services_for_element(self, uid: str) -> set[str]:
         """Service UUIDs whose path traverses the element with ``uid``."""
         return set(self._element_to_services.get(uid, ()))
+
+    # -- /config plane: fiber link failure (M3) ------------------------------
+
+    @staticmethod
+    def _uids_from_edges(edges: list[tuple]) -> list[str]:
+        """Recover the ordered path UID list from a list of consecutive edges."""
+        if not edges:
+            return []
+        return [edges[0][0]] + [b for _a, b in edges]
+
+    def _walk_to_terminal(self, start_uid: str, direction: str) -> str | None:
+        """Walk through inline Edfa/Fiber elements to the nearest Roadm/Transceiver.
+
+        ``direction`` is ``"pred"`` (predecessors) or ``"succ"`` (successors).
+        Returns the first ROADM or Transceiver UID encountered, or ``None`` if
+        the walk dead-ends or loops. Used by ``_build_fiber_to_link_index``.
+        """
+        g = self._topo_graph.graph
+        cur = start_uid
+        seen = {cur}
+        while True:
+            neighbours = (
+                list(g.predecessors(cur)) if direction == "pred"
+                else list(g.successors(cur))
+            )
+            if not neighbours:
+                return None
+            nxt = neighbours[0]
+            if nxt in seen:
+                return None
+            seen.add(nxt)
+            el = self._gnpy_uid_map.get(nxt)
+            if el is None:
+                return None
+            kind = type(el).__name__
+            if kind in ("Roadm", "Transceiver"):
+                return nxt
+            if kind not in ("Edfa", "Fiber"):
+                return None
+            cur = nxt
+
+    def _build_fiber_to_link_index(self) -> None:
+        """Populate ``_fiber_to_link_refs`` for every Fiber in the GNPy network."""
+        from gnpy.core.elements import Fiber
+
+        for uid, el in self._gnpy_uid_map.items():
+            if not isinstance(el, Fiber):
+                continue
+            a = self._walk_to_terminal(uid, "pred")
+            z = self._walk_to_terminal(uid, "succ")
+            if not a or not z:
+                continue
+            refs: list[tuple[str, str]] = []
+            # Both directions: GNPy uses unidirectional links so the user-
+            # visible TAPI link may appear as either (a,z) or (z,a).
+            for pair in ((a, z), (z, a)):
+                ref = self._gnpy_pair_to_link_ref.get(pair)
+                if ref and ref not in refs:
+                    refs.append(ref)
+            if refs:
+                self._fiber_to_link_refs[uid] = refs
+
+    def set_link_failed(self, fiber_uid: str, failed: bool) -> set[str]:
+        """Fail or restore a fiber link, mutating routing graph + TAPI state.
+
+        Failure semantics:
+        * The fiber's two graph edges are removed from the NetworkX topology
+          graph so ``get_service_path`` (and RMSA admission) can no longer
+          route through it. Edges are stashed so a later restore re-adds the
+          *exact* original edge data.
+        * The ``_route_cache`` is flushed (any cached path may now be stale).
+        * Every service in the reverse index for this UID has its baseline
+          dropped; the next OPM sample short-circuits to ``status=link-failed``
+          because the service's *allocated* path still includes the failed UID
+          (we deliberately do not auto-reroute admitted services).
+        * The backing TAPI Link object(s) have ``operational-state`` flipped
+          to ``DISABLED`` so TAPI clients see the failure too.
+
+        Returns the set of affected service UUIDs.
+
+        Raises:
+            KeyError: ``fiber_uid`` is not a Fiber in the GNPy network.
+        """
+        from gnpy.core.elements import Fiber
+        from tapi_twin.models.common import OperationalState
+
+        el = self._gnpy_uid_map.get(fiber_uid)
+        if not isinstance(el, Fiber):
+            raise KeyError(
+                f"{fiber_uid!r} is not a Fiber (link failure only applies "
+                f"to fiber spans)"
+            )
+
+        # Idempotent: no-op if state is already what was requested.
+        if failed and fiber_uid in self._failed_links:
+            return self.services_for_element(fiber_uid)
+        if not failed and fiber_uid not in self._failed_links:
+            return self.services_for_element(fiber_uid)
+
+        # Mutate both routing graphs: ``_topo_graph.graph`` powers the
+        # NetworkX k-shortest fallback used by ``get_service_path``, and
+        # ``_gnpy_network`` powers GNPy's ``compute_constrained_path``
+        # (the preferred path engine when GNPy is loaded). The two graphs
+        # key nodes differently — TopologyGraph uses UID strings, the GNPy
+        # DiGraph uses element *objects* — so we resolve the right node
+        # key per graph before touching edges.
+        graphs: list = [(self._topo_graph.graph, fiber_uid)]
+        if self._gnpy_network is not None and el in self._gnpy_network:
+            graphs.append((self._gnpy_network, el))
+
+        # Each entry: (graph, node_key, in_edges, out_edges).
+        if failed:
+            stash: list[tuple] = []
+            for g, key in graphs:
+                in_edges = list(g.in_edges(key, data=True))
+                out_edges = list(g.out_edges(key, data=True))
+                stash.append((g, key, in_edges, out_edges))
+                g.remove_edges_from(
+                    [(u, v) for u, v, _ in in_edges + out_edges]
+                )
+            self._removed_edges[fiber_uid] = stash
+            self._failed_links.add(fiber_uid)
+            new_op = OperationalState.DISABLED
+        else:
+            stash = self._removed_edges.pop(fiber_uid, [])
+            for g, _key, in_edges, out_edges in stash:
+                for u, v, d in in_edges:
+                    g.add_edge(u, v, **d)
+                for u, v, d in out_edges:
+                    g.add_edge(u, v, **d)
+            self._failed_links.discard(fiber_uid)
+            new_op = OperationalState.ENABLED
+
+        # Cached routes may include this fiber; rebuild lazily on demand.
+        self._route_cache.clear()
+
+        affected = self.services_for_element(fiber_uid)
+        for svc_uuid in affected:
+            self.invalidate_baseline(svc_uuid)
+
+        # Flip TAPI Link operational-state on the underlying link(s).
+        for topo_uuid, link_uuid in self._fiber_to_link_refs.get(fiber_uid, []):
+            link = self.get_link(topo_uuid, link_uuid)
+            if link is not None:
+                link.operational_state = new_op
+
+        return affected
+
+    def is_path_failed(self, path_uids: list[str]) -> bool:
+        """True if any UID on the path is a currently-failed fiber."""
+        if not self._failed_links:
+            return False
+        return any(uid in self._failed_links for uid in path_uids)
+
+    def _allocated_path_uids(self, service_uuid: str) -> list[str] | None:
+        """Return the ordered GNPy path UIDs recorded at admission, or None."""
+        alloc = self._service_allocation.get(service_uuid)
+        if alloc is None:
+            return None
+        return self._uids_from_edges(alloc[0])
 
     def _path_uids_to_hops(self, path_uids: list[str]) -> list[dict] | None:
         """Build hop list (Transceiver/Roadm + distances) from path UID list.
