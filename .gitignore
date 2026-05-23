@@ -9,6 +9,9 @@ __pycache__/
 # macOS
 **.DS_Store
 
+# Runtime snapshots (admin /admin/snapshot output, accidental test artifacts)
+snapshots/
+
 # Node JS
 node_modules/
 
