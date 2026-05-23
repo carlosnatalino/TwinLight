@@ -108,14 +108,16 @@ class TapiContext:
                     self._sip_to_gnpy_uid[sip.uuid] = n.value
                     break
 
-        # -- Physical-layer backend (GNPy today; EGN in a later milestone) ---
+        # -- Physical-layer backend ----------------------------------------
         # All QoT propagation, per-element parameter writes, and the
         # equipment/network handles needed by ``redesign`` live on the
         # backend. ``TapiContext`` exposes ``_gnpy_*`` properties below
-        # so existing call sites and tests don't have to change.
-        from tapi_twin.physics.gnpy_backend import GnpyBackend
+        # so existing call sites and tests don't have to change. The
+        # specific backend is chosen at startup via ``physics.backend``
+        # (yaml) / ``--physics-backend`` (CLI).
+        from tapi_twin.physics.backend import build_backend
 
-        self._backend = GnpyBackend(config)
+        self._backend = build_backend(config)
 
         # -- Per-service caches and serialization lock ---------------------
         self._route_cache: dict[tuple[str, str], list[str]] = {}
