@@ -19,12 +19,16 @@ tapi-twin-ui (React SPA)          ← port 5173 (dev) / static build
 FastAPI backend (src/tapi_twin/)  ← port 8080
       │ owns all state, physics, RMSA
       ▼
-GNPy (gnpy PyPI package)          ← propagation engine
+PhysicalBackend (PhysicalBackend Protocol)
+   ├─ GnpyBackend   ← gnpy 2.x split-step propagation (default)
+   └─ EgnBackend    ← closed-form GN/EGN model, self-contained
       +
 NetworkX DiGraph                  ← topology graph / routing
 
 gRPC server (grpcio) ← stateless adapter, queries FastAPI via httpx.ASGITransport, port 50051
 ```
+
+**Physical-layer backend selection** is a startup choice: `physics.backend: gnpy|egn` in YAML, or `--physics-backend {gnpy,egn}` on the CLI (CLI overrides YAML). Default: `gnpy`. Both backends consume the same GNPy JSON topology and produce a backend-agnostic `OpmBaseline` that the transient layer perturbs. Snapshots include the backend name; cross-backend restore is rejected.
 
 **Key architectural constraint**: FastAPI owns ALL state. The gNMI/gRPC server is a stateless protocol adapter that calls FastAPI in-process via `httpx.ASGITransport` — no TCP round-trip, no shared-memory coordination.
 
@@ -144,7 +148,7 @@ generated `streaming/proto/` package as opaque.
 ## Key Constraints
 
 1. **Do NOT modify anything in `related-projects/`.**  These are reference-only copies.
-2. **GNPy is installed from PyPI** (`pip install gnpy`, currently 2.14.0). The documentation is available at https://gnpy.readthedocs.io/
+2. **GNPy is installed from PyPI** (`pip install gnpy`, currently 2.14.0). The documentation is available at https://gnpy.readthedocs.io/ The EGN backend has *no* runtime dependency on `optical-networking-gym` — the closed-form GN-model kernel is implemented directly in `physics/egn_kernel.py` (with attribution; same author as the upstream Cython kernel). When working on the EGN backend, the upstream repo is cloned to `related-projects/optical-networking-gym/` (gitignored) as a reference only.
 3. **Python 3.12 venv** — the project requires Python 3.12 for gnpy compatibility.
 4. **Tailwind CSS v3** in the frontend — NOT v4. Do not upgrade.
 5. **Package manager: npm** (not bun, not pnpm) for the frontend.
