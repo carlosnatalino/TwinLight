@@ -321,7 +321,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_gsnr_db",
+          "expr": "tapi_twin_opm_gsnr_db{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}} ({{modulation}})",
           "refId": "A",
           "datasource": {
@@ -366,7 +366,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_osnr_db",
+          "expr": "tapi_twin_opm_osnr_db{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}} ({{modulation}})",
           "refId": "A",
           "datasource": {
@@ -408,7 +408,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_q_factor_db",
+          "expr": "tapi_twin_opm_q_factor_db{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -439,7 +439,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_pre_fec_ber",
+          "expr": "tapi_twin_opm_pre_fec_ber{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -489,7 +489,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_chromatic_dispersion_ps_per_nm",
+          "expr": "tapi_twin_opm_chromatic_dispersion_ps_per_nm{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -521,7 +521,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_pmd_ps",
+          "expr": "tapi_twin_opm_pmd_ps{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -565,7 +565,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_service_link_failed",
+          "expr": "tapi_twin_service_link_failed{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -755,6 +755,38 @@
         },
         "regex": "",
         "refresh": 1
+      },
+      {
+        "name": "service",
+        "type": "query",
+        "label": "Service",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": {
+          "qryType": 1,
+          "query": "label_values(tapi_twin_opm_gsnr_db, service_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values(tapi_twin_opm_gsnr_db, service_name)",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
       }
     ]
   },
@@ -766,6 +798,6 @@
   "timezone": "",
   "title": "T-API Twin \u2014 Live OPM and /config",
   "uid": "tapi-twin-overview",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
