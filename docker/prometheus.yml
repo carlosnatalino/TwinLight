@@ -1,0 +1,21 @@
+# Prometheus config for the docker-compose stack. The twin advertises
+# its scrape endpoint at twin:8080/metrics on the shared bridge network.
+#
+# Scrape interval matches the slowest transient-model timescale
+# (minutes) closely enough that sub-second polling would add load
+# without revealing new physics. Bump or lower freely if you tune the
+# transient periods in your twin YAML.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: tapi-twin
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "twin:8080"
+        labels:
+          deployment: compose

@@ -1,0 +1,17 @@
+# Grafana data source provisioning — auto-wires the Prometheus instance
+# from docker-compose.yml as the default DS so the bundled dashboard
+# resolves ${DS_PROMETHEUS} without any UI clicking.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: PROMETHEUS_DS
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST

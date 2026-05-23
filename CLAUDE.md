@@ -126,6 +126,24 @@ Backend health check: `curl http://localhost:8080/health`
 `tapi-twin` and `tapi-client` are both console scripts (`[project.scripts]` in
 `pyproject.toml`); they appear on `PATH` after `pip install -e .`.
 
+### Docker (twin + Prometheus + Grafana)
+
+One-shot observability stack — builds the twin image and wires it to a
+pre-configured Prometheus + Grafana:
+
+```bash
+docker compose up --build
+# then open:
+#   http://localhost:8080/metrics  — raw Prometheus exposition
+#   http://localhost:9090          — Prometheus UI
+#   http://localhost:3000          — Grafana (admin / admin), dashboard
+#                                    auto-provisioned under folder "T-API Twin"
+```
+
+The compose stack runs the CORONET CONUS scenario by default. Override
+with `docker compose run --rm twin tapi-twin --config /app/examples/twin_config.yaml --rest-host 0.0.0.0`.
+Snapshots written by `/admin/snapshot` land in `./snapshots/` on the host.
+
 ### Quality checks
 
 CI (`.github/workflows/ci.yml`) runs these on every pull request — run them
