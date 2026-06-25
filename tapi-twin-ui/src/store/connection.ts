@@ -3,6 +3,20 @@ import { persist } from "zustand/middleware";
 
 export type ConnectionStatus = "connected" | "disconnected" | "checking" | "stale";
 
+declare global {
+  interface Window {
+    // Injected by public/config.js (regenerated from $TWIN_URL in the
+    // container build); absent during tests/SSR.
+    __TWIN_CONFIG__?: { baseUrl?: string };
+  }
+}
+
+// Default DT URL for a fresh load: runtime config if present, else localhost.
+// A value the user has saved (persisted below) always takes precedence.
+const DEFAULT_BASE_URL =
+  (typeof window !== "undefined" && window.__TWIN_CONFIG__?.baseUrl) ||
+  "http://localhost:8080";
+
 interface ConnectionState {
   baseUrl: string;
   pollInterval: number; // seconds
@@ -17,7 +31,7 @@ interface ConnectionState {
 export const useConnectionStore = create<ConnectionState>()(
   persist(
     (set) => ({
-      baseUrl: "http://localhost:8080",
+      baseUrl: DEFAULT_BASE_URL,
       pollInterval: 10,
       status: "disconnected" as ConnectionStatus,
       lastSuccessAt: null,

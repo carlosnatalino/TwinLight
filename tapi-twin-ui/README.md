@@ -28,6 +28,27 @@ server:
     - "http://localhost:5173"
 ```
 
+## Docker
+
+The UI ships as a static nginx image. The Digital Twin URL is **not** baked in
+at build time — it is injected at container startup from the `TWIN_URL`
+environment variable into `config.js`, so one image works against any twin.
+
+```bash
+# Standalone
+docker build -t tapi-twin-ui ./tapi-twin-ui
+docker run --rm -p 5173:80 -e TWIN_URL="http://localhost:8080" tapi-twin-ui
+
+# Or as part of the full stack (twin + ui + Prometheus + Grafana)
+docker compose up --build      # UI on http://localhost:5173
+```
+
+`TWIN_URL` is the address the **browser** uses, so it must be reachable from
+the host (the twin's published port, e.g. `http://localhost:8080`) — not the
+compose service name. A value saved in the UI's Settings page (localStorage)
+overrides the injected default. Make sure that origin is listed in the twin's
+`cors_origins`; `http://localhost:5173` already is in the example configs.
+
 ## Features
 
 - **Dashboard** — Network health at a glance: node/link/SIP counts, operational state, topology breakdown
