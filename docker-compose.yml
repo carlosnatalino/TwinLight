@@ -1,7 +1,8 @@
 # One-shot observability stack for the T-API Network Digital Twin.
 #
-# Boots three services on a shared network:
+# Boots four services on a shared network:
 #   * twin       — the digital twin (FastAPI :8080 + gRPC :50051).
+#   * ui         — the React web UI (nginx), pointed at the twin via TWIN_URL.
 #   * prometheus — scrapes twin:8080/metrics every 15s.
 #   * grafana    — pre-provisioned with the Prometheus data source and
 #                  the dashboard from examples/grafana-dashboard.json.
@@ -9,6 +10,7 @@
 # Usage:
 #   docker compose up --build
 # then open:
+#   http://localhost:5173             — web UI
 #   http://localhost:8080/health      — twin health
 #   http://localhost:8080/metrics     — raw Prometheus exposition
 #   http://localhost:9090             — Prometheus UI
@@ -37,7 +39,21 @@ services:
     volumes:
       # /admin/snapshot writes land here on the host so they survive
       # container rebuilds. Created on first up if it doesn't exist.
+      # Also read on startup by --restore-latest (see command:).
       - ./snapshots:/app/snapshots
+    # Restore the most recent snapshot on startup when the mounted snapshots/
+    # dir has one; otherwise start clean. The guard matters because
+    # --restore-latest hard-errors (and, with restart: unless-stopped below,
+    # crash-loops) when no snapshot exists yet.
+    command:
+      - sh
+      - -c
+      - >-
+        if ls /app/snapshots/*.json >/dev/null 2>&1; then
+        exec tapi-twin --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0 --restore-latest;
+        else
+        exec tapi-twin --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0;
+        fi
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
@@ -45,6 +61,26 @@ services:
       timeout: 3s
       retries: 10
       start_period: 30s
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./tapi-twin-ui
+      dockerfile: Dockerfile
+    image: tapi-twin-ui:latest
+    container_name: tapi-twin-ui
+    environment:
+      # URL the *browser* uses to reach the twin's REST API. The UI runs in
+      # the visitor's browser, not on this docker network, so this must be a
+      # host-reachable address — the twin's published port, NOT the "twin"
+      # compose service name. Override for a remotely-hosted twin.
+      # localhost:5173 is already in the twin's cors_origins, so CORS works
+      # out of the box with the default config.
+      TWIN_URL: "http://localhost:8080"
+    ports:
+      - "5173:80"   # served by nginx; matches the twin's allowed CORS origin
+    depends_on:
+      - twin
     restart: unless-stopped
 
   prometheus:

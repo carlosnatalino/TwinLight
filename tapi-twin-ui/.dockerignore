@@ -1,0 +1,13 @@
+# Keep the build context small — the image runs `npm ci` from a clean slate.
+node_modules
+dist
+
+# Caches, coverage, editor/OS noise.
+coverage
+.vite
+*.log
+.DS_Store
+
+# Git metadata isn't needed in the image.
+.git
+.gitignore
