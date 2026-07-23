@@ -23,8 +23,11 @@ jobs:
 
       # uv is the supported way to manage the environment (see CONTRIBUTING.md);
       # it resolves and installs the whole dependency tree in seconds.
+      # v7 is the newest *moving major* tag this action publishes (later
+      # releases are reachable only by exact version); it already runs on the
+      # node24 action runtime.
       - name: Set up uv
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: pyproject.toml
