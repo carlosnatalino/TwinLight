@@ -103,7 +103,7 @@ Once the stack reports healthy:
 | <http://localhost:8080/data/tapi-common:context> | T-API context — the northbound entry point |
 | <http://localhost:8080/metrics> | Prometheus exposition |
 | <http://localhost:9090> | Prometheus UI |
-| <http://localhost:3000> | Grafana (`admin` / `admin`), dashboard in the *TwinLight* folder |
+| <http://localhost:3000> | Grafana (`admin` / `admin`); the dashboard is provisioned in the *TwinLight* folder and starred, so it appears under *Starred* on the home page |
 | `localhost:50051` | gNMI gRPC endpoint |
 
 The default scenario is **CORONET CONUS** — a 75-ROADM US continental backbone
@@ -211,6 +211,84 @@ curl -X POST http://localhost:8080/data/tapi-connectivity:connectivity-context/c
 The twin computes candidate paths, assigns spectrum first-fit, and admits the
 request only if the propagated GSNR clears the format's required GSNR plus the
 configured system margin. `DP-QPSK`, `DP-16QAM` and `DP-64QAM` are supported.
+
+### Populate the twin with demo services
+
+An empty twin has nothing to monitor. This script creates one service per
+modulation format between random endpoint pairs, so the monitoring, spectrum and
+services views have something to show. It needs only the standard library, so it
+works against a twin running anywhere — including the Compose stack.
+
+Endpoint pairs are retried because admission is genuinely allowed to fail: a
+`409` means no route, no contiguous spectrum, or a GSNR below the format's
+threshold. Higher-order formats need more GSNR, so `DP-64QAM` will usually take
+more attempts than `DP-QPSK`, and on a long-haul topology it may not be
+admissible at all.
+
+```bash
+python3 - <<'PY'
+import json, random, urllib.request
+from urllib.error import HTTPError
+
+BASE = "http://localhost:8080"
+ATTEMPTS = 300
+
+ctx = json.load(urllib.request.urlopen(f"{BASE}/data/tapi-common:context/service-interface-point"))
+sips = ctx["tapi-common:context"]["service-interface-point"]
+if len(sips) < 2:
+    raise SystemExit("Need at least 2 service interface points")
+
+for modulation in ("DP-QPSK", "DP-16QAM", "DP-64QAM"):
+    name = f"demo-{modulation}-{random.getrandbits(16):04x}"
+    for attempt in range(1, ATTEMPTS + 1):
+        a, z = random.sample(sips, 2)
+        body = {"tapi-connectivity:connectivity-service": {
+            "name": [{"value-name": "service-name", "value": name}],
+            "modulation-format": modulation,
+            "end-point": [
+                {"local-id": "a-end", "service-interface-point": {"service-interface-point-uuid": a["uuid"]}},
+                {"local-id": "z-end", "service-interface-point": {"service-interface-point-uuid": z["uuid"]}},
+            ],
+        }}
+        req = urllib.request.Request(
+            f"{BASE}/data/tapi-connectivity:connectivity-context/connectivity-service",
+            data=json.dumps(body).encode(), method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            svc = json.load(urllib.request.urlopen(req))["tapi-connectivity:connectivity-service"]
+        except HTTPError as exc:
+            # 409 = not admissible on this pair (no route / no spectrum / QoT
+            # below threshold). Anything else is a real error worth surfacing.
+            if exc.code == 409:
+                continue
+            print(f"{modulation}: HTTP {exc.code} — {exc.read().decode()[:200]}")
+            break
+        uuid = svc["uuid"]
+        opm = json.load(urllib.request.urlopen(f"{BASE}/internal/opm/{uuid}"))["measurements"]
+        slot = svc.get("frequency-slot", {})
+        print(f"{modulation:<9} {name}  attempt {attempt}")
+        print(f"            uuid   {uuid}")
+        print(f"            GSNR   {opm['gsnr-db']:.2f} dB   OSNR {opm['osnr-db']:.2f} dB")
+        print(f"            slot   {slot.get('nominal-central-frequency')} THz / {slot.get('slot-width')} GHz")
+        break
+    else:
+        print(f"{modulation:<9} not admissible after {ATTEMPTS} attempts")
+PY
+```
+
+Then open the **Monitoring** page in the web UI, or watch one over gNMI with
+`twinlight-client`. To clear them again, delete each service by UUID with
+`DELETE /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}`.
+
+> **Why a printed GSNR can sit below the format's threshold.** Admission tests
+> the *static* QoT baseline, while the GSNR printed above is the *live* reading
+> with the transient models applied. On a long path the two differ
+> substantially — a lightpath admitted at a 12.4 dB baseline can read ~5 dB once
+> EDFA gain excursions are included. That is the twin behaving as intended: a
+> deployed lightpath really can drift below its threshold between provisioning
+> and operation. Set `transients.*.enabled: false` (or `POST /config/set`) to
+> see the baseline the admission decision actually used.
 
 ### Stream live OPM
 
