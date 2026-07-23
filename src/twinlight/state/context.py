@@ -62,6 +62,42 @@ class InsufficientQoTError(RmsaError):
     """Path GSNR below the format's required threshold plus the system margin."""
 
 
+# ---------------------------------------------------------------------------
+# Fiber span length
+# ---------------------------------------------------------------------------
+
+def _fiber_length_km(gnpy_element: Any, parsed_element: Any) -> float | None:
+    """Return a Fiber span's length in km, or None when it cannot be determined.
+
+    Two sources, because only one is available per backend:
+
+    * ``gnpy_element`` — a live ``gnpy.core.elements.Fiber``; its
+      ``params.length`` is normalised to **metres** by GNPy regardless of the
+      units used in the source file. Present only under the ``gnpy`` backend.
+    * ``parsed_element`` — a :class:`GnpyElement` straight from the topology
+      JSON, whose ``params`` dict keeps the file's own ``length`` and
+      ``length_units`` (GNPy's schema allows "km" or "m"). This is the only
+      source under the ``egn`` backend, which builds no GNPy network.
+    """
+    if gnpy_element is not None:
+        try:
+            return float(gnpy_element.params.length) / 1000.0
+        except (AttributeError, TypeError, ValueError):
+            pass  # fall through to the parsed topology
+
+    params = getattr(parsed_element, "params", None)
+    if not isinstance(params, dict):
+        return None
+    try:
+        length = float(params["length"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    # "km" is what both bundled examples use; treat anything else as metres
+    # only when it says so, rather than guessing.
+    units = str(params.get("length_units", "km")).strip().lower()
+    return length / 1000.0 if units in ("m", "meter", "metre", "meters", "metres") else length
+
+
 class TapiContext:
     """In-memory TAPI context with indexed lookups."""
 
@@ -794,8 +830,13 @@ class TapiContext:
     def _path_uids_to_hops(self, path_uids: list[str]) -> list[dict] | None:
         """Build hop list (Transceiver/Roadm + distances) from path UID list.
 
-        Uses _gnpy_uid_map when available for types and fiber lengths; otherwise
-        uses parsed topology elements for type only (distance_km_to_next null).
+        Fiber lengths come from the live GNPy element when one is available
+        (the ``gnpy`` backend), and otherwise from the parsed topology JSON —
+        the ``egn`` backend builds no GNPy network, so ``_gnpy_uid_map`` is
+        empty and the parsed elements are the only source of span lengths.
+        Spans whose length cannot be determined from either source are
+        skipped rather than treated as zero, so a distance is the sum of the
+        spans actually known.
         """
         elements_by_uid = getattr(
             self._topo_graph._gnpy_topo, "elements_by_uid", {}
@@ -811,11 +852,10 @@ class TapiContext:
                 parsed = elements_by_uid.get(uid)
                 el_type = getattr(parsed, "type", "") if parsed else ""
 
-            if el_type == "Fiber" and el is not None:
-                try:
-                    accumulated_km += float(el.params.length) / 1000.0
-                except AttributeError:
-                    pass
+            if el_type == "Fiber":
+                span_km = _fiber_length_km(el, elements_by_uid.get(uid))
+                if span_km is not None:
+                    accumulated_km += span_km
             elif el_type in ("Transceiver", "Roadm"):
                 if hops:
                     hops[-1]["distance_km_to_next"] = (
