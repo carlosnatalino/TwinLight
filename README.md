@@ -461,7 +461,7 @@ implement. Citation keys used in code comments are shown in brackets.
 ### Digital twins and optical network emulation
 
 17. <a id="ref-17"></a>M. Sequeira *et al.*, "OCATA: a deep-learning-based digital twin for the optical time domain," in *European Conference on Optical Communication (ECOC)*, 2023. — reference for time-domain optical digital twins and eye/constellation synthesis.
-18. <a id="ref-18"></a>C. Natalino *et al.*, **Optical Networking Gym** — *an open-source toolkit for resource-assignment problems in optical networks*. https://github.com/carlosnatalino/optical-networking-gym — origin of the RMSA heuristics and the GN-model kernel structure reused here.
+18. <a id="ref-18"></a>C. Natalino, T. Magalhães, F. Arpanaei, F. R. L. Lobato, J. C. W. A. Costa, J. A. Hernández, and P. Monti, "Optical Networking Gym: an open-source toolkit for resource assignment problems in optical networks," *IEEE/OSA Journal of Optical Communications and Networking*, vol. 16, no. 12, pp. G40–G51, 2024. doi:[10.1364/JOCN.532850](https://doi.org/10.1364/JOCN.532850). Code: https://github.com/carlosnatalino/optical-networking-gym — origin of the RMSA heuristics and the GN-model kernel structure reused here.
 
 ### Standards and specifications
 
