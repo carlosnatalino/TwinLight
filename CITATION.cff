@@ -8,11 +8,12 @@ message: >-
   models you rely on — GNPy and the GN/EGN model in particular; see the
   References section of the README.
 type: software
-# TODO(maintainer): add `affiliation:` and `orcid:` to the author entry below
-# — both improve citation indexing, and only you can supply them accurately.
+# TODO(maintainer): add `affiliation:` to the author entry below — it improves
+# citation indexing, and only you can supply it accurately.
 authors:
   - given-names: Carlos
     family-names: Natalino
+    orcid: 'https://orcid.org/0000-0001-7501-5547'
 repository-code: 'https://github.com/carlosnatalino/TwinLight'
 url: 'https://github.com/carlosnatalino/TwinLight'
 abstract: >-
@@ -84,3 +85,33 @@ references:
     end: 1539
     year: 2012
     notes: Closed-form GN model implemented by the EGN backend.
+  - type: article
+    title: >-
+      Optical Networking Gym: an open-source toolkit for resource assignment
+      problems in optical networks
+    authors:
+      - family-names: Natalino
+        given-names: Carlos
+        orcid: 'https://orcid.org/0000-0001-7501-5547'
+      - family-names: Magalhaes
+        given-names: Talles
+      - family-names: Arpanaei
+        given-names: Farhad
+      - family-names: Lobato
+        given-names: Fabricio R. L.
+      - family-names: Costa
+        given-names: Joao C. W. A.
+      - family-names: Hernandez
+        given-names: Jose Alberto
+      - family-names: Monti
+        given-names: Paolo
+    journal: Journal of Optical Communications and Networking
+    volume: 16
+    issue: 12
+    start: G40
+    end: G51
+    year: 2024
+    doi: 10.1364/JOCN.532850
+    notes: >-
+      Origin of the RMSA heuristics and the structure of the GN-model kernel
+      reused by the EGN backend.
