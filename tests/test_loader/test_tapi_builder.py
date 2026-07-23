@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from tapi_twin.loader.gnpy_topology import load_gnpy_topology
-from tapi_twin.loader.tapi_builder import TapiBuilder
-from tapi_twin.state.topology_state import TopologyGraph
+from twinlight.loader.gnpy_topology import load_gnpy_topology
+from twinlight.loader.tapi_builder import TapiBuilder
+from twinlight.state.topology_state import TopologyGraph
 
 
 def _build(edfa_topology_path: Path):

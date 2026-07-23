@@ -1,13 +1,13 @@
 # Grafana dashboard provisioning — picks up every .json file under
 # /var/lib/grafana/dashboards on startup (and on the configured update
-# interval) and makes it available in the "T-API Twin" folder.
+# interval) and makes it available in the "TwinLight" folder.
 
 apiVersion: 1
 
 providers:
-  - name: tapi-twin
+  - name: twinlight
     orgId: 1
-    folder: "T-API Twin"
+    folder: "TwinLight"
     type: file
     disableDeletion: false
     editable: true

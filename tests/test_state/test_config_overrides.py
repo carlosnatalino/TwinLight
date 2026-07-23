@@ -18,16 +18,16 @@ from typing import Any
 
 import pytest
 
-from tapi_twin.models.common import NameAndValue
-from tapi_twin.models.connectivity import (
+from twinlight.models.common import NameAndValue
+from twinlight.models.connectivity import (
     ConnectivityService,
     ConnectivityServiceEndPoint,
     SipRef,
 )
-from tapi_twin.physics.element_params import ParamValidationError
-from tapi_twin.physics.modulation import ModulationFormat
-from tapi_twin.state.context import TapiContext
-from tapi_twin.state.twin_overrides import TwinOverrideError
+from twinlight.physics.element_params import ParamValidationError
+from twinlight.physics.modulation import ModulationFormat
+from twinlight.state.context import TapiContext
+from twinlight.state.twin_overrides import TwinOverrideError
 
 
 def _two_sips(ctx: TapiContext) -> tuple[str, str]:
@@ -202,7 +202,7 @@ class TestTwinOverridesModule:
     """Direct unit tests for the helper module — no TapiContext needed."""
 
     def test_flatten_round_trip(self) -> None:
-        from tapi_twin.state.twin_overrides import flatten, to_nested
+        from twinlight.state.twin_overrides import flatten, to_nested
 
         nested = {"transients": {"phase_noise": {"enabled": False}},
                   "rmsa": {"qot_margin_db": 2.0}}
@@ -214,13 +214,13 @@ class TestTwinOverridesModule:
         assert to_nested(flat) == nested
 
     def test_validate_accepts_allowed(self) -> None:
-        from tapi_twin.state.twin_overrides import validate
+        from twinlight.state.twin_overrides import validate
 
         validate({"transients.environmental.enabled": True,
                   "rmsa.qot_margin_db": 1.0})
 
     def test_validate_rejects_bad_type(self) -> None:
-        from tapi_twin.state.twin_overrides import validate
+        from twinlight.state.twin_overrides import validate
 
         with pytest.raises(TwinOverrideError):
             validate({"transients.phase_noise.enabled": "yes"})

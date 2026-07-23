@@ -1,0 +1,442 @@
+<mxfile host="app.diagrams.net" modified="2026-07-23T12:00:00.000Z" agent="TwinLight" version="24.7.17" type="device">
+  <diagram name="Concepts overview" id="concepts-overview">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="TwinLight — logo concepts" style="text;html=1;fontSize=28;fontStyle=1;fontColor=#0F172A;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="600" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="Six directions, each built from the same idea: two things that are the same signal — one real, one simulated.&#10;Every concept is drawn from primitives (no external assets) so it can be recoloured, simplified or exported at any size.&#10;Pages: one per concept, plus a lock-up sheet and the palette." style="text;html=1;fontSize=13;fontColor=#475569;align=left;verticalAlign=top;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="72" width="820" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c1box" value="" style="rounded=1;arcSize=8;fillColor=#F8FAFC;strokeColor=#CBD5E1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="160" width="340" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="c1t" value="1 · Split beam" style="text;html=1;fontSize=15;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="60" y="172" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="c1d" value="One input ray hits a prism and splits into two identical rays — the physical network and its twin. Reads instantly at 16px as a chevron. Strongest &quot;light&quot; + &quot;twin&quot; pun of the set." style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="60" y="196" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="c1r1" value="" style="shape=mxgraph.basic.rect;fillColor=none;strokeColor=#0EA5E9;strokeWidth=6;" vertex="1" parent="1">
+          <mxGeometry x="90" y="290" width="70" height="0" as="geometry" />
+        </mxCell>
+        <mxCell id="c1prism" value="" style="triangle;direction=north;fillColor=none;strokeColor=#0F172A;strokeWidth=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="255" width="70" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="c1r2" value="" style="shape=line;strokeColor=#0EA5E9;strokeWidth=6;" vertex="1" parent="1">
+          <mxGeometry x="230" y="268" width="80" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="c1r3" value="" style="shape=line;strokeColor=#7C3AED;strokeWidth=6;dashed=1;dashPattern=8 6;" vertex="1" parent="1">
+          <mxGeometry x="230" y="308" width="80" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="c1n" value="solid = real network · dashed = twin" style="text;html=1;fontSize=10;fontColor=#94A3B8;" vertex="1" parent="1">
+          <mxGeometry x="90" y="345" width="260" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c2box" value="" style="rounded=1;arcSize=8;fillColor=#F8FAFC;strokeColor=#CBD5E1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="160" width="340" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="c2t" value="2 · Twin waveform" style="text;html=1;fontSize=15;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="420" y="172" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="c2d" value="Two sine waves in phase, one solid and one dashed, tracing the same path with a small divergence — the twin tracking the network, with residual error. The most literal depiction of what TwinLight measures." style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="420" y="196" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="c2w1" value="" style="shape=mxgraph.electrical.waveforms.sine_wave;strokeColor=#0EA5E9;strokeWidth=6;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="450" y="265" width="240" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="c2w2" value="" style="shape=mxgraph.electrical.waveforms.sine_wave;strokeColor=#7C3AED;strokeWidth=6;fillColor=none;dashed=1;dashPattern=8 6;" vertex="1" parent="1">
+          <mxGeometry x="450" y="285" width="240" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="c2n" value="offset exaggerated for clarity; in the mark it is ~4% of amplitude" style="text;html=1;fontSize=10;fontColor=#94A3B8;" vertex="1" parent="1">
+          <mxGeometry x="450" y="345" width="280" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c3box" value="" style="rounded=1;arcSize=8;fillColor=#F8FAFC;strokeColor=#CBD5E1;" vertex="1" parent="1">
+          <mxGeometry x="760" y="160" width="340" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="c3t" value="3 · Constellation / eye" style="text;html=1;fontSize=15;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="780" y="172" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="c3d" value="A QPSK constellation whose four clusters double into eight — a twinned constellation. Immediately legible to the optical-communications audience; the abstract shape still works for everyone else." style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="780" y="196" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="c3ax1" value="" style="shape=line;strokeColor=#CBD5E1;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="850" y="290" width="140" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="c3ax2" value="" style="shape=line;direction=north;strokeColor=#CBD5E1;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="915" y="225" width="10" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="c3p1" value="" style="ellipse;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="875" y="255" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c3p2" value="" style="ellipse;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="949" y="255" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c3p3" value="" style="ellipse;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="875" y="319" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c3p4" value="" style="ellipse;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="949" y="319" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c3q1" value="" style="ellipse;fillColor=none;strokeColor=#7C3AED;strokeWidth=3;dashed=1;dashPattern=4 3;" vertex="1" parent="1">
+          <mxGeometry x="887" y="243" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c3q2" value="" style="ellipse;fillColor=none;strokeColor=#7C3AED;strokeWidth=3;dashed=1;dashPattern=4 3;" vertex="1" parent="1">
+          <mxGeometry x="961" y="243" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c3q3" value="" style="ellipse;fillColor=none;strokeColor=#7C3AED;strokeWidth=3;dashed=1;dashPattern=4 3;" vertex="1" parent="1">
+          <mxGeometry x="887" y="331" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c3q4" value="" style="ellipse;fillColor=none;strokeColor=#7C3AED;strokeWidth=3;dashed=1;dashPattern=4 3;" vertex="1" parent="1">
+          <mxGeometry x="961" y="331" width="16" height="16" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c4box" value="" style="rounded=1;arcSize=8;fillColor=#F8FAFC;strokeColor=#CBD5E1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="410" width="340" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="c4t" value="4 · Mirrored node pair" style="text;html=1;fontSize=15;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="60" y="422" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="c4d" value="A small network graph and its mirror image across a horizontal axis, the reflection drawn lighter. Says &quot;network&quot; and &quot;twin&quot; without saying &quot;optics&quot; — the safest choice if the project ever broadens beyond optical." style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="60" y="446" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="c4a" value="" style="ellipse;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="120" y="520" width="18" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="c4b" value="" style="ellipse;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="200" y="500" width="18" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="c4c" value="" style="ellipse;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="280" y="530" width="18" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="c4e1" style="edgeStyle=none;strokeColor=#0EA5E9;strokeWidth=4;endArrow=none;" edge="1" parent="1" source="c4a" target="c4b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c4e2" style="edgeStyle=none;strokeColor=#0EA5E9;strokeWidth=4;endArrow=none;" edge="1" parent="1" source="c4b" target="c4c">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c4axis" value="" style="shape=line;strokeColor=#CBD5E1;strokeWidth=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="558" width="220" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="c4a2" value="" style="ellipse;fillColor=#7C3AED;strokeColor=none;opacity=40;" vertex="1" parent="1">
+          <mxGeometry x="120" y="588" width="18" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="c4b2" value="" style="ellipse;fillColor=#7C3AED;strokeColor=none;opacity=40;" vertex="1" parent="1">
+          <mxGeometry x="200" y="608" width="18" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="c4c2" value="" style="ellipse;fillColor=#7C3AED;strokeColor=none;opacity=40;" vertex="1" parent="1">
+          <mxGeometry x="280" y="578" width="18" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="c4e3" style="edgeStyle=none;strokeColor=#7C3AED;strokeWidth=4;endArrow=none;opacity=40;" edge="1" parent="1" source="c4a2" target="c4b2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c4e4" style="edgeStyle=none;strokeColor=#7C3AED;strokeWidth=4;endArrow=none;opacity=40;" edge="1" parent="1" source="c4b2" target="c4c2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c5box" value="" style="rounded=1;arcSize=8;fillColor=#F8FAFC;strokeColor=#CBD5E1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="410" width="340" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="c5t" value="5 · Double-L monogram" style="text;html=1;fontSize=15;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="420" y="422" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="c5d" value="Two interlocking &quot;L&quot; strokes forming a square aperture — the negative space reads as a lens or a fiber cross-section. Pure typography-adjacent geometry: scales to a favicon better than any of the others." style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="420" y="446" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="c5s1" value="" style="shape=mxgraph.basic.l_shape;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="500" y="510" width="90" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="c5s2" value="" style="shape=mxgraph.basic.l_shape;direction=south;fillColor=#7C3AED;strokeColor=none;opacity=80;" vertex="1" parent="1">
+          <mxGeometry x="560" y="510" width="90" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="c5n" value="overlap multiplies to a deeper tone — one colour when printed in mono" style="text;html=1;fontSize=10;fontColor=#94A3B8;" vertex="1" parent="1">
+          <mxGeometry x="450" y="608" width="290" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c6box" value="" style="rounded=1;arcSize=8;fillColor=#F8FAFC;strokeColor=#CBD5E1;" vertex="1" parent="1">
+          <mxGeometry x="760" y="410" width="340" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="c6t" value="6 · Spectrum slots" style="text;html=1;fontSize=15;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="780" y="422" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="c6d" value="A row of flexi-grid spectrum slots, some allocated, mirrored top and bottom. Directly depicts the RMSA side of the project. Most &quot;insider&quot; of the six — great for a conference slide, weaker as a standalone mark." style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="780" y="446" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="c6s1" value="" style="rounded=0;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="840" y="515" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6s2" value="" style="rounded=0;fillColor=#E2E8F0;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="866" y="515" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6s3" value="" style="rounded=0;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="892" y="515" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6s4" value="" style="rounded=0;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="918" y="515" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6s5" value="" style="rounded=0;fillColor=#E2E8F0;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="944" y="515" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6s6" value="" style="rounded=0;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="970" y="515" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6t1" value="" style="rounded=0;fillColor=#7C3AED;strokeColor=none;opacity=45;" vertex="1" parent="1">
+          <mxGeometry x="840" y="563" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6t2" value="" style="rounded=0;fillColor=#E2E8F0;strokeColor=none;opacity=45;" vertex="1" parent="1">
+          <mxGeometry x="866" y="563" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6t3" value="" style="rounded=0;fillColor=#7C3AED;strokeColor=none;opacity=45;" vertex="1" parent="1">
+          <mxGeometry x="892" y="563" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6t4" value="" style="rounded=0;fillColor=#7C3AED;strokeColor=none;opacity=45;" vertex="1" parent="1">
+          <mxGeometry x="918" y="563" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6t5" value="" style="rounded=0;fillColor=#E2E8F0;strokeColor=none;opacity=45;" vertex="1" parent="1">
+          <mxGeometry x="944" y="563" width="22" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="c6t6" value="" style="rounded=0;fillColor=#7C3AED;strokeColor=none;opacity=45;" vertex="1" parent="1">
+          <mxGeometry x="970" y="563" width="22" height="42" as="geometry" />
+        </mxCell>
+
+        <mxCell id="rec" value="Recommendation&#10;&#10;Concept 1 (Split beam) is the strongest primary mark: it survives being shrunk to a favicon, it carries both halves of the name, and it does not depend on the viewer knowing optical communications. Concept 3 (Constellation) makes an excellent secondary mark for talks and papers aimed at the photonics community. Concept 5 (Double-L) is the fallback if a purely geometric, text-free monogram is preferred.&#10;&#10;The shipped README mark (docs/assets/twinlight-logo.svg) implements Concept 1." style="rounded=1;arcSize=6;fillColor=#EFF6FF;strokeColor=#0EA5E9;align=left;verticalAlign=top;spacingLeft=16;spacingTop=10;spacingRight=16;whiteSpace=wrap;fontSize=12;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="40" y="665" width="1060" height="130" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="Primary mark — construction" id="primary-mark">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="pmtitle" value="Primary mark — Split beam, construction grid" style="text;html=1;fontSize=24;fontStyle=1;fontColor=#0F172A;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="700" height="34" as="geometry" />
+        </mxCell>
+        <mxCell id="pmsub" value="Drawn on a 24×24 grid. The incoming ray enters on the vertical centre line; the prism apex sits at the grid centre; the two output rays leave at ±18°. Solid ray = the physical network, dashed ray = the twin." style="text;html=1;fontSize=13;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="40" y="68" width="740" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="grid" value="" style="rounded=0;fillColor=none;strokeColor=#E2E8F0;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="60" y="140" width="480" height="480" as="geometry" />
+        </mxCell>
+        <mxCell id="gx" value="" style="shape=line;strokeColor=#F1F5F9;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="60" y="375" width="480" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="gy" value="" style="shape=line;direction=north;strokeColor=#F1F5F9;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="295" y="140" width="10" height="480" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pmin" value="" style="shape=line;strokeColor=#0EA5E9;strokeWidth=22;strokeCap=round;" vertex="1" parent="1">
+          <mxGeometry x="90" y="375" width="150" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="pmprism" value="" style="triangle;direction=north;fillColor=none;strokeColor=#0F172A;strokeWidth=22;" vertex="1" parent="1">
+          <mxGeometry x="240" y="300" width="160" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="pmout1" style="edgeStyle=none;strokeColor=#0EA5E9;strokeWidth=22;endArrow=none;rounded=0;strokeCap=round;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="400" y="345" as="sourcePoint" />
+            <mxPoint x="520" y="290" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pmout2" style="edgeStyle=none;strokeColor=#7C3AED;strokeWidth=22;endArrow=none;rounded=0;strokeCap=round;dashed=1;dashPattern=1 1.4;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="400" y="415" as="sourcePoint" />
+            <mxPoint x="520" y="470" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="scaletitle" value="Scale test" style="text;html=1;fontSize=15;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="600" y="140" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="scalenote" value="Export the mark at 512, 128, 32 and 16 px and check that the two output rays stay distinguishable. Below ~20 px, drop the dash pattern and differentiate the rays by colour alone." style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="600" y="166" width="330" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="clearspace" value="Clear space&#10;&#10;Keep free space equal to the height of the prism on all four sides. Never place the mark on a busy photographic background — the dashed ray disappears." style="rounded=1;arcSize=6;fillColor=#F8FAFC;strokeColor=#CBD5E1;align=left;verticalAlign=top;spacingLeft=14;spacingTop=8;whiteSpace=wrap;fontSize=12;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="600" y="250" width="330" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="donts" value="Do not&#10;&#10;· Recolour the two output rays to the same hue — the twin relationship is the whole idea.&#10;· Add a gradient to the prism; it must survive one-colour printing.&#10;· Rotate the mark. The horizontal input ray establishes reading direction.&#10;· Stretch non-uniformly. The ±18° output angle is fixed." style="rounded=1;arcSize=6;fillColor=#FEF2F2;strokeColor=#FCA5A5;align=left;verticalAlign=top;spacingLeft=14;spacingTop=8;whiteSpace=wrap;fontSize=12;fontColor=#7F1D1D;" vertex="1" parent="1">
+          <mxGeometry x="600" y="390" width="330" height="160" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="Lock-ups" id="lockups">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="lutitle" value="Lock-ups" style="text;html=1;fontSize=24;fontStyle=1;fontColor=#0F172A;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="600" height="34" as="geometry" />
+        </mxCell>
+        <mxCell id="lusub" value="Wordmark set in a geometric sans (Inter, Work Sans or IBM Plex Sans). &quot;Twin&quot; in regular, &quot;Light&quot; in semibold, no space — the weight change carries the compound word without a hyphen or a colour break." style="text;html=1;fontSize=13;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="40" y="68" width="760" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lh1" value="Horizontal — README header, slide footer, docs" style="text;html=1;fontSize=13;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="40" y="140" width="400" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="lhbox" value="" style="rounded=1;arcSize=6;fillColor=#FFFFFF;strokeColor=#E2E8F0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="168" width="520" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="lhin" value="" style="shape=line;strokeColor=#0EA5E9;strokeWidth=8;strokeCap=round;" vertex="1" parent="1">
+          <mxGeometry x="70" y="223" width="40" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="lhprism" value="" style="triangle;direction=north;fillColor=none;strokeColor=#0F172A;strokeWidth=8;" vertex="1" parent="1">
+          <mxGeometry x="110" y="198" width="56" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="lho1" style="edgeStyle=none;strokeColor=#0EA5E9;strokeWidth=8;endArrow=none;strokeCap=round;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="166" y="215" as="sourcePoint" />
+            <mxPoint x="206" y="197" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lho2" style="edgeStyle=none;strokeColor=#7C3AED;strokeWidth=8;endArrow=none;strokeCap=round;dashed=1;dashPattern=1 1.4;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="166" y="241" as="sourcePoint" />
+            <mxPoint x="206" y="259" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lhword" value="Twin&lt;b&gt;Light&lt;/b&gt;" style="text;html=1;fontSize=44;fontColor=#0F172A;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="240" y="198" width="300" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lv1" value="Stacked — social avatar, poster, conference badge" style="text;html=1;fontSize=13;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="600" y="140" width="400" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="lvbox" value="" style="rounded=1;arcSize=6;fillColor=#FFFFFF;strokeColor=#E2E8F0;" vertex="1" parent="1">
+          <mxGeometry x="600" y="168" width="320" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="lvin" value="" style="shape=line;strokeColor=#0EA5E9;strokeWidth=10;strokeCap=round;" vertex="1" parent="1">
+          <mxGeometry x="675" y="235" width="46" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="lvprism" value="" style="triangle;direction=north;fillColor=none;strokeColor=#0F172A;strokeWidth=10;" vertex="1" parent="1">
+          <mxGeometry x="721" y="205" width="70" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="lvo1" style="edgeStyle=none;strokeColor=#0EA5E9;strokeWidth=10;endArrow=none;strokeCap=round;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="791" y="225" as="sourcePoint" />
+            <mxPoint x="841" y="203" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lvo2" style="edgeStyle=none;strokeColor=#7C3AED;strokeWidth=10;endArrow=none;strokeCap=round;dashed=1;dashPattern=1 1.4;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="791" y="255" as="sourcePoint" />
+            <mxPoint x="841" y="277" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lvword" value="Twin&lt;b&gt;Light&lt;/b&gt;" style="text;html=1;fontSize=40;fontColor=#0F172A;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="300" width="280" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="lvtag" value="optical network digital twin" style="text;html=1;fontSize=13;fontColor=#64748B;align=center;" vertex="1" parent="1">
+          <mxGeometry x="620" y="352" width="280" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dark1" value="Dark background variant" style="text;html=1;fontSize=13;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="400" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="darkbox" value="" style="rounded=1;arcSize=6;fillColor=#0F172A;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="348" width="520" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="dkin" value="" style="shape=line;strokeColor=#38BDF8;strokeWidth=8;strokeCap=round;" vertex="1" parent="1">
+          <mxGeometry x="70" y="403" width="40" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="dkprism" value="" style="triangle;direction=north;fillColor=none;strokeColor=#F8FAFC;strokeWidth=8;" vertex="1" parent="1">
+          <mxGeometry x="110" y="378" width="56" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="dko1" style="edgeStyle=none;strokeColor=#38BDF8;strokeWidth=8;endArrow=none;strokeCap=round;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="166" y="395" as="sourcePoint" />
+            <mxPoint x="206" y="377" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dko2" style="edgeStyle=none;strokeColor=#A78BFA;strokeWidth=8;endArrow=none;strokeCap=round;dashed=1;dashPattern=1 1.4;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="166" y="421" as="sourcePoint" />
+            <mxPoint x="206" y="439" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dkword" value="Twin&lt;b&gt;Light&lt;/b&gt;" style="text;html=1;fontSize=44;fontColor=#F8FAFC;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="240" y="378" width="300" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mononote" value="One-colour variant&#10;&#10;For print, embroidery or a monochrome badge: draw everything in #0F172A and keep the twin ray dashed. The dash pattern is the only cue that survives, which is why it must never be dropped above ~20 px." style="rounded=1;arcSize=6;fillColor=#F8FAFC;strokeColor=#CBD5E1;align=left;verticalAlign=top;spacingLeft=14;spacingTop=8;whiteSpace=wrap;fontSize=12;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="600" y="420" width="320" height="130" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="Palette" id="palette">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="ptitle" value="Palette" style="text;html=1;fontSize=24;fontStyle=1;fontColor=#0F172A;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="600" height="34" as="geometry" />
+        </mxCell>
+        <mxCell id="psub" value="Two hues carry the whole identity: cyan for the real network, violet for the twin. The pairing is distinguishable under the common forms of colour-vision deficiency, and both hold contrast on white and on the slate dark background." style="text;html=1;fontSize=13;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="40" y="68" width="760" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sw1" value="" style="rounded=1;arcSize=10;fillColor=#0EA5E9;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="140" width="150" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="sw1l" value="Signal cyan&#10;#0EA5E9&#10;real network / primary ray" style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="40" y="248" width="150" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sw2" value="" style="rounded=1;arcSize=10;fillColor=#7C3AED;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="210" y="140" width="150" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="sw2l" value="Twin violet&#10;#7C3AED&#10;simulated / dashed ray" style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="210" y="248" width="150" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sw3" value="" style="rounded=1;arcSize=10;fillColor=#0F172A;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="380" y="140" width="150" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="sw3l" value="Slate ink&#10;#0F172A&#10;prism, wordmark, dark bg" style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="380" y="248" width="150" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sw4" value="" style="rounded=1;arcSize=10;fillColor=#38BDF8;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="550" y="140" width="150" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="sw4l" value="Signal cyan (dark bg)&#10;#38BDF8&#10;lifted for dark surfaces" style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="550" y="248" width="150" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sw5" value="" style="rounded=1;arcSize=10;fillColor=#A78BFA;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="720" y="140" width="150" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="sw5l" value="Twin violet (dark bg)&#10;#A78BFA&#10;lifted for dark surfaces" style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="720" y="248" width="150" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sw6" value="" style="rounded=1;arcSize=10;fillColor=#E2E8F0;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="890" y="140" width="150" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="sw6l" value="Grid grey&#10;#E2E8F0&#10;axes, unallocated slots" style="text;html=1;fontSize=12;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="890" y="248" width="150" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="usage" value="Usage rules&#10;&#10;· Cyan always denotes the measured/real side, violet always the simulated/twin side. Keep that mapping consistent across the logo, the UI and any figure in a paper — it lets a reader decode a chart without a legend.&#10;· The mark needs only cyan + slate to be recognisable; violet is what makes it mean &quot;twin&quot;.&#10;· On dark backgrounds swap to the lifted variants (#38BDF8 / #A78BFA); the base hues do not hold enough contrast on #0F172A.&#10;· Never introduce a third accent hue into the mark itself. Additional colours belong to data visualisations only." style="rounded=1;arcSize=6;fillColor=#EFF6FF;strokeColor=#0EA5E9;align=left;verticalAlign=top;spacingLeft=16;spacingTop=10;spacingRight=16;whiteSpace=wrap;fontSize=12;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="40" y="340" width="1000" height="150" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

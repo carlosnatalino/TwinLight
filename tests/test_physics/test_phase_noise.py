@@ -2,8 +2,8 @@
 
 
 
-from tapi_twin.config import PhaseNoiseConfig
-from tapi_twin.physics.transients.phase_noise import delta_gsnr_db
+from twinlight.config import PhaseNoiseConfig
+from twinlight.physics.transients.phase_noise import delta_gsnr_db
 
 
 def _fixed_phase(_uid: str, _metric: str) -> float:

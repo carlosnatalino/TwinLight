@@ -4,7 +4,7 @@ Verifies that OPM metrics (GSNR, PMD) correctly map to eye opening and
 timing jitter, and that the statistical properties match expectations.
 
 References:
-    - IMPLEMENTATION_PLAN Phase 5
+    - docs/PHYSICS.md: eye and constellation synthesis
     - Standard coherent DSP eye diagram interpretation
 """
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tapi_twin.output.eye_diagram import (
+from twinlight.output.eye_diagram import (
     EyeDiagramData,
     eye_to_density,
     eye_to_json,

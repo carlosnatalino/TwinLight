@@ -5,10 +5,15 @@ venv/
 .venv/
 
 # React frontend — the image is backend-only.
-tapi-twin-ui/
+twinlight-ui/
 
 # Read-only reference checkouts (e.g. optical-networking-gym).
 related-projects/
+
+# GNPy reference topologies: the build provisions its own copies from the
+# installed gnpy package, so a developer's local copies must not leak in
+# and make the image depend on the host working tree.
+examples/gnpy-data/*.json
 
 # Python bytecode + caches.
 __pycache__/

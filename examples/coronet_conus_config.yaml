@@ -1,16 +1,20 @@
 # =============================================================================
-# T-API Network Digital Twin — CORONET CONUS Configuration
+# TwinLight — CORONET CONUS continental backbone scenario
 # =============================================================================
-# Uses the CORONET_CONUS topology from oopt-gnpy's example-data.
-# CORONET CONUS is a 75-node, 75-ROADM US continental backbone network
-# with 198 fiber spans and 546 directed connections.
+# Uses the CORONET_CONUS topology from oopt-gnpy's example-data: a 75-node,
+# 75-ROADM US continental backbone with 198 fiber spans and 546 directed
+# connections. This is the default scenario of the Docker Compose stack.
 #
-# Topology and equipment: examples/gnpy-data/ (from pip-installed gnpy).
+# Topology and equipment live in examples/gnpy-data/ and are NOT redistributed
+# with TwinLight — run `twinlight-fetch-examples` once to provision them from
+# the installed gnpy package (see examples/gnpy-data/README.md).
+#
 # Path finding: GNPy compute_constrained_path (weighted by fiber length) when
 # equipment is loaded; else NetworkX k-shortest. GNPy used for propagation (QoT).
 #
-# Usage (run from project root with venv active):
-#   tapi-twin --config examples/coronet_conus_config.yaml
+# Usage (run from project root with the environment active):
+#   twinlight-fetch-examples
+#   twinlight --config examples/coronet_conus_config.yaml
 # =============================================================================
 
 # ---------------------------------------------------------------------------

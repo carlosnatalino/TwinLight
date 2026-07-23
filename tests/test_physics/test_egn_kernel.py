@@ -6,12 +6,12 @@ import math
 
 import pytest
 
-from tapi_twin.physics.analytical_metrics import (
+from twinlight.physics.analytical_metrics import (
     chromatic_dispersion_ps_per_nm,
     latency_ms,
     pmd_ps,
 )
-from tapi_twin.physics.egn_kernel import (
+from twinlight.physics.egn_kernel import (
     SpanInputs,
     accumulate_path_noise,
     db_per_km_to_neper_per_m,

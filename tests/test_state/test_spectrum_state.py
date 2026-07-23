@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tapi_twin.state.spectrum_state import SpectrumState
+from twinlight.state.spectrum_state import SpectrumState
 
 
 class TestSpectrumState:

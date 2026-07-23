@@ -1,0 +1,84 @@
+name: Bug report
+description: Something behaves incorrectly — an API error, a crash, or wrong physics
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. The more of the fields below
+        you can fill in, the faster it can be reproduced.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you observe, and what did you expect instead?
+      placeholder: |
+        Creating a DP-64QAM service between … returned 201, but the reported
+        GSNR is below the required 20.5 dB threshold.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >-
+        The command you ran, the request you sent, and the relevant part of your
+        configuration file. A snapshot from `POST /admin/snapshot` makes QoT and
+        RMSA reports reproducible and is the single most useful attachment.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Physical-layer backend
+      options:
+        - gnpy (default)
+        - egn
+        - Not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How are you running TwinLight?
+      options:
+        - Docker Compose stack
+        - Local installation (uv)
+        - Local installation (pip)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: topology
+    attributes:
+      label: Topology
+      description: Which example scenario, or a description of your own topology.
+      placeholder: examples/coronet_conus_config.yaml (CORONET CONUS)
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0, or the commit SHA
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output. Run with `-vv` for debug-level logs.
+      render: shell
+
+  - type: textarea
+    id: physics-reference
+    attributes:
+      label: Reference (physics issues only)
+      description: >-
+        If you believe a model deviates from its published formulation, which
+        reference and equation are you comparing against? See docs/PHYSICS.md for
+        the simplifications that are already known and documented.

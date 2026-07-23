@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tapi_twin.app import create_app
-from tapi_twin.config import GnpyConfig, TwinConfig
+from twinlight.app import create_app
+from twinlight.config import GnpyConfig, TwinConfig
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -75,7 +75,7 @@ def gnpy_twin_config(edfa_topology_path: Path) -> TwinConfig:
 @pytest.fixture
 def gnpy_context(gnpy_twin_config: TwinConfig):
     """A TapiContext with a real GNPy network loaded."""
-    from tapi_twin.state.context import TapiContext
+    from twinlight.state.context import TapiContext
 
     return TapiContext(gnpy_twin_config)
 

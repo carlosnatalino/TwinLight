@@ -1,10 +1,10 @@
 """Tests for the cascade transient composition module."""
 
 
-from tapi_twin.config import TransientsConfig
-from tapi_twin.physics.gnpy_adapter import OpmBaseline
-from tapi_twin.physics.transients.cascade import apply_all_transients
-from tapi_twin.physics.transients.edfa_reservoir import EdfaStateTracker
+from twinlight.config import TransientsConfig
+from twinlight.physics.gnpy_adapter import OpmBaseline
+from twinlight.physics.transients.cascade import apply_all_transients
+from twinlight.physics.transients.edfa_reservoir import EdfaStateTracker
 
 
 class TestApplyAllTransients:

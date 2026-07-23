@@ -12,9 +12,7 @@ __pycache__/
 # Runtime snapshots (admin /admin/snapshot output, accidental test artifacts)
 snapshots/
 
-# Read-only reference checkouts (e.g. optical-networking-gym used as a
-# code basis for the EGN backend port — never imported at runtime).
-related-projects/
+examples/gnpy-data/*.json
 
 # Node JS
 node_modules/
@@ -42,8 +40,8 @@ MANIFEST
 # The frontend has source/test directories literally named "lib"; the Python
 # "lib/" rule above must not ignore them (they are tracked source, not build
 # artifacts). Negations must follow the "lib/" rule to take effect.
-!tapi-twin-ui/src/lib/
-!tapi-twin-ui/src/__tests__/lib/
+!twinlight-ui/src/lib/
+!twinlight-ui/src/__tests__/lib/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
