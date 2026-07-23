@@ -19,10 +19,10 @@ from unittest.mock import patch
 
 import pytest
 
-from tapi_twin.cli import load_config
-from tapi_twin.config import GnpyConfig, PhysicsConfig, TwinConfig
-from tapi_twin.physics.backend import build_backend
-from tapi_twin.physics.gnpy_backend import GnpyBackend
+from twinlight.cli import load_config
+from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
+from twinlight.physics.backend import build_backend
+from twinlight.physics.gnpy_backend import GnpyBackend
 
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -64,7 +64,7 @@ class TestBuildBackend:
         assert backend.available is True
 
     def test_egn_dispatch_returns_egnbackend(self) -> None:
-        from tapi_twin.physics.egn_backend import EgnBackend
+        from twinlight.physics.egn_backend import EgnBackend
 
         cfg = self._gnpy_config()
         cfg.physics.backend = "egn"

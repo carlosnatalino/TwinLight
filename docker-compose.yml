@@ -1,4 +1,4 @@
-# One-shot observability stack for the T-API Network Digital Twin.
+# TwinLight — one-shot digital twin + observability stack.
 #
 # Boots four services on a shared network:
 #   * twin       — the digital twin (FastAPI :8080 + gRPC :50051).
@@ -17,7 +17,7 @@
 #   http://localhost:3000             — Grafana (admin / admin)
 #
 # Override the twin config (default: CORONET CONUS):
-#   docker compose run --rm twin tapi-twin \
+#   docker compose run --rm twin twinlight \
 #       --config /app/examples/twin_config.yaml --rest-host 0.0.0.0
 
 services:
@@ -26,13 +26,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: tapi-twin:latest
+    image: twinlight:latest
     # gnpy's oopt-gnpy-libyang has no manylinux aarch64 wheel; the
     # image is built for linux/amd64 and runs under Rosetta/qemu on
     # Apple Silicon hosts. Declared here too so compose doesn't warn
     # about the mismatch on every up.
     platform: linux/amd64
-    container_name: tapi-twin
+    container_name: twinlight
     ports:
       - "8080:8080"   # REST (TAPI + /config + /metrics + /admin)
       - "50051:50051" # gNMI gRPC
@@ -50,9 +50,9 @@ services:
       - -c
       - >-
         if ls /app/snapshots/*.json >/dev/null 2>&1; then
-        exec tapi-twin --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0 --restore-latest;
+        exec twinlight --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0 --restore-latest;
         else
-        exec tapi-twin --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0;
+        exec twinlight --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0;
         fi
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -65,10 +65,10 @@ services:
 
   ui:
     build:
-      context: ./tapi-twin-ui
+      context: ./twinlight-ui
       dockerfile: Dockerfile
-    image: tapi-twin-ui:latest
-    container_name: tapi-twin-ui
+    image: twinlight-ui:latest
+    container_name: twinlight-ui
     environment:
       # URL the *browser* uses to reach the twin's REST API. The UI runs in
       # the visitor's browser, not on this docker network, so this must be a
@@ -85,7 +85,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.55.1
-    container_name: tapi-twin-prometheus
+    container_name: twinlight-prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -106,7 +106,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.3.0
-    container_name: tapi-twin-grafana
+    container_name: twinlight-grafana
     environment:
       # Override on the command line for any real deployment.
       GF_SECURITY_ADMIN_USER: admin

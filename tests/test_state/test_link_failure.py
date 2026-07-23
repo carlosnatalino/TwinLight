@@ -20,14 +20,14 @@ from __future__ import annotations
 import pytest
 from gnpy.core.elements import Fiber
 
-from tapi_twin.models.common import NameAndValue, OperationalState
-from tapi_twin.models.connectivity import (
+from twinlight.models.common import NameAndValue, OperationalState
+from twinlight.models.connectivity import (
     ConnectivityService,
     ConnectivityServiceEndPoint,
     SipRef,
 )
-from tapi_twin.physics.modulation import ModulationFormat
-from tapi_twin.state.context import NoPathError, TapiContext
+from twinlight.physics.modulation import ModulationFormat
+from twinlight.state.context import NoPathError, TapiContext
 
 
 def _two_sips(ctx: TapiContext) -> tuple[str, str]:

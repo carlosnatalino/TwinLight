@@ -1,8 +1,8 @@
 """Tests for the PDL OSNR penalty — Zarkosvky-Shtaif hinge model (Opt. Lett.
 45(5):1224, 2020, Eq. 3-5) — and the PMD drift model."""
 
-from tapi_twin.config import PolarizationConfig
-from tapi_twin.physics.transients.polarization import (
+from twinlight.config import PolarizationConfig
+from twinlight.physics.transients.polarization import (
     _hinge_period_s,
     _maxwell_pdl_db,
     _pdl_db_to_gamma,

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 120" width="460" height="120" role="img" aria-label="TwinLight — optical network digital twin">
+  <title>TwinLight</title>
+  <desc>A beam entering a prism and splitting into two rays: one solid, one dashed — the network and its digital twin.</desc>
+  <style>
+    /* Theme-aware: GitHub renders README SVGs in light or dark mode. */
+    .ink   { stroke: #0F172A; }
+    .real  { stroke: #0EA5E9; }
+    .twin  { stroke: #7C3AED; }
+    .word  { fill: #0F172A; }
+    .sub   { fill: #64748B; }
+    @media (prefers-color-scheme: dark) {
+      .ink  { stroke: #F8FAFC; }
+      .real { stroke: #38BDF8; }
+      .twin { stroke: #A78BFA; }
+      .word { fill: #F8FAFC; }
+      .sub  { fill: #94A3B8; }
+    }
+  </style>
+
+  <!-- Mark: incoming ray -->
+  <line class="real" x1="14" y1="60" x2="46" y2="60" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- Mark: prism -->
+  <path class="ink" d="M 60 28 L 88 76 L 32 76 Z" fill="none" stroke-width="9" stroke-linejoin="round"/>
+
+  <!-- Mark: real output ray (solid) -->
+  <line class="real" x1="90" y1="52" x2="122" y2="36" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- Mark: twin output ray (dashed) -->
+  <line class="twin" x1="90" y1="68" x2="122" y2="84" stroke-width="9" stroke-linecap="round"
+        stroke-dasharray="2 11"/>
+
+  <!-- Wordmark: "Twin" regular + "Light" semibold, no space -->
+  <text x="146" y="72" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="44" letter-spacing="-0.5">
+    <tspan class="word" font-weight="400">Twin</tspan><tspan class="word" font-weight="650">Light</tspan>
+  </text>
+
+  <!-- Tagline -->
+  <text x="149" y="95" class="sub" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="12.5" letter-spacing="1.6">OPTICAL NETWORK DIGITAL TWIN</text>
+</svg>

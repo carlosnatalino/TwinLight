@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from tapi_twin.loader.gnpy_topology import load_gnpy_topology
+from twinlight.loader.gnpy_topology import load_gnpy_topology
 
 
 def test_load_elements(edfa_topology_path: Path) -> None:

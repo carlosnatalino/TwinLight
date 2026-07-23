@@ -14,13 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from tapi_twin.loader.egn_topology import (
+from twinlight.loader.egn_topology import (
     EgnLinkData,
     EgnSpanData,
     EgnTopologyData,
     convert,
 )
-from tapi_twin.loader.gnpy_topology import load_gnpy_topology
+from twinlight.loader.gnpy_topology import load_gnpy_topology
 
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"

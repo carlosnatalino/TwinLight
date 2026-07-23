@@ -1,20 +1,23 @@
 # =============================================================================
-# T-API Network Digital Twin — Configuration File
+# TwinLight — small two-site example scenario
 # =============================================================================
 # YAML superset config that references GNPy JSON files by path and adds
 # twin-specific sections. All relative paths resolve from THIS file's directory.
 #
 # Usage:
-#   tapi-twin --config twin_config.yaml
-#   tapi-twin --config twin_config.yaml --rest-port 9090 -vv   # CLI overrides
+#   twinlight-fetch-examples                              # one-off: get GNPy data
+#   twinlight --config examples/twin_config.yaml
+#   twinlight --config examples/twin_config.yaml --rest-port 9090 -vv
 # =============================================================================
 
 # ---------------------------------------------------------------------------
 # GNPy integration: references to external GNPy JSON files
 # ---------------------------------------------------------------------------
 gnpy:
-  topology: "../related-projects/oopt-gnpy/gnpy/example-data/edfa_example_network.json"
-  equipment: "../related-projects/oopt-gnpy/gnpy/example-data/eqpt_config.json"
+  # Provisioned by `twinlight-fetch-examples` (see examples/gnpy-data/README.md);
+  # these GNPy reference files are not redistributed with TwinLight.
+  topology: "gnpy-data/edfa_example_network.json"
+  equipment: "gnpy-data/eqpt_config.json"
   sim_params: null                     # null => not used (required for Raman)
   extra_equipment: []                  # list of additional equipment JSON files
   extra_config: []                     # list of additional GNPy config files

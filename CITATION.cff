@@ -1,0 +1,86 @@
+cff-version: 1.2.0
+title: >-
+  TwinLight: A Multi-Timescale Optical Network Digital Twin with T-API
+  Interfaces
+message: >-
+  If you use TwinLight in work that you publish, please cite it using the
+  metadata in this file. Please also cite the underlying physical-layer
+  models you rely on — GNPy and the GN/EGN model in particular; see the
+  References section of the README.
+type: software
+# TODO(maintainer): add `affiliation:` and `orcid:` to the author entry below
+# — both improve citation indexing, and only you can supply them accurately.
+authors:
+  - given-names: Carlos
+    family-names: Natalino
+repository-code: 'https://github.com/carlosnatalino/TwinLight'
+url: 'https://github.com/carlosnatalino/TwinLight'
+abstract: >-
+  TwinLight is a digital twin of an optical network that combines a
+  physics-based quality-of-transmission baseline — computed either with
+  GNPy split-step propagation or with a closed-form GN/EGN kernel — with
+  four analytical models of time-varying impairments: EDFA gain-reservoir
+  transients, polarization-mode dispersion drift and polarization-dependent
+  loss, equalization-enhanced phase noise, and environmental thermal drift.
+  The resulting multi-timescale signal quality is exposed through
+  standards-compliant interfaces: Transport API (T-API) v2.6.0 REST, gNMI
+  streaming telemetry, and Prometheus metrics. It also implements
+  quality-of-transmission-aware routing, modulation and spectrum assignment
+  on a flexible grid. TwinLight is intended as a realistic emulator of an
+  optical domain controller, for validating software-defined networking
+  control logic, running what-if and failure scenarios, generating labelled
+  optical performance monitoring data for machine learning, and reproducible
+  optical network planning research.
+keywords:
+  - optical networks
+  - digital twin
+  - Transport API
+  - T-API
+  - GNPy
+  - quality of transmission
+  - QoT estimation
+  - optical performance monitoring
+  - elastic optical networks
+  - RMSA
+  - gNMI
+  - software-defined networking
+license: MIT
+version: 0.1.0
+date-released: '2026-07-23'
+references:
+  - type: article
+    title: >-
+      GNPy: an open source application for physical layer aware open optical
+      networks
+    authors:
+      - family-names: Curri
+        given-names: Vittorio
+    journal: Journal of Lightwave Technology
+    volume: 40
+    issue: 11
+    start: 3498
+    end: 3511
+    year: 2022
+    notes: Physical-layer propagation engine used by the default backend.
+  - type: article
+    title: >-
+      Modeling of the impact of nonlinear propagation effects in
+      uncompensated optical coherent transmission links
+    authors:
+      - family-names: Carena
+        given-names: Andrea
+      - family-names: Curri
+        given-names: Vittorio
+      - family-names: Bosco
+        given-names: Gabriella
+      - family-names: Poggiolini
+        given-names: Pierluigi
+      - family-names: Forghieri
+        given-names: Fabrizio
+    journal: Journal of Lightwave Technology
+    volume: 30
+    issue: 10
+    start: 1524
+    end: 1539
+    year: 2012
+    notes: Closed-form GN model implemented by the EGN backend.

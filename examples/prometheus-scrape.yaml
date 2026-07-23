@@ -1,4 +1,4 @@
-# Example Prometheus scrape configuration for the T-API Twin.
+# Example Prometheus scrape configuration for the TwinLight.
 #
 # Drop the `scrape_configs[0]` block into your prometheus.yml. The
 # scrape interval is deliberately conservative — the twin's transient
@@ -13,7 +13,7 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: tapi-twin
+  - job_name: twinlight
     metrics_path: /metrics
     scrape_interval: 15s
     static_configs:

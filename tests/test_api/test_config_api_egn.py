@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tapi_twin.app import create_app
-from tapi_twin.config import GnpyConfig, PhysicsConfig, TwinConfig
+from twinlight.app import create_app
+from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
 
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"

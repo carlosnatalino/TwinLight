@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 from gnpy.core.elements import Edfa, Fiber, Roadm
 
-from tapi_twin.physics.element_params import (
+from twinlight.physics.element_params import (
     ALLOWED,
     ParamValidationError,
     read_all,
@@ -23,7 +23,7 @@ from tapi_twin.physics.element_params import (
     specs_for,
     write_attr,
 )
-from tapi_twin.physics.gnpy_adapter import build_gnpy_network, build_uid_map
+from twinlight.physics.gnpy_adapter import build_gnpy_network, build_uid_map
 
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"

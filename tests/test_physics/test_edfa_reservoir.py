@@ -1,7 +1,7 @@
 """Tests for the Bononi exponential step EDFA reservoir model."""
 
-from tapi_twin.config import EdfaReservoirConfig
-from tapi_twin.physics.transients.edfa_reservoir import (
+from twinlight.config import EdfaReservoirConfig
+from twinlight.physics.transients.edfa_reservoir import (
     EdfaStateTracker,
     delta_gsnr_db,
 )

@@ -50,7 +50,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_info",
+          "expr": "twinlight_info",
           "legendFormat": "{{backend}}",
           "refId": "A",
           "datasource": {
@@ -97,7 +97,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_services_total",
+          "expr": "twinlight_services_total",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -150,7 +150,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_failed_links_total",
+          "expr": "twinlight_failed_links_total",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -207,7 +207,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_rmsa_qot_margin_db",
+          "expr": "twinlight_rmsa_qot_margin_db",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -249,7 +249,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_transient_enabled",
+          "expr": "twinlight_transient_enabled",
           "legendFormat": "{{model}}",
           "refId": "A",
           "datasource": {
@@ -321,7 +321,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_gsnr_db{service_name=~\"$service\"}",
+          "expr": "twinlight_opm_gsnr_db{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}} ({{modulation}})",
           "refId": "A",
           "datasource": {
@@ -366,7 +366,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_osnr_db{service_name=~\"$service\"}",
+          "expr": "twinlight_opm_osnr_db{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}} ({{modulation}})",
           "refId": "A",
           "datasource": {
@@ -408,7 +408,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_q_factor_db{service_name=~\"$service\"}",
+          "expr": "twinlight_opm_q_factor_db{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -439,7 +439,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_pre_fec_ber{service_name=~\"$service\"}",
+          "expr": "twinlight_opm_pre_fec_ber{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -489,7 +489,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_chromatic_dispersion_ps_per_nm{service_name=~\"$service\"}",
+          "expr": "twinlight_opm_chromatic_dispersion_ps_per_nm{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -521,7 +521,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_opm_pmd_ps{service_name=~\"$service\"}",
+          "expr": "twinlight_opm_pmd_ps{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -565,7 +565,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_service_link_failed{service_name=~\"$service\"}",
+          "expr": "twinlight_service_link_failed{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
@@ -616,7 +616,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_fiber_loss_coef_db_per_km",
+          "expr": "twinlight_fiber_loss_coef_db_per_km",
           "format": "table",
           "instant": true,
           "refId": "A",
@@ -667,7 +667,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_edfa_nf_db",
+          "expr": "twinlight_edfa_nf_db",
           "format": "table",
           "instant": true,
           "refId": "A",
@@ -711,7 +711,7 @@
       },
       "targets": [
         {
-          "expr": "tapi_twin_fiber_failed",
+          "expr": "twinlight_fiber_failed",
           "legendFormat": "{{uid}}",
           "refId": "A",
           "datasource": {
@@ -737,7 +737,7 @@
   "refresh": "10s",
   "schemaVersion": 39,
   "tags": [
-    "tapi-twin",
+    "twinlight",
     "optical"
   ],
   "templating": {
@@ -766,10 +766,10 @@
         },
         "query": {
           "qryType": 1,
-          "query": "label_values(tapi_twin_opm_gsnr_db, service_name)",
+          "query": "label_values(twinlight_opm_gsnr_db, service_name)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
-        "definition": "label_values(tapi_twin_opm_gsnr_db, service_name)",
+        "definition": "label_values(twinlight_opm_gsnr_db, service_name)",
         "multi": true,
         "includeAll": true,
         "allValue": ".*",
@@ -796,8 +796,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "T-API Twin \u2014 Live OPM and /config",
-  "uid": "tapi-twin-overview",
+  "title": "TwinLight \u2014 Live OPM and /config",
+  "uid": "twinlight-overview",
   "version": 2,
   "weekStart": ""
 }

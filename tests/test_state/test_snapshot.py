@@ -24,15 +24,15 @@ from pathlib import Path
 import pytest
 from gnpy.core.elements import Fiber
 
-from tapi_twin.config import TwinConfig
-from tapi_twin.models.common import NameAndValue
-from tapi_twin.models.connectivity import (
+from twinlight.config import TwinConfig
+from twinlight.models.common import NameAndValue
+from twinlight.models.connectivity import (
     ConnectivityService,
     ConnectivityServiceEndPoint,
     SipRef,
 )
-from tapi_twin.physics.modulation import ModulationFormat
-from tapi_twin.state.context import TapiContext
+from twinlight.physics.modulation import ModulationFormat
+from twinlight.state.context import TapiContext
 
 
 def _two_sips(ctx: TapiContext) -> tuple[str, str]:
@@ -121,7 +121,7 @@ class TestSnapshotV2RoundTrip:
         assert services[0].uuid == svc.uuid
 
         # Element override re-applied to the live element.
-        from tapi_twin.physics.element_params import read_attr
+        from twinlight.physics.element_params import read_attr
         loss_now = read_attr(ctx2._gnpy_uid_map[fiber_uid], "loss_coef")
         assert loss_now == pytest.approx(0.27)
         assert ctx2.get_element_overrides()[fiber_uid]["loss_coef"] == 0.27
@@ -129,7 +129,7 @@ class TestSnapshotV2RoundTrip:
         # Failure re-applied: fiber is back in the failed set and TAPI
         # link operational-state is DISABLED.
         assert fiber_uid in ctx2.get_failed_links()
-        from tapi_twin.models.common import OperationalState
+        from twinlight.models.common import OperationalState
         for topo_uuid, link_uuid in ctx2._fiber_to_link_refs.get(
             fiber_uid, []
         ):
@@ -195,8 +195,8 @@ class TestCrossBackendRestore:
         gnpy_twin_config,
         tmp_path: Path,
     ) -> None:
-        from tapi_twin.config import PhysicsConfig
-        from tapi_twin.state.context import TapiContext
+        from twinlight.config import PhysicsConfig
+        from twinlight.state.context import TapiContext
 
         # Snapshot under GNPy.
         gnpy_ctx = TapiContext(gnpy_twin_config)

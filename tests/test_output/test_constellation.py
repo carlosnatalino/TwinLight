@@ -5,7 +5,7 @@ spread, and that the statistical properties match expectations.
 
 References:
     - Sequeira et al., "OCATA: A Deep-Learning-Based Digital Twin," ECOC 2023
-    - IMPLEMENTATION_PLAN Phase 5
+    - docs/PHYSICS.md: eye and constellation synthesis
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tapi_twin.output.constellation import (
+from twinlight.output.constellation import (
     _ideal_constellation,
     constellation_to_iq,
     synthesize_constellation,

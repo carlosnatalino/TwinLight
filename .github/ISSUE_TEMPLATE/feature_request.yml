@@ -1,0 +1,53 @@
+name: Feature request
+description: Propose a new capability — an interface, a model, or an algorithm
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: >-
+        Describe the experiment or use case you cannot currently run. Knowing the
+        goal usually suggests a better design than the feature as first phrased.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - T-API interface
+        - gNMI / streaming telemetry
+        - Physical layer — QoT backend
+        - Physical layer — transient models
+        - RMSA (routing, modulation, spectrum)
+        - Observability (Prometheus / Grafana)
+        - Web UI
+        - Client library / CLI
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What should TwinLight do? Include the API shape if relevant.
+
+  - type: textarea
+    id: reference
+    attributes:
+      label: Reference
+      description: >-
+        For a physical model, the paper and equations it should follow. For a
+        protocol feature, the relevant section of the T-API or gNMI
+        specification. TwinLight aims to keep every model traceable to a source.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to work on this

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 
-from tapi_twin.algorithms.spectrum_assignment import first_fit, path_uids_to_edges
-from tapi_twin.state.spectrum_state import SpectrumState
+from twinlight.algorithms.spectrum_assignment import first_fit, path_uids_to_edges
+from twinlight.state.spectrum_state import SpectrumState
 
 
 class TestPathUidsToEdges:

@@ -15,35 +15,41 @@ permissions:
   contents: read
 
 jobs:
-  lint:
+  backend:
     name: Lint, type-check & coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+      # uv is the supported way to manage the environment (see CONTRIBUTING.md);
+      # it resolves and installs the whole dependency tree in seconds.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
 
       - name: Install package and dev dependencies
-        run: pip install -e ".[dev]"
+        run: |
+          uv venv --python 3.12
+          uv pip install -e ".[dev]"
 
       - name: Ruff (lint)
         if: ${{ !cancelled() }}
-        run: ruff check .
+        run: uv run ruff check .
 
       # Run even if ruff failed, so both checks report in one run.
       - name: Mypy (type-check)
         if: ${{ !cancelled() }}
-        run: mypy
+        run: uv run mypy
 
       - name: Run tests with coverage
         if: ${{ !cancelled() }}
         run: |
-          pytest --cov --cov-report=term-missing \
+          uv run pytest --cov --cov-report=term-missing \
             --md-report --md-report-color=never | tee pytest-output.txt
 
       # Render the test-results and coverage tables on the run's "Summary" page.
@@ -57,7 +63,7 @@ jobs:
             echo
             echo "## Test coverage"
             echo
-            coverage report --format=markdown --fail-under=0 \
+            uv run coverage report --format=markdown --fail-under=0 \
               || echo "_No coverage data._"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -66,16 +72,16 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: tapi-twin-ui
+        working-directory: twinlight-ui
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: tapi-twin-ui/package-lock.json
+          cache-dependency-path: twinlight-ui/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -87,3 +93,58 @@ jobs:
       - name: Build
         if: ${{ !cancelled() }}
         run: npm run build
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # `docker compose up --build` is the documented first-run path, so a
+      # broken image is a broken quickstart. Building here also exercises the
+      # twinlight-fetch-examples step that provisions the GNPy reference
+      # topologies into the image (they are not committed to this repo).
+      - name: Build twin image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: twinlight:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build web UI image
+        if: ${{ !cancelled() }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./twinlight-ui
+          file: ./twinlight-ui/Dockerfile
+          push: false
+          load: true
+          tags: twinlight-ui:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Smoke test: the example scenario must actually boot inside the image
+      # and answer /health, which proves the provisioned GNPy data is usable.
+      - name: Smoke-test the twin image
+        run: |
+          docker run -d --name twinlight-ci -p 8080:8080 twinlight:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health >/dev/null 2>&1; then
+              echo "twin is healthy after ${i}s"
+              curl -fsS http://localhost:8080/health
+              docker rm -f twinlight-ci >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::twin did not become healthy within 60s"
+          docker logs twinlight-ci
+          docker rm -f twinlight-ci >/dev/null
+          exit 1

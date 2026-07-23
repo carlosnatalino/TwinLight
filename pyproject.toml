@@ -1,12 +1,41 @@
 [build-system]
-requires = ["setuptools>=68"]
+# >=77 for PEP 639 `license` / `license-files` support.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tapi-twin"
+name = "twinlight"
 version = "0.1.0"
-description = "T-API Network Digital Twin — optical network emulator with GNPy and T-API interfaces"
+description = "TwinLight — a multi-timescale optical network digital twin with T-API interfaces"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [
+    { name = "Carlos Natalino", email = "carlos.natalino@chalmers.se" },
+]
+keywords = [
+    "optical-networks",
+    "digital-twin",
+    "transport-api",
+    "tapi",
+    "gnpy",
+    "qot-estimation",
+    "network-emulator",
+    "gnmi",
+    "sdn",
+]
+classifiers = [
+    # NB: no "License ::" classifier — PEP 639 supersedes it with the
+    # `license`/`license-files` fields above, and setuptools rejects both.
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Telecommunications Industry",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Networking",
+    "Typing :: Typed",
+]
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -32,9 +61,15 @@ dev = [
     "mypy>=1.13",
 ]
 
+[project.urls]
+Homepage = "https://github.com/carlosnatalino/TwinLight"
+Repository = "https://github.com/carlosnatalino/TwinLight"
+Issues = "https://github.com/carlosnatalino/TwinLight/issues"
+
 [project.scripts]
-tapi-twin = "tapi_twin.main:main"
-tapi-client = "tapi_client.cli:main"
+twinlight = "twinlight.main:main"
+twinlight-client = "twinlight_client.cli:main"
+twinlight-fetch-examples = "twinlight.example_data:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -47,7 +82,7 @@ asyncio_mode = "auto"
 target-version = "py312"
 line-length = 100
 # Generated protobuf/gRPC code — not linted (regenerated from .proto files).
-extend-exclude = ["src/tapi_twin/streaming/proto"]
+extend-exclude = ["src/twinlight/streaming/proto"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -56,11 +91,11 @@ plugins = ["pydantic.mypy"]
 warn_redundant_casts = true
 warn_unused_ignores = true
 # Generated protobuf/gRPC code is not type-checked.
-exclude = ["src/tapi_twin/streaming/proto/"]
+exclude = ["src/twinlight/streaming/proto/"]
 
 # Generated protobuf/gRPC modules: treated as opaque (Any) by the type checker.
 [[tool.mypy.overrides]]
-module = "tapi_twin.streaming.proto.*"
+module = "twinlight.streaming.proto.*"
 follow_imports = "skip"
 ignore_errors = true
 
@@ -80,7 +115,7 @@ ignore_missing_imports = true
 source = ["src"]
 branch = true
 # Generated protobuf/gRPC code is not hand-written — exclude it from coverage.
-omit = ["src/tapi_twin/streaming/proto/*"]
+omit = ["src/twinlight/streaming/proto/*"]
 
 [tool.coverage.report]
 show_missing = true

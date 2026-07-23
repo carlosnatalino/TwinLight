@@ -12,17 +12,17 @@ from pathlib import Path
 
 import pytest
 
-from tapi_twin.config import GnpyConfig, PhysicsConfig, TwinConfig
-from tapi_twin.models.common import NameAndValue
-from tapi_twin.models.connectivity import (
+from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
+from twinlight.models.common import NameAndValue
+from twinlight.models.connectivity import (
     ConnectivityService,
     ConnectivityServiceEndPoint,
     SipRef,
 )
-from tapi_twin.physics.egn_backend import EgnBackend
-from tapi_twin.physics.element_params import ParamValidationError
-from tapi_twin.physics.modulation import ModulationFormat
-from tapi_twin.state.context import TapiContext
+from twinlight.physics.egn_backend import EgnBackend
+from twinlight.physics.element_params import ParamValidationError
+from twinlight.physics.modulation import ModulationFormat
+from twinlight.state.context import TapiContext
 
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
