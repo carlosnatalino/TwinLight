@@ -24,7 +24,6 @@ from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
 from twinlight.physics.backend import build_backend
 from twinlight.physics.gnpy_backend import GnpyBackend
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 _GNPY_EQUIPMENT = (
     Path(__file__).resolve().parents[2]
@@ -91,6 +90,5 @@ class TestCliOverride:
 
     def test_cli_flag_rejects_unknown_value(self) -> None:
         # argparse should reject anything outside choices=[gnpy, egn].
-        with patch("sys.stderr", new_callable=io.StringIO):
-            with pytest.raises(SystemExit):
-                load_config(self._argv("--physics-backend", "manakov"))
+        with patch("sys.stderr", new_callable=io.StringIO), pytest.raises(SystemExit):
+            load_config(self._argv("--physics-backend", "manakov"))

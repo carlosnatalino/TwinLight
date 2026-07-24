@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 from twinlight.app import create_app
 from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 

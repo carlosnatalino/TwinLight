@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from twinlight.algorithms.spectrum_assignment import first_fit, path_uids_to_edges
 from twinlight.state.spectrum_state import SpectrumState
 

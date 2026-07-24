@@ -17,14 +17,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from twinlight.config import TwinConfig
 from twinlight.loader.gnpy_topology import load_gnpy_topology
 from twinlight.loader.tapi_builder import TapiBuilder
-from twinlight.physics.backend import element_kind_name as _kind_name
 from twinlight.models.common import ServiceInterfacePoint
 from twinlight.models.connectivity import ConnectivityService
 from twinlight.models.topology import (
@@ -33,6 +32,7 @@ from twinlight.models.topology import (
     NodeEdgePoint,
     Topology,
 )
+from twinlight.physics.backend import element_kind_name as _kind_name
 from twinlight.state.spectrum_state import SpectrumState
 from twinlight.state.topology_state import TopologyGraph
 
@@ -422,8 +422,12 @@ class TapiContext:
             path_elements = compute_constrained_path(self._gnpy_network, req)
             if path_elements and getattr(req, "blocking_reason", None) is None:
                 return [el.uid for el in path_elements]
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:
+            logger.debug(
+                "GNPy path computation failed for %s -> %s; falling back to "
+                "the NetworkX k-shortest search",
+                src_uid, dst_uid, exc_info=True,
+            )
         return None
 
     def get_service_path(
@@ -1066,7 +1070,7 @@ class TapiContext:
             }
         data = {
             "version": 1,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             # Backend name lets restore reject mismatched snapshots
             # (services admitted under different QoT thresholds would
             # be replayed against the wrong physics — silently

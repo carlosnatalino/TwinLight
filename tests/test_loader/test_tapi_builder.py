@@ -15,7 +15,7 @@ def _build(edfa_topology_path: Path):
 
 
 def test_builds_topology_context(edfa_topology_path: Path) -> None:
-    ctx, sips = _build(edfa_topology_path)
+    ctx, _sips = _build(edfa_topology_path)
     assert len(ctx.topology) == 1
 
 

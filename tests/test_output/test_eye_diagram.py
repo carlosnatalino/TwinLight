@@ -127,7 +127,7 @@ class TestEyeToDensity:
         eye_data = synthesize_eye(
             measurements, "DP-QPSK", n_traces=50, samples_per_symbol=32
         )
-        _, amp_edges, density = eye_to_density(eye_data, amplitude_bins=50)
+        _, _amp_edges, density = eye_to_density(eye_data, amplitude_bins=50)
         assert density.shape[0] == 50
         assert density.shape[1] == len(eye_data.time_ns)
 

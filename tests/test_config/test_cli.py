@@ -8,9 +8,8 @@ from textwrap import dedent
 import pytest
 import yaml
 
-from twinlight.cli import build_parser, load_config, _resolve_paths
+from twinlight.cli import _resolve_paths, build_parser, load_config
 from twinlight.config import ClockMode, LogLevel
-
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 

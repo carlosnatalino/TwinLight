@@ -25,7 +25,6 @@ from twinlight.physics.element_params import (
 )
 from twinlight.physics.gnpy_adapter import build_gnpy_network, build_uid_map
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 GNPY_EXAMPLE_DATA = (
     Path(__file__).resolve().parents[2]

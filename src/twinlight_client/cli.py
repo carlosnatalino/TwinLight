@@ -133,7 +133,10 @@ async def _stream_service(
             count += 1
             timestamp = update.get("timestamp")
             when = (
-                _dt.datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+                # tz-aware, then rendered in the operator's local time.
+                _dt.datetime.fromtimestamp(timestamp, tz=_dt.UTC)
+                .astimezone()
+                .strftime("%H:%M:%S")
                 if isinstance(timestamp, (int, float))
                 else "--:--:--"
             )

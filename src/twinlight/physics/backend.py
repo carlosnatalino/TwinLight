@@ -48,13 +48,13 @@ class PhysicalBackend(Protocol):
     # GNPy uses a NetworkX DiGraph of element objects for path
     # computation; the EGN backend leaves this ``None`` (path computation
     # falls back to the TopologyGraph-based NetworkX k-shortest).
-    network: "nx.DiGraph | None"
+    network: nx.DiGraph | None
 
     async def compute_baseline(
         self,
         path_uids: list[str],
         modulation_format: str,
-    ) -> "OpmBaseline | None":
+    ) -> OpmBaseline | None:
         """Return a static QoT baseline for the path, or ``None`` if
         propagation is not possible (engine unavailable, missing element).
         Returning ``None`` puts the OPM endpoint into mock-data fallback.
@@ -113,7 +113,7 @@ def element_kind_name(el: Any) -> str:
     return cls_name
 
 
-def build_backend(config: "TwinConfig") -> PhysicalBackend:
+def build_backend(config: TwinConfig) -> PhysicalBackend:
     """Construct the configured backend. Imported lazily to keep optional
     deps (the EGN library) off the import path when they're not used.
 
@@ -141,4 +141,4 @@ def build_backend(config: "TwinConfig") -> PhysicalBackend:
 
 
 if TYPE_CHECKING:
-    from twinlight.config import TwinConfig  # noqa: F401
+    from twinlight.config import TwinConfig

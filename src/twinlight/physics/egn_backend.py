@@ -14,6 +14,7 @@ under GPL-3.0, not an import.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from twinlight.config import TwinConfig
 from twinlight.loader.egn_topology import (
     EgnNodeKind,
     EgnTopologyData,
+)
+from twinlight.loader.egn_topology import (
     convert as convert_to_egn,
 )
 from twinlight.loader.gnpy_topology import (
@@ -48,7 +51,6 @@ from twinlight.physics.element_params import (
 )
 from twinlight.physics.gnpy_adapter import OpmBaseline
 from twinlight.physics.modulation import get_params
-
 
 logger = logging.getLogger(__name__)
 
@@ -413,7 +415,7 @@ class EgnBackend:
         span_keys: list[tuple[int, int]] = []
         fiber_uids: list[str] = []
         edfa_uids: list[str] = []
-        for source_uid, target_uid in zip(terminals, terminals[1:]):
+        for source_uid, target_uid in itertools.pairwise(terminals):
             link_id = self._egn_topo.link_by_endpoints.get((source_uid, target_uid))
             if link_id is None:
                 # Legs with no fiber (a transceiver's access hop to its

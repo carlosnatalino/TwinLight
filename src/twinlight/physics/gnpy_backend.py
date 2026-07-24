@@ -34,7 +34,7 @@ class GnpyBackend:
     def __init__(self, config: TwinConfig) -> None:
         self.available: bool = False
         self.uid_map: dict[str, Any] = {}
-        self.network: "nx.DiGraph | None" = None
+        self.network: nx.DiGraph | None = None
         # Retained for ``redesign()`` so we don't re-read the equipment
         # JSON from disk on every override.
         self.equipment: Any = None
@@ -72,7 +72,7 @@ class GnpyBackend:
         self,
         path_uids: list[str],
         modulation_format: str,
-    ) -> "OpmBaseline | None":
+    ) -> OpmBaseline | None:
         if not self.available:
             return None
         from twinlight.physics.gnpy_adapter import compute_path_baseline

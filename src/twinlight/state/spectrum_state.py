@@ -19,6 +19,7 @@ Design decisions:
 from __future__ import annotations
 
 import logging
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ class SpectrumState:
         return {"num_slots": self._num_slots, "slots": slots_ser}
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SpectrumState":
+    def from_dict(cls, data: dict) -> SpectrumState:
         """Deserialize from snapshot; restores per-edge occupancy."""
         num_slots = int(data["num_slots"])
         inst = cls(num_slots)

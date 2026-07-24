@@ -52,12 +52,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Deliberately unpinned at the top: a new ruff or mypy release should
+# surface new findings here as early as possible, rather than being
+# frozen out. The floors are kept current so a local install resolves the
+# same generation of tooling CI does — a stale local ruff silently passing
+# what CI rejects is the failure mode this avoids.
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
     "pytest-md-report>=0.6",
-    "ruff>=0.7",
+    "ruff>=0.16",
     "mypy>=1.13",
 ]
 
@@ -83,6 +88,26 @@ target-version = "py312"
 line-length = 100
 # Generated protobuf/gRPC code — not linted (regenerated from .proto files).
 extend-exclude = ["src/twinlight/streaming/proto"]
+
+# No explicit `select`: ruff's own defaults are used deliberately, so that a
+# new release surfacing new rules shows up here as a CI failure to act on,
+# rather than being silently frozen out by a pinned rule set.
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI expresses request bodies and dependencies as call expressions in
+# argument defaults (`body: dict | None = Body(default=None)`). That is the
+# framework's documented idiom, not the mutable-default bug B008 targets,
+# so these callables are declared immutable rather than blanket-ignoring
+# the rule — a genuine B008 elsewhere still fails the build.
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+]
 
 [tool.mypy]
 python_version = "3.12"

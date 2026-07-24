@@ -16,9 +16,10 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from twinlight.config import TwinConfig
 
@@ -151,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_yaml(config_path: Path) -> Dict[str, Any]:
+def _load_yaml(config_path: Path) -> dict[str, Any]:
     """Load YAML config as a raw dict."""
     with open(config_path, "r") as f:
         data = yaml.safe_load(f)
@@ -168,7 +169,7 @@ def _resolve_path(value: Any, base_dir: Path) -> str | None:
     return str(p)
 
 
-def _resolve_path_list(values: List[Any] | None, base_dir: Path) -> List[str]:
+def _resolve_path_list(values: list[Any] | None, base_dir: Path) -> list[str]:
     """Resolve a list of paths relative to base_dir."""
     if not values:
         return []
@@ -179,7 +180,7 @@ def _resolve_path_list(values: List[Any] | None, base_dir: Path) -> List[str]:
     ]
 
 
-def _resolve_paths(data: Dict[str, Any], base_dir: Path) -> Dict[str, Any]:
+def _resolve_paths(data: dict[str, Any], base_dir: Path) -> dict[str, Any]:
     """Resolve all path-valued fields relative to the config file's directory."""
     gnpy = data.get("gnpy", {})
     for key in ("topology", "equipment", "sim_params"):
@@ -197,9 +198,9 @@ def _resolve_paths(data: Dict[str, Any], base_dir: Path) -> Dict[str, Any]:
 
 
 def _apply_cli_overrides(
-    yaml_data: Dict[str, Any],
+    yaml_data: dict[str, Any],
     args: argparse.Namespace,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Layer non-None CLI arguments on top of YAML data."""
     data = yaml_data
 
@@ -283,7 +284,7 @@ class ConfigError(SystemExit):
         super().__init__(2)
 
 
-def load_config(argv: Optional[list[str]] = None) -> TwinConfig:
+def load_config(argv: list[str] | None = None) -> TwinConfig:
     """Parse CLI, load YAML, merge, validate. Returns a validated TwinConfig.
 
     Args:
@@ -335,7 +336,7 @@ def load_config(argv: Optional[list[str]] = None) -> TwinConfig:
     # Step 5: Validate with Pydantic
     try:
         config = TwinConfig(**merged)
-    except Exception as e:
+    except ValidationError as e:
         parser.error(f"Configuration validation failed:\n{e}")
 
     return config

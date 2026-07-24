@@ -43,7 +43,6 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -77,7 +76,7 @@ class EdfaStateTracker:
         self,
         edfa_uids: list[str],
         delta_channels: int,
-        cfg: "EdfaReservoirConfig",
+        cfg: EdfaReservoirConfig,
         t: float | None = None,
     ) -> None:
         """Record a channel add/drop event for a set of EDFAs.
@@ -166,7 +165,7 @@ class EdfaStateTracker:
 def delta_gsnr_db(
     t: float,
     edfa_uids: list[str],
-    cfg: "EdfaReservoirConfig",
+    cfg: EdfaReservoirConfig,
     edfa_tracker: EdfaStateTracker | None = None,
     _phase_fn=None,
 ) -> float:
