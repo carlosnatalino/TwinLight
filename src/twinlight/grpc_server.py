@@ -51,21 +51,39 @@ async def start_grpc_server(
 
     try:
         if shutdown_event is not None:
+            # Race "someone asked us to shut down" against "the server
+            # terminated on its own".
+            #
+            # NB: the termination task must NOT be cancelled when the
+            # shutdown event wins. ``grpc.aio``'s wait_for_termination is
+            # backed by the server's internal shutdown future, so
+            # cancelling it poisons that future and the subsequent
+            # ``server.stop()`` raises CancelledError instead of shutting
+            # down cleanly. Only the plain Event.wait() is safe to cancel;
+            # the termination task is awaited below once we have actually
+            # asked the server to stop.
             wait_termination = asyncio.create_task(server.wait_for_termination())
             wait_shutdown = asyncio.create_task(shutdown_event.wait())
-            _done, pending = await asyncio.wait(
+            await asyncio.wait(
                 [wait_termination, wait_shutdown],
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            for t in pending:
-                t.cancel()
+            wait_shutdown.cancel()
+
             if shutdown_event.is_set():
                 logger.info(
                     "gNMI gRPC server stopping (grace=%s s)", grace_seconds
                 )
                 await server.stop(grace_seconds)
-                await server.wait_for_termination()
+            await wait_termination
         else:
             await server.wait_for_termination()
+    except asyncio.CancelledError:
+        # Cancelled from outside (e.g. the supervisor tearing tasks down):
+        # stop the server without a grace period and exit quietly rather
+        # than propagating a CancelledError out of the entry point.
+        logger.info("gNMI gRPC server cancelled — stopping immediately")
+        await server.stop(None)
     finally:
         await http_client.aclose()
+        logger.info("gNMI gRPC server stopped")

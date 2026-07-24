@@ -200,3 +200,124 @@ class TestEgnBackendFailure:
         assert baseline is not None
         assert baseline.status is None
         assert fiber_uid not in egn_context._backend._failed_fibers
+
+
+class TestEgnPathResolution:
+    """Route → span resolution (the link-based path used since amplifier
+    design can rename fibers into sub-spans)."""
+
+    def _terminals(self, ctx: TapiContext) -> list[str]:
+        return [
+            uid for uid, loc in ctx._backend._egn_topo.gnpy_uid_index.items()
+            if loc.kind in ("roadm", "transceiver")
+        ]
+
+    def test_resolves_a_terminal_pair_to_spans(
+        self, egn_context: TapiContext
+    ) -> None:
+        be = egn_context._backend
+        link = be._egn_topo.links[0]
+        # A path that just names the two terminals must resolve to that
+        # link's spans — no fiber UIDs required.
+        resolved = be._spans_for_path([link.source_name, link.target_name])
+        assert resolved is not None
+        span_keys, fiber_uids, _edfa_uids = resolved
+        assert len(span_keys) == len(link.spans)
+        assert fiber_uids == [s.fiber_uid for s in link.spans]
+
+    def test_ignores_interspersed_non_terminal_uids(
+        self, egn_context: TapiContext
+    ) -> None:
+        # Regression: a UID not in the index (e.g. a raw fiber UID that
+        # design renamed) must be dropped, not treated as a terminal —
+        # otherwise it breaks the ROADM adjacency the link lookup needs.
+        be = egn_context._backend
+        link = be._egn_topo.links[0]
+        with_noise = [
+            link.source_name,
+            "fiber (some → renamed)_(1/4)",   # unknown to the designed index
+            "totally-unknown-uid",
+            link.target_name,
+        ]
+        clean = be._spans_for_path([link.source_name, link.target_name])
+        noisy = be._spans_for_path(with_noise)
+        assert noisy is not None and clean is not None
+        assert noisy[0] == clean[0]  # same span keys despite the noise
+
+    def test_resolves_in_both_directions(
+        self, egn_context: TapiContext
+    ) -> None:
+        be = egn_context._backend
+        link = be._egn_topo.links[0]
+        forward = be._spans_for_path([link.source_name, link.target_name])
+        reverse = be._spans_for_path([link.target_name, link.source_name])
+        assert forward is not None and reverse is not None
+
+    def test_no_known_terminals_returns_none(
+        self, egn_context: TapiContext
+    ) -> None:
+        assert egn_context._backend._spans_for_path(["nope", "also-nope"]) is None
+
+
+# The amplifier-design branch needs a GNPy equipment library. That data is
+# not redistributed (see examples/gnpy-data/README.md), so this is skipped
+# wherever it has not been provisioned — e.g. a clean CI checkout.
+_EXAMPLES = Path(__file__).parent.parent.parent / "examples" / "gnpy-data"
+_HAS_EXAMPLE_DATA = (
+    (_EXAMPLES / "CORONET_CONUS_Topology.json").is_file()
+    and (_EXAMPLES / "eqpt_config.json").is_file()
+)
+
+
+@pytest.mark.skipif(
+    not _HAS_EXAMPLE_DATA,
+    reason="GNPy example data not provisioned (run twinlight-fetch-examples)",
+)
+class TestEgnAmplifierDesign:
+    def _designed_backend(self) -> EgnBackend:
+        cfg = TwinConfig(
+            gnpy=GnpyConfig(
+                topology=_EXAMPLES / "CORONET_CONUS_Topology.json",
+                equipment=_EXAMPLES / "eqpt_config.json",
+                no_insert_edfas=True,
+            ),
+            physics=PhysicsConfig(backend="egn"),
+        )
+        return EgnBackend(cfg)
+
+    def test_design_splits_spans_and_inserts_edfas(self) -> None:
+        # CORONET ships bare fiber spans; after design every span must end
+        # in an EDFA, and long fibers must be split so no span is absurdly
+        # long (which would make the per-span-amplified GN model diverge).
+        be = self._designed_backend()
+        spans = [s for lnk in be._egn_topo.links for s in lnk.spans]
+        assert len(spans) > 198  # more sub-spans than raw fibers
+        assert all(s.edfa_uid is not None for s in spans)
+        assert max(s.length_km for s in spans) < 200.0
+
+    @pytest.mark.asyncio
+    async def test_designed_gsnr_is_physical(self) -> None:
+        # With the amplifier design applied, a continental path must land
+        # in a plausible GSNR range — not the tens-of-dB-negative figure a
+        # single un-split 2000 km span would produce.
+        ctx = TapiContext(
+            TwinConfig(
+                gnpy=GnpyConfig(
+                    topology=_EXAMPLES / "CORONET_CONUS_Topology.json",
+                    equipment=_EXAMPLES / "eqpt_config.json",
+                    no_insert_edfas=True,
+                ),
+                physics=PhysicsConfig(backend="egn"),
+            )
+        )
+        sips = list(ctx._sip_to_gnpy_uid.keys())
+        # Try pairs until one yields a multi-span route.
+        for a, z in ((sips[0], sips[i]) for i in range(1, len(sips))):
+            path = ctx.get_service_path(a, z)
+            if not path:
+                continue
+            baseline = await ctx._backend.compute_baseline(path, "DP-QPSK")
+            if baseline is not None and baseline.total_fiber_km > 500:
+                assert -5.0 < baseline.gsnr_db < 30.0
+                return
+        pytest.skip("no multi-span route found in the topology")

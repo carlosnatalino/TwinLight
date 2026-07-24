@@ -357,7 +357,7 @@ available, selected by `physics.backend` or `--physics-backend`:
 | Backend | Method | Notes |
 |---------|--------|-------|
 | `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | Needs a GNPy equipment library; the reference implementation of the GN/EGN model [[10]](#ref-10) |
-| `egn` | Closed-form GN/EGN kernel in `physics/egn_kernel.py` | No extra dependency, no equipment file needed; follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9) |
+| `egn` | Closed-form GN/EGN kernel in `physics/egn_kernel.py` | Follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9). Reuses GNPy's amplifier design when an equipment library is configured, so both backends propagate over the same spans; works without one too |
 
 Both produce a backend-agnostic `OpmBaseline` that the transient layer perturbs,
 so results stay comparable across backends.

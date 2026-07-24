@@ -23,11 +23,20 @@ from twinlight.physics.egn_kernel import (
 
 class TestUnitConversions:
     def test_loss_db_per_km_to_neper_per_m(self) -> None:
-        # 1 dB = ln(10)/10 Np, then /1000 for per-metre.
-        expected = math.log(10) / 10.0 / 1000.0
+        # Returns the FIELD attenuation coefficient: 1 dB/km = ln(10)/10 Np/km
+        # of *power*, halved to the field convention the kernel uses, then
+        # /1000 for per-metre.
+        expected = math.log(10) / 10.0 / 1000.0 / 2.0
         assert db_per_km_to_neper_per_m(1.0) == pytest.approx(expected)
         # Zero loss is exact zero.
         assert db_per_km_to_neper_per_m(0.0) == 0.0
+
+    def test_span_power_loss_matches_db(self) -> None:
+        # The whole point of the field convention: a span's power loss is
+        # exp(2·α·L), which must equal the operator's dB/km × length.
+        alpha = db_per_km_to_neper_per_m(0.2)  # 0.2 dB/km
+        power_loss_db = 10.0 * math.log10(math.exp(2.0 * alpha * 90_000.0))
+        assert power_loss_db == pytest.approx(18.0)  # 0.2 dB/km × 90 km
 
     def test_nf_db_to_linear(self) -> None:
         assert nf_db_to_linear(0.0) == pytest.approx(1.0)
