@@ -30,7 +30,6 @@ Time variation of linewidth (period and amplitude) is configurable.
 from __future__ import annotations
 
 import math
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -45,7 +44,7 @@ def delta_gsnr_db(
     t: float,
     service_uuid: str,
     baud_rate_hz: float,
-    cfg: "PhaseNoiseConfig",
+    cfg: PhaseNoiseConfig,
     accumulated_cd_ps_nm: float = 0.0,
     gsnr_db: float = 30.0,
     _phase_fn=None,

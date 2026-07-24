@@ -33,7 +33,6 @@ from fastapi import APIRouter, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge
 from prometheus_client.exposition import generate_latest
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["metrics"])
@@ -181,7 +180,11 @@ def _populate_config_gauges(
                 continue
             try:
                 value = backend.read_attribute(uid, attr)
-            except Exception:  # noqa: BLE001
+            except Exception:
+                logger.debug(
+                    "Skipping metric %s for element %s: backend read failed",
+                    attr, uid, exc_info=True,
+                )
                 continue
             if value is None:
                 continue

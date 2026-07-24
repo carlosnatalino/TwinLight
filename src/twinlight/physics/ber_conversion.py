@@ -16,7 +16,6 @@ from scipy.special import erfc, erfcinv
 
 from twinlight.physics.modulation import ModulationFormat, get_params
 
-
 # Gaussian approximation coefficients: (pre_factor, snr_divisor)
 # BER = pre_factor * erfc(sqrt(GSNR_lin / snr_divisor))
 _BER_COEFFICIENTS: dict[int, tuple[float, float]] = {

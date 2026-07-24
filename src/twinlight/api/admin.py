@@ -10,6 +10,7 @@ GET  /admin/snapshot/content — return JSON content of a snapshot (query: path=
 from __future__ import annotations
 
 import json
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +42,8 @@ async def create_snapshot(
     if body and body.get("path"):
         path = Path(body["path"])
     else:
-        from datetime import datetime, timezone
-        name = f"twin-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+        from datetime import datetime
+        name = f"twin-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
         path = _snapshot_dir(request) / name
     path.parent.mkdir(parents=True, exist_ok=True)
     ctx.snapshot(path)

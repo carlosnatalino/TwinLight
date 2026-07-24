@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 def _get_two_sip_uuids(app) -> tuple[str, str]:
     data = app.get("/data/tapi-common:context/service-interface-point").json()
     sips = data["tapi-common:context"]["service-interface-point"]

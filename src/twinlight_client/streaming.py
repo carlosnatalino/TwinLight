@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Self
 
 import grpc
 
@@ -32,7 +32,7 @@ class GnmiConsumer:
             self._channel = None
             self._stub = None
 
-    async def __aenter__(self) -> GnmiConsumer:
+    async def __aenter__(self) -> Self:
         await self.connect()
         return self
 

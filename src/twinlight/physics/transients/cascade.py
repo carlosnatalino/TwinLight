@@ -76,7 +76,10 @@ def apply_all_transients(
             chromatic-dispersion-ps-per-nm, pmd-ps
     """
     from twinlight.physics.transients import (
-        edfa_reservoir, polarization, phase_noise, environmental,
+        edfa_reservoir,
+        environmental,
+        phase_noise,
+        polarization,
     )
 
     params = get_params(modulation_format)

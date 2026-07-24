@@ -59,7 +59,6 @@ from __future__ import annotations
 import hashlib
 import math
 import random
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -97,7 +96,7 @@ def delta_pmd_ps(
     t: float,
     fiber_uids: list[str],
     baseline_pmd_ps: float,
-    cfg: "PolarizationConfig",
+    cfg: PolarizationConfig,
     _phase_fn=None,
 ) -> float:
     """Time-varying PMD perturbation [ps] from per-fiber SOP drift.
@@ -216,7 +215,7 @@ def _cos_theta(t: float, uid: str, period_s: float, phase: float) -> float:
 def delta_osnr_from_pdl_db(
     t: float,
     pdl_elements: list[tuple[str, str]],
-    cfg: "PolarizationConfig",
+    cfg: PolarizationConfig,
     _phase_fn=None,
 ) -> float:
     """PDL-induced OSNR penalty [dB] from the Zarkosvky hinge model.

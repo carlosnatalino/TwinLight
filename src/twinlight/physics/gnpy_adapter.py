@@ -64,7 +64,7 @@ class OpmBaseline:
 def build_gnpy_network(
     topology_path: Path,
     equipment_path: Path,
-) -> tuple["nx.DiGraph", dict]:
+) -> tuple[nx.DiGraph, dict]:
     """Load and design a GNPy network from JSON files.
 
     Args:
@@ -98,7 +98,7 @@ def build_gnpy_network(
     return network, equipment
 
 
-def build_uid_map(network: "nx.DiGraph") -> dict[str, object]:
+def build_uid_map(network: nx.DiGraph) -> dict[str, object]:
     """Return a mapping from element UID to gnpy element object.
 
     In gnpy, the network nodes ARE the element objects (Transceiver, Fiber,
@@ -193,7 +193,7 @@ def compute_path_baseline(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _count_type(network: "nx.DiGraph", type_name: str) -> int:
+def _count_type(network: nx.DiGraph, type_name: str) -> int:
     return sum(1 for n in network.nodes() if type(n).__name__ == type_name)
 
 

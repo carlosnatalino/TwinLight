@@ -6,7 +6,6 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-
 _BASE = "/data/tapi-connectivity:connectivity-context"
 
 

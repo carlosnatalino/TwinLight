@@ -15,15 +15,19 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from twinlight.api import (
     admin,
     common,
-    config as config_api,
     connectivity,
     diagrams,
     equipment,
     internal,
-    metrics as metrics_api,
     path_computation,
     photonic_media,
     topology,
+)
+from twinlight.api import (
+    config as config_api,
+)
+from twinlight.api import (
+    metrics as metrics_api,
 )
 from twinlight.api.middleware import (
     RESTCONF_MEDIA_TYPE,

@@ -152,7 +152,7 @@ class TestSnapshotV2RoundTrip:
         link, should be able to restore and have the link come back up.
         """
         ctx = TapiContext(gnpy_twin_config)
-        sip_a, _sip_z = _two_sips(ctx)
+        _sip_a, _sip_z = _two_sips(ctx)
         # Clean snapshot — no overrides, no failures.
         path = tmp_path / "clean.json"
         ctx.snapshot(path)

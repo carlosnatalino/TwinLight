@@ -24,7 +24,6 @@ from twinlight.physics.element_params import ParamValidationError
 from twinlight.physics.modulation import ModulationFormat
 from twinlight.state.context import TapiContext
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 

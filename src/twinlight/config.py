@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -46,10 +46,10 @@ class GnpyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     topology: Path
-    equipment: Optional[Path] = None
-    sim_params: Optional[Path] = None
-    extra_equipment: List[Path] = Field(default_factory=list)
-    extra_config: List[Path] = Field(default_factory=list)
+    equipment: Path | None = None
+    sim_params: Path | None = None
+    extra_equipment: list[Path] = Field(default_factory=list)
+    extra_config: list[Path] = Field(default_factory=list)
     no_insert_edfas: bool = False
 
 
@@ -61,7 +61,7 @@ class ServerConfig(BaseModel):
     rest_host: str = "0.0.0.0"
     rest_port: int = 8080
     grpc_port: int = 50051
-    cors_origins: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
 
 # -- Simulation section -----------------------------------------------------
@@ -286,4 +286,4 @@ class TwinConfig(BaseModel):
     spectrum: SpectrumConfig = Field(default_factory=SpectrumConfig)
     physics: PhysicsConfig = Field(default_factory=PhysicsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    restore_path: Optional[Path] = Field(default=None, exclude=True)
+    restore_path: Path | None = Field(default=None, exclude=True)

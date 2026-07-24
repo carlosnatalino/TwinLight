@@ -21,7 +21,6 @@ from typing import Any
 
 from twinlight.config import TwinConfig
 
-
 # Dotted attribute path → tuple of accepted Python types. The path is
 # walked verbatim against the live ``TwinConfig`` (mutable pydantic
 # model). Order is irrelevant; the dict is used as a set.

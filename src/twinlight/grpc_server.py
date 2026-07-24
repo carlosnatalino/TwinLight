@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 import grpc
 import httpx
@@ -22,7 +21,7 @@ async def start_grpc_server(
     app: FastAPI,
     port: int,
     *,
-    shutdown_event: Optional[asyncio.Event] = None,
+    shutdown_event: asyncio.Event | None = None,
     grace_seconds: float = DEFAULT_GRPC_GRACE_S,
 ) -> None:
     """Start the gNMI gRPC server.
