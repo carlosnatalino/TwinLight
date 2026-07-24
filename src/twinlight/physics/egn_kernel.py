@@ -58,11 +58,22 @@ class SpanInputs:
 
 
 def db_per_km_to_neper_per_m(loss_db_per_km: float) -> float:
-    """Convert fiber loss from dB/km (operator units) to Neper/m (SI).
+    """Convert fiber loss from dB/km (operator units) to the field
+    attenuation coefficient α in Neper/m (SI).
 
-    α[Np/m] = α[dB/km] · (ln 10 / 10) · 1e-3
+    The GN-model formulas in this module follow the standard Carena 2012
+    convention where α is the **field** (amplitude) attenuation, so that
+    the span *power* loss is ``exp(2·α·L)`` and the effective length is
+    ``(1 − exp(−2·α·L)) / (2·α)``. The dB figure operators quote is a
+    *power* ratio, so the conversion carries a factor of one half:
+
+        α_field[Np/m] = α[dB/km] · (ln 10 / 10) · 1e-3 / 2
+
+    Dropping that half — treating the power coefficient as if it were the
+    field coefficient — doubles every span's modelled loss (an 18 dB span
+    is charged 36 dB), which inflates ASE by tens of dB over a long path.
     """
-    return loss_db_per_km * (math.log(10) / 10.0) * 1e-3
+    return loss_db_per_km * (math.log(10) / 10.0) * 1e-3 / 2.0
 
 
 def nf_db_to_linear(nf_db: float) -> float:

@@ -14,8 +14,10 @@ under GPL-3.0, not an import.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from twinlight.config import TwinConfig
@@ -24,7 +26,11 @@ from twinlight.loader.egn_topology import (
     EgnTopologyData,
     convert as convert_to_egn,
 )
-from twinlight.loader.gnpy_topology import load_gnpy_topology
+from twinlight.loader.gnpy_topology import (
+    GnpyTopology,
+    load_gnpy_topology,
+    parse_gnpy_topology_dict,
+)
 from twinlight.physics.analytical_metrics import (
     chromatic_dispersion_ps_per_nm,
     latency_ms,
@@ -47,6 +53,77 @@ from twinlight.physics.modulation import get_params
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Amplifier placement
+# ---------------------------------------------------------------------------
+
+def _load_topology_with_amplifiers(config: TwinConfig) -> GnpyTopology:
+    """Parse the topology, applying GNPy's amplifier design when possible.
+
+    The GN model charges ASE *per span*, on the assumption that each span
+    ends in an amplifier restoring the launch power. A topology of bare
+    fiber spans therefore has to be amplifier-designed before the kernel
+    sees it: hand it a single un-split 336 km span and the model accounts
+    for one amplifier compensating ~67 dB, putting GSNR tens of dB below
+    anything physical.
+
+    GNPy solves exactly this in ``designed_network()``, which splits long
+    fibers into sub-spans and inserts EDFAs. gnpy is a hard dependency of
+    this project regardless of the selected backend, so we reuse that
+    result rather than reimplementing span splitting: the designed network
+    is serialised back to GNPy JSON — the same schema this loader already
+    reads — so the EGN converter consumes it unchanged and both backends
+    end up with identical amplifier placement.
+
+    Design needs an equipment library. Without one (``gnpy.equipment``
+    unset) the topology is used exactly as written, which stays correct
+    for topologies that already carry their own amplifiers and keeps the
+    EGN backend usable with no equipment file at all.
+    """
+    if config.gnpy.equipment is None:
+        logger.info(
+            "EGN backend: no gnpy.equipment configured — using the topology as "
+            "written. Bare fiber spans will each be modelled as one amplified "
+            "span, which understates GSNR on long spans."
+        )
+        return load_gnpy_topology(config.gnpy.topology)
+
+    try:
+        designed = _designed_topology_json(
+            config.gnpy.topology, config.gnpy.equipment
+        )
+    except Exception:
+        # A design failure must never take the backend down: the raw
+        # topology still yields a usable, if pessimistic, model.
+        logger.warning(
+            "EGN backend: GNPy amplifier design failed — falling back to the "
+            "topology as written. QoT on bare-fiber spans will be pessimistic.",
+            exc_info=True,
+        )
+        return load_gnpy_topology(config.gnpy.topology)
+
+    topo = parse_gnpy_topology_dict(designed, name=config.gnpy.topology.stem)
+    logger.info(
+        "EGN backend: applied GNPy amplifier design (%d elements)",
+        len(topo.elements),
+    )
+    return topo
+
+
+def _designed_topology_json(topology_path: Path, equipment_path: Path) -> dict:
+    """Return the GNPy-designed network, serialised back to GNPy JSON."""
+    from gnpy.tools.json_io import load_equipment, network_from_json, network_to_json
+    from gnpy.tools.worker_utils import designed_network
+
+    equipment = load_equipment(str(equipment_path))
+    # network_from_json mutates the document it is handed (it pops keys
+    # while building elements), so give it a freshly parsed copy.
+    network = network_from_json(json.loads(topology_path.read_text()), equipment)
+    network, _ref_req, _ref_chan = designed_network(equipment, network)
+    result: dict = network_to_json(network)
+    return result
+
+
 # Per-attribute writable contract — mirrors physics/element_params.py
 # but with a far smaller surface because EGN's Span only models
 # {length, attenuation, NF}. ROADM-specific knobs (target_pch_out_db),
@@ -62,9 +139,11 @@ class EgnBackend:
     name = "egn"
 
     def __init__(self, config: TwinConfig) -> None:
-        # Re-parse the GNPy JSON (zero gnpy-library imports — the
-        # parser is format-only) and convert to EGN's per-span view.
-        gnpy_topo = load_gnpy_topology(config.gnpy.topology)
+        # Parse the topology and convert to EGN's per-span view. When an
+        # equipment library is available the topology is first run through
+        # GNPy's design step, so both backends see the same amplifier
+        # placement (see _load_topology_with_amplifiers).
+        gnpy_topo = _load_topology_with_amplifiers(config)
         self._egn_topo: EgnTopologyData = convert_to_egn(gnpy_topo)
 
         # Build a uid_map mirror so the PhysicalBackend Protocol's
@@ -109,31 +188,29 @@ class EgnBackend:
         path_uids: list[str],
         modulation_format: str,
     ) -> OpmBaseline | None:
-        # Resolve the path's spans (in propagation order) and bail with a
-        # link-failed sentinel if any fiber on the path is failed.
-        fiber_uids = [
-            uid for uid in path_uids
-            if self._egn_topo.gnpy_uid_index.get(uid, _MISSING).kind == "fiber"
-        ]
-        edfa_uids = [
-            uid for uid in path_uids
-            if self._egn_topo.gnpy_uid_index.get(uid, _MISSING).kind == "edfa"
-        ]
-        for uid in fiber_uids:
-            if uid in self._failed_fibers:
-                return OpmBaseline(
-                    gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
-                    latency_ms=0.0, total_fiber_km=0.0, status="link-failed",
-                )
-
-        spans = [self._span_inputs_for(uid) for uid in fiber_uids]
-        if any(s is None for s in spans):
-            # A fiber UID that's not in our EGN view — shouldn't
-            # happen because the converter indexes every Fiber. Skip
-            # silently so OPM falls back to mock data.
+        # Resolve the path to its spans (in propagation order) and bail
+        # with a link-failed sentinel if any fiber on the path is failed.
+        resolved = self._spans_for_path(path_uids)
+        if resolved is None:
+            # No leg of the route resolved to an EGN link — skip silently
+            # so OPM falls back to mock data rather than reporting the
+            # "no spans" saturated GSNR as if it were a real measurement.
             return None
-        # mypy: narrow None out of the list after the check above.
-        span_inputs: list[SpanInputs] = [s for s in spans if s is not None]
+        span_keys, fiber_uids, edfa_uids = resolved
+
+        # Failure can be flagged against either the route's own fiber UIDs
+        # or the (possibly design-split) span UIDs, depending on which
+        # topology the caller addressed.
+        failed = self._failed_fibers
+        if failed and (failed.intersection(path_uids) or failed.intersection(fiber_uids)):
+            return OpmBaseline(
+                gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
+                latency_ms=0.0, total_fiber_km=0.0, status="link-failed",
+            )
+
+        span_inputs: list[SpanInputs] = [
+            self._span_inputs_for_key(key) for key in span_keys
+        ]
 
         params = get_params(modulation_format)
         launch_power_w = (10.0 ** (params.tx_power_dbm / 10.0)) * 1e-3
@@ -298,6 +375,60 @@ class EgnBackend:
 
     # -- Internals -------------------------------------------------------
 
+    def _spans_for_path(
+        self, path_uids: list[str]
+    ) -> tuple[list[tuple[int, int]], list[str], list[str]] | None:
+        """Resolve a route to its EGN spans, in propagation order.
+
+        Routes are computed over the topology as written, so their fiber
+        UIDs do not survive GNPy's amplifier design — it splits a long
+        fiber into ``…_(1/4)``-style sub-spans under new UIDs. Matching
+        individual fibers would therefore silently resolve to *no* spans
+        on a designed topology, and an empty span list reads as infinite
+        GSNR.
+
+        The terminals are the stable part: design never renames a ROADM
+        or transceiver. So walk the route's terminals in order and look
+        up each consecutive pair as an EGN link, taking whatever spans
+        that link holds. This is correct for both the as-written and the
+        designed topology, and needs no knowledge of GNPy's sub-span
+        naming convention.
+
+        Returns ``(span_keys, fiber_uids, edfa_uids)``, or None when no
+        leg of the route resolved to a link.
+        """
+        index = self._egn_topo.gnpy_uid_index
+        # Keep only UIDs the designed topology knows as terminals. A raw
+        # fiber UID from the route is absent from the designed index (its
+        # span was renamed by the design split); it must be dropped, not
+        # defaulted to a terminal, or it would break the ROADM adjacency
+        # the link lookup depends on. So test membership explicitly rather
+        # than via a roadm-kind sentinel default.
+        terminals = [
+            uid for uid in path_uids
+            if (loc := index.get(uid)) is not None
+            and loc.kind in ("roadm", "transceiver")
+        ]
+
+        span_keys: list[tuple[int, int]] = []
+        fiber_uids: list[str] = []
+        edfa_uids: list[str] = []
+        for source_uid, target_uid in zip(terminals, terminals[1:]):
+            link_id = self._egn_topo.link_by_endpoints.get((source_uid, target_uid))
+            if link_id is None:
+                # Legs with no fiber (a transceiver's access hop to its
+                # own ROADM) are not EGN links; they contribute no noise.
+                continue
+            for span_index, span in enumerate(self._egn_topo.links[link_id].spans):
+                span_keys.append((link_id, span_index))
+                fiber_uids.append(span.fiber_uid)
+                if span.edfa_uid is not None:
+                    edfa_uids.append(span.edfa_uid)
+
+        if not span_keys:
+            return None
+        return span_keys, fiber_uids, edfa_uids
+
     def _span_inputs_for(
         self, fiber_uid: str
     ) -> SpanInputs | None:
@@ -306,11 +437,15 @@ class EgnBackend:
             return None
         # Fibers always populate link_id/span_index in the converter.
         assert loc.link_id is not None and loc.span_index is not None
-        key: tuple[int, int] = (loc.link_id, loc.span_index)
+        return self._span_inputs_for_key((loc.link_id, loc.span_index))
+
+    def _span_inputs_for_key(self, key: tuple[int, int]) -> SpanInputs:
+        """Build (and cache) kernel inputs for one ``(link_id, span_index)``."""
         cached = self._span_inputs_cache.get(key)
         if cached is not None:
             return cached
-        span = self._egn_topo.links[loc.link_id].spans[loc.span_index]
+        link_id, span_index = key
+        span = self._egn_topo.links[link_id].spans[span_index]
         override = self._span_overrides.get(key)
         loss = override.attenuation_db_per_km if override else span.attenuation_db_per_km
         nf = override.noise_figure_db if override else span.noise_figure_db

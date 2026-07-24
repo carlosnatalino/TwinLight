@@ -56,9 +56,26 @@ def load_gnpy_topology(topology_path: Path) -> GnpyTopology:
     Returns:
         Parsed topology with elements, connections, and uid index.
     """
-    data = json.loads(topology_path.read_text())
+    return parse_gnpy_topology_dict(
+        json.loads(topology_path.read_text()), name=topology_path.stem
+    )
 
-    network_name = data.get("network_name", topology_path.stem)
+
+def parse_gnpy_topology_dict(data: dict, *, name: str = "") -> GnpyTopology:
+    """Parse an already-decoded GNPy topology document.
+
+    Split out from :func:`load_gnpy_topology` so a topology built in
+    memory can be parsed too — the EGN backend feeds in the output of
+    GNPy's ``network_to_json()`` to pick up its amplifier placement.
+
+    Args:
+        data: Decoded GNPy topology document (``elements`` + ``connections``).
+        name: Fallback network name when the document omits ``network_name``.
+
+    Returns:
+        Parsed topology with elements, connections, and uid index.
+    """
+    network_name = data.get("network_name", name)
 
     elements = []
     for el in data.get("elements", []):

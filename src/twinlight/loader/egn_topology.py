@@ -83,6 +83,13 @@ class EgnTopologyData:
     # ``Span`` field (or to reject it if the UID is a ROADM/TRX, since
     # EGN has no per-node tunable parameters in the M4 scope).
     gnpy_uid_index: dict[str, EgnNodeKind] = field(default_factory=dict)
+    # (source terminal UID, target terminal UID) → link_id. Lets a route
+    # be resolved to its spans from the *terminal* UIDs alone, without
+    # matching individual fiber UIDs. Terminal UIDs are stable under
+    # GNPy's amplifier design (it splits fibers and inserts EDFAs but
+    # never renames a ROADM or transceiver), so this is the only
+    # resolution that survives a designed topology.
+    link_by_endpoints: dict[tuple[str, str], int] = field(default_factory=dict)
 
 
 def _is_terminal(el_type: str) -> bool:
@@ -289,8 +296,22 @@ def convert(gnpy_topo: GnpyTopology) -> EgnTopologyData:
                 spans=tuple(spans),
             ))
 
+    # First walk wins for a duplicated terminal pair, matching the
+    # link ordering above.
+    link_by_endpoints: dict[tuple[str, str], int] = {}
+    for link in links:
+        link_by_endpoints.setdefault((link.source_name, link.target_name), link.id)
+    # A GNPy topology describes each fiber pair once, so the walk yields a
+    # single directed link per ROADM pair. Routes are computed on an
+    # undirected view and may traverse a pair either way, so register the
+    # reverse direction too — the span set is the same either way, and
+    # without this half of a route's legs silently resolve to nothing.
+    for link in links:
+        link_by_endpoints.setdefault((link.target_name, link.source_name), link.id)
+
     return EgnTopologyData(
         node_names=node_names,
         links=tuple(links),
         gnpy_uid_index=uid_index,
+        link_by_endpoints=link_by_endpoints,
     )

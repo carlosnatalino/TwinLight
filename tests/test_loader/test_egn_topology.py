@@ -67,6 +67,29 @@ class TestNodeAndLinkShape:
         ids = sorted(lnk.id for lnk in egn.links)
         assert ids == list(range(len(ids)))
 
+    def test_link_by_endpoints_resolves_each_terminal_pair(
+        self, egn: EgnTopologyData
+    ) -> None:
+        # Every link is reachable from its ordered terminal pair — this is
+        # how a route is resolved to spans, without matching fiber UIDs.
+        for lnk in egn.links:
+            link_id = egn.link_by_endpoints[(lnk.source_name, lnk.target_name)]
+            assert link_id == lnk.id
+
+    def test_link_by_endpoints_is_bidirectional(
+        self, egn: EgnTopologyData
+    ) -> None:
+        # A route may traverse a fiber pair either way; both directions must
+        # resolve (to the same spans) so no leg is silently dropped.
+        assert (
+            egn.link_by_endpoints[("roadm Brest", "roadm Morlaix")]
+            in {lnk.id for lnk in egn.links}
+        )
+        assert (
+            egn.link_by_endpoints[("roadm Morlaix", "roadm Brest")]
+            in {lnk.id for lnk in egn.links}
+        )
+
 
 class TestSpanContent:
     def _eastbound(self, egn: EgnTopologyData) -> EgnLinkData:

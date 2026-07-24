@@ -73,27 +73,32 @@ The kernel's structure derives from the Cython QoT kernel in
 original author's permission — the same person maintains both projects.
 
 **Scope limit:** the current kernel models **self-channel NLI only**. Cross-channel
-XPM/FWM contributions from neighbouring services are not included, so the EGN
-backend is optimistic on a densely loaded link.
+XPM/FWM contributions from neighbouring services are not included, so on a
+densely loaded link the EGN backend is optimistic — typically by a few dB of
+GSNR relative to the GNPy backend on the bundled scenarios.
 
-**No amplifier placement.** This is the difference that matters most in
-practice. The GNPy backend runs `designed_network()` at startup, which *inserts
-and configures amplifiers* into spans that have none. The EGN backend performs
-no such design step: it propagates the topology exactly as written. On a
-topology whose fiber spans already carry EDFAs the two are comparable, but on
-one with bare spans — such as the bundled CORONET CONUS scenario, which sets
-`no_insert_edfas: true` — the EGN backend models an *unamplified* link. Span
-loss then accumulates uncompensated, and GSNR falls tens of dB below anything
-physical over continental distances, so almost no lightpath is admissible.
+**Shared amplifier placement.** The GN model charges ASE *per span*, on the
+assumption that each span ends in an amplifier that restores the launch power.
+A topology of bare fiber spans therefore cannot be fed to the kernel directly —
+a single un-split 336 km span would be modelled as one amplifier making up
+~67 dB, and GSNR would land hundreds of dB below anything physical.
 
-Two consequences follow from the same cause, both observable through the API:
+To avoid that, when an equipment library is configured the EGN backend runs the
+topology through GNPy's `designed_network()` — the same amplifier placement the
+GNPy backend uses — and consumes the result. `designed_network()` splits long
+fibers into ~90 km sub-spans and inserts an EDFA after each, and the designed
+network is serialised back to GNPy JSON (via `network_to_json`) so the EGN
+converter reads it unchanged. Both backends therefore propagate over *identical*
+spans and amplifiers; they differ only in the noise model applied to them.
 
-- The path hop list under EGN contains no `Edfa` elements, so the EDFA
-  gain-reservoir transient (§2.1) has nothing to act on and contributes ~0 dB —
-  where under GNPy it is the *dominant* transient term.
-- Prefer the GNPy backend for any topology with bare fiber spans. Use EGN when
-  you want a fast, dependency-free closed-form estimate on a topology that
-  already specifies its amplifiers, or when no equipment library is available.
+The GNPy-format topology remains the single source of truth: `TapiContext`
+parses it for the T-API model and routing exactly as before, and the designed,
+amplified view is derived from it inside the EGN backend alone — nothing else in
+the twin sees the split spans.
+
+Without an equipment library the design step is skipped and the topology is used
+as written, which stays correct for topologies that already specify their own
+amplifiers and keeps the backend usable with no equipment file at all.
 
 ## 2. Transient layer
 
@@ -275,8 +280,7 @@ used for research.
 | Area | What TwinLight does | What the literature does | Severity |
 |------|---------------------|--------------------------|----------|
 | **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop, linear dB cascade | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events |
-| **EGN kernel** | Self-channel NLI only | Full GN/EGN including XPM/FWM from neighbouring channels | **Moderate** — optimistic on densely loaded links; use the GNPy backend when spectral loading matters |
-| **EGN amplifier design** | Propagates the topology as written; no amplifier insertion or power design | GNPy's `designed_network()` places and configures EDFAs on bare spans | **High on bare-span topologies** — models an unamplified link, so GSNR is far below physical and the EDFA transient is inert. See the backend section above |
+| **EGN kernel** | Self-channel NLI only | Full GN/EGN including XPM/FWM from neighbouring channels | **Moderate** — optimistic by a few dB on densely loaded links; on the bundled CORONET scenario EGN GSNR runs ~2–4 dB above the GNPy backend on the same designed spans. Use the GNPy backend when spectral loading matters |
 | **Phase noise (EEPN)** | Measured contribution is ~0 dB even at 1900 km on the bundled scenarios | Shieh & Ho predict a penalty growing with accumulated dispersion | **Unresolved** — the term is implemented per the reference but does not move GSNR at the shipped default linewidths; treat EEPN results as unvalidated pending review |
 | **PMD drift** | Sinusoidal, 10 % amplitude, 90 s period | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — magnitude and quadrature accumulation are right; the trajectory shape is an approximation |
 | **PDL ensemble** | Deterministic incommensurate drift covers the alignment ensemble over time | Explicit Monte-Carlo over hinge alignments | Low — equivalent in the long run, and reproducible, but a short window is not a fair ensemble sample |

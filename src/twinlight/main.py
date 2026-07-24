@@ -84,18 +84,39 @@ async def async_main() -> None:
     async def supervisor() -> None:
         await shutdown_event.wait()
         log.info("Shutting down servers...")
-        await uvicorn_server.shutdown()
+        # Ask uvicorn to leave its own serve() loop rather than calling
+        # shutdown() underneath it: serve() then runs the full graceful
+        # path itself (stop accepting, drain connections, close the ASGI
+        # lifespan). Calling shutdown() directly races that loop and
+        # cancels the lifespan receive mid-flight, which surfaces as a
+        # CancelledError traceback on an otherwise clean stop.
+        uvicorn_server.should_exit = True
         await asyncio.gather(task_uvicorn, task_grpc, return_exceptions=True)
         log.info("Shutdown complete")
 
     task_supervisor = asyncio.create_task(supervisor())
-    await asyncio.gather(task_uvicorn, task_grpc, task_supervisor)
+
+    # return_exceptions so that one server failing cannot cancel the other
+    # mid-shutdown; genuine failures are re-raised below, while the
+    # CancelledErrors that accompany a normal stop are ignored.
+    results = await asyncio.gather(
+        task_uvicorn, task_grpc, task_supervisor, return_exceptions=True
+    )
+    for result in results:
+        if isinstance(result, BaseException) and not isinstance(
+            result, asyncio.CancelledError
+        ):
+            raise result
 
 
 def main() -> None:
     try:
         asyncio.run(async_main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # Ctrl+C before the signal handlers are installed, or a stray
+        # cancellation during teardown. Either way this is a requested
+        # stop, not a failure — exit 0 so `docker compose down` and
+        # process supervisors don't report a crash.
         if logger.isEnabledFor(logging.INFO):
             logger.info("Shutting down...")
         sys.exit(0)
