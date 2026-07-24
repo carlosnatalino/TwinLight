@@ -491,20 +491,24 @@ files rather than editing it by hand (see
 
 ## Citing TwinLight
 
-If TwinLight supports work you publish, please cite it. Repository metadata lives
-in [CITATION.cff](CITATION.cff); GitHub renders a ready-made citation from it
-under *Cite this repository*.
+If TwinLight supports work you publish, please cite the paper describing it:
 
 ```bibtex
-@software{twinlight,
-  author  = {Natalino, Carlos},
-  title   = {{TwinLight}: A Multi-Timescale Optical Network Digital Twin
-             with {T-API} Interfaces},
-  year    = {2026},
-  url     = {https://github.com/carlosnatalino/TwinLight},
-  license = {MIT}
+@inproceedings{twinlight2026,
+  author    = {Natalino, Carlos and Lechowicz, Piotr and Ambrosone, Renato and
+               Miotto, Enrico and Curri, Vittorio and Monti, Paolo},
+  title     = {{TwinLight}: A Multi-Timescale Physical-Layer-Aware
+               {T-API}-Compliant Optical Domain Controller Digital Twin},
+  booktitle = {European Conference on Optical Communications (ECOC)},
+  address   = {Malaga, Spain},
+  month     = sep,
+  year      = {2026}
 }
 ```
+
+To cite a specific version of the software itself, use the metadata in
+[CITATION.cff](CITATION.cff) — GitHub renders it under *Cite this repository*,
+and resolves to the paper above via `preferred-citation`.
 
 Please also cite the physical-layer models you rely on — GNPy [[10]](#ref-10) and
 the GN/EGN model [[8]](#ref-8) [[9]](#ref-9) in particular.

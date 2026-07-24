@@ -3,16 +3,17 @@ title: >-
   TwinLight: A Multi-Timescale Optical Network Digital Twin with T-API
   Interfaces
 message: >-
-  If you use TwinLight in work that you publish, please cite it using the
-  metadata in this file. Please also cite the underlying physical-layer
-  models you rely on — GNPy and the GN/EGN model in particular; see the
-  References section of the README.
+  If you use TwinLight in work that you publish, please cite the ECOC 2026
+  paper under `preferred-citation` below. Please also cite the underlying
+  physical-layer models you rely on — GNPy and the GN/EGN model in
+  particular; see the References section of the README.
 type: software
-# TODO(maintainer): add `affiliation:` to the author entry below — it improves
-# citation indexing, and only you can supply it accurately.
 authors:
   - given-names: Carlos
     family-names: Natalino
+    affiliation: >-
+      Department of Electrical Engineering, Chalmers University of
+      Technology, Gothenburg, Sweden
     orcid: 'https://orcid.org/0000-0001-7501-5547'
 repository-code: 'https://github.com/carlosnatalino/TwinLight'
 url: 'https://github.com/carlosnatalino/TwinLight'
@@ -48,6 +49,48 @@ keywords:
 license: MIT
 version: 0.1.0
 date-released: '2026-07-23'
+
+# The paper describing TwinLight. GitHub's "Cite this repository" and most
+# reference managers surface this in place of the software entry above, so
+# it is what a user of TwinLight should cite.
+preferred-citation:
+  type: conference-paper
+  title: >-
+    TwinLight: A Multi-Timescale Physical-Layer-Aware T-API-Compliant
+    Optical Domain Controller Digital Twin
+  authors:
+    - given-names: Carlos
+      family-names: Natalino
+      affiliation: >-
+        Department of Electrical Engineering, Chalmers University of
+        Technology, Gothenburg, Sweden
+      orcid: 'https://orcid.org/0000-0001-7501-5547'
+    - given-names: Piotr
+      family-names: Lechowicz
+      affiliation: >-
+        Department of Electrical Engineering, Chalmers University of
+        Technology, Gothenburg, Sweden
+    - given-names: Renato
+      family-names: Ambrosone
+      affiliation: 'Politecnico di Torino, Torino, Italy'
+    - given-names: Enrico
+      family-names: Miotto
+      affiliation: 'Politecnico di Torino, Torino, Italy'
+    - given-names: Vittorio
+      family-names: Curri
+      affiliation: 'Politecnico di Torino, Torino, Italy'
+    - given-names: Paolo
+      family-names: Monti
+      affiliation: >-
+        Department of Electrical Engineering, Chalmers University of
+        Technology, Gothenburg, Sweden
+  conference:
+    name: European Conference on Optical Communications (ECOC)
+    city: Malaga
+    country: ES
+  month: 9
+  year: 2026
+
 references:
   - type: article
     title: >-
