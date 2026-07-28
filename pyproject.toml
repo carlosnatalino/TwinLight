@@ -52,17 +52,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Deliberately unpinned at the top: a new ruff or mypy release should
-# surface new findings here as early as possible, rather than being
-# frozen out. The floors are kept current so a local install resolves the
-# same generation of tooling CI does — a stale local ruff silently passing
-# what CI rejects is the failure mode this avoids.
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
     "pytest-md-report>=0.6",
-    "ruff>=0.16",
+    "ruff>=0.15",
     "mypy>=1.13",
 ]
 

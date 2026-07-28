@@ -222,9 +222,9 @@ works against a twin running anywhere, including the Compose stack, and runs the
 same on Windows, macOS and Linux:
 
 ```bash
-python examples/demo_services.py                               # one per format
-python examples/demo_services.py -n 5                          # five per format
-python examples/demo_services.py --base-url http://host:8080 --attempts 300
+python3 examples/demo_services.py                               # one per format
+python3 examples/demo_services.py -n 5                          # five per format
+python3 examples/demo_services.py --base-url http://host:8080 --attempts 300
 ```
 
 `-n` / `--services-per-mf` sets how many services to create for **each** of the

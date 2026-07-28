@@ -84,7 +84,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:v2.55.1
+    image: prom/prometheus:v3.13.1
     container_name: twinlight-prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -105,7 +105,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.3.0
+    image: grafana/grafana:13.1.1
     container_name: twinlight-grafana
     environment:
       # Override on the command line for any real deployment.
