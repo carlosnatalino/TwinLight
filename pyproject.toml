@@ -71,6 +71,17 @@ Homepage = "https://github.com/carlosnatalino/TwinLight"
 Repository = "https://github.com/carlosnatalino/TwinLight"
 Issues = "https://github.com/carlosnatalino/TwinLight/issues"
 
+[tool.uv]
+# Supply-chain cooldown. `exclude-newer` takes a *duration*, which uv recomputes
+# relative to "now" on every resolve, so this is a rolling 30-day window: any
+# release younger than 30 days is invisible to the resolver, giving a
+# compromised or broken upload time to be caught and yanked before we adopt it.
+# Applies to every package, direct and transitive. It caps the *newest* side by
+# date; the `>=` floors above cap the *oldest* side by version — the two are
+# complementary. Override for a one-off with the `--exclude-newer` flag or the
+# `UV_EXCLUDE_NEWER` environment variable (e.g. to pull a same-day security fix).
+exclude-newer = "30 days"
+
 [project.scripts]
 twinlight = "twinlight.main:main"
 twinlight-client = "twinlight_client.cli:main"
