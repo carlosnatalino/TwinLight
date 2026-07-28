@@ -113,7 +113,12 @@ async def get_service(uuid: str, request: Request) -> dict:
 
 @router.put(f"{_BASE}/connectivity-service={{uuid}}")
 async def replace_service(uuid: str, body: dict, request: Request) -> dict:
-    """Replace a connectivity service by UUID (full replacement)."""
+    """Replace a connectivity service by UUID (full replacement).
+
+    The existing service is captured before deletion and re-admitted if the
+    replacement cannot be admitted (no path, no spectrum, or insufficient QoT),
+    so a failed replace never silently tears down the service that was there.
+    """
     ctx = request.app.state.context
     raw = body.get("tapi-connectivity:connectivity-service", body)
     svc = ConnectivityService.model_validate(raw)
@@ -129,30 +134,20 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"SIP {sip_uuid!r} not found",
             )
+    # Keep a handle on the current allocation so a failed replacement can be
+    # rolled back. delete_service frees exactly the resources add_service needs
+    # to re-admit old_svc, so the rollback cannot itself fail on those grounds.
+    old_svc = ctx.get_service(uuid)
     ctx.delete_service(uuid)
     try:
         await ctx.add_service(svc)
-    except NoPathError as e:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(e),
-        ) from e
-    except InsufficientSpectrumError as e:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(e),
-        ) from e
-    except InsufficientQoTError as e:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(e),
-        ) from e
     except RmsaError as e:
+        if old_svc is not None:
+            await ctx.add_service(old_svc)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
         ) from e
-    ctx = request.app.state.context
     return {
         "tapi-connectivity:connectivity-service": _connectivity_service_payload(ctx, svc)
     }

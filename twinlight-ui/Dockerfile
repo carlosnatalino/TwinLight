@@ -35,9 +35,14 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Runtime config injector — the nginx base image runs executable
-# /docker-entrypoint.d/*.sh before starting the server.
+# /docker-entrypoint.d/*.sh before starting the server. Strip any CR characters
+# first: a build context checked out on Windows with core.autocrlf=true carries
+# CRLF endings, which turn the `#!/bin/sh` shebang into `#!/bin/sh\r` and make
+# the container fail with "no such file or directory" on the entry point. The
+# repo's .gitattributes prevents this at checkout; this is a build-time backstop.
 COPY docker-entrypoint.d/40-twin-config.sh /docker-entrypoint.d/40-twin-config.sh
-RUN chmod +x /docker-entrypoint.d/40-twin-config.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.d/40-twin-config.sh \
+    && chmod +x /docker-entrypoint.d/40-twin-config.sh
 
 # Browser-reachable twin URL; override per deployment.
 ENV TWIN_URL="http://localhost:8080"
