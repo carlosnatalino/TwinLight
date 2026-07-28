@@ -214,68 +214,29 @@ configured system margin. `DP-QPSK`, `DP-16QAM` and `DP-64QAM` are supported.
 
 ### Populate the twin with demo services
 
-An empty twin has nothing to monitor. This script creates one service per
-modulation format between random endpoint pairs, so the monitoring, spectrum and
-services views have something to show. It needs only the standard library, so it
-works against a twin running anywhere — including the Compose stack.
-
-Endpoint pairs are retried because admission is genuinely allowed to fail: a
-`409` means no route, no contiguous spectrum, or a GSNR below the format's
-threshold. Higher-order formats need more GSNR, so `DP-64QAM` will usually take
-more attempts than `DP-QPSK`, and on a long-haul topology it may not be
-admissible at all.
+An empty twin has nothing to monitor. The [`examples/demo_services.py`](examples/demo_services.py)
+script creates one or more services per modulation format between random
+endpoint pairs, so the monitoring, spectrum and services views have something to
+show. It needs only the Python standard library — no TwinLight install — so it
+works against a twin running anywhere, including the Compose stack, and runs the
+same on Windows, macOS and Linux:
 
 ```bash
-python3 - <<'PY'
-import json, random, urllib.request
-from urllib.error import HTTPError
-
-BASE = "http://localhost:8080"
-ATTEMPTS = 300
-
-ctx = json.load(urllib.request.urlopen(f"{BASE}/data/tapi-common:context/service-interface-point"))
-sips = ctx["tapi-common:context"]["service-interface-point"]
-if len(sips) < 2:
-    raise SystemExit("Need at least 2 service interface points")
-
-for modulation in ("DP-QPSK", "DP-16QAM", "DP-64QAM"):
-    name = f"demo-{modulation}-{random.getrandbits(16):04x}"
-    for attempt in range(1, ATTEMPTS + 1):
-        a, z = random.sample(sips, 2)
-        body = {"tapi-connectivity:connectivity-service": {
-            "name": [{"value-name": "service-name", "value": name}],
-            "modulation-format": modulation,
-            "end-point": [
-                {"local-id": "a-end", "service-interface-point": {"service-interface-point-uuid": a["uuid"]}},
-                {"local-id": "z-end", "service-interface-point": {"service-interface-point-uuid": z["uuid"]}},
-            ],
-        }}
-        req = urllib.request.Request(
-            f"{BASE}/data/tapi-connectivity:connectivity-context/connectivity-service",
-            data=json.dumps(body).encode(), method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            svc = json.load(urllib.request.urlopen(req))["tapi-connectivity:connectivity-service"]
-        except HTTPError as exc:
-            # 409 = not admissible on this pair (no route / no spectrum / QoT
-            # below threshold). Anything else is a real error worth surfacing.
-            if exc.code == 409:
-                continue
-            print(f"{modulation}: HTTP {exc.code} — {exc.read().decode()[:200]}")
-            break
-        uuid = svc["uuid"]
-        opm = json.load(urllib.request.urlopen(f"{BASE}/internal/opm/{uuid}"))["measurements"]
-        slot = svc.get("frequency-slot", {})
-        print(f"{modulation:<9} {name}  attempt {attempt}")
-        print(f"            uuid   {uuid}")
-        print(f"            GSNR   {opm['gsnr-db']:.2f} dB   OSNR {opm['osnr-db']:.2f} dB")
-        print(f"            slot   {slot.get('nominal-central-frequency')} THz / {slot.get('slot-width')} GHz")
-        break
-    else:
-        print(f"{modulation:<9} not admissible after {ATTEMPTS} attempts")
-PY
+python examples/demo_services.py                               # one per format
+python examples/demo_services.py -n 5                          # five per format
+python examples/demo_services.py --base-url http://host:8080 --attempts 300
 ```
+
+`-n` / `--services-per-mf` sets how many services to create for **each** of the
+three modulation formats (default `1`), so `-n 5` provisions up to fifteen
+services in total — a quick way to fill the spectrum and stress the views.
+`--attempts` bounds how many random endpoint pairs each service tries before it
+gives up. Endpoint pairs are retried because admission is genuinely allowed to
+fail: a `409` means no route, no contiguous spectrum, or a GSNR below the
+format's threshold. Higher-order formats need more GSNR, so `DP-64QAM` will
+usually take more attempts than `DP-QPSK`, and on a long-haul topology it may not
+be admissible at all — so with a large `-n` you may see fewer services admitted
+than requested, which the script reports per format.
 
 Then open the **Monitoring** page in the web UI, or watch one over gNMI with
 `twinlight-client`. To clear them again, delete each service by UUID with

@@ -1,0 +1,30 @@
+# Line-ending policy.
+#
+# Normalize text to LF in the repository on commit, and check it out with the
+# platform's native convention by default. The overrides below pin files that
+# must keep a specific ending regardless of the developer's `core.autocrlf`.
+* text=auto
+
+# Files executed *inside* the Linux Docker images must stay LF on every host.
+# A Windows checkout with core.autocrlf=true would otherwise rewrite the shell
+# scripts with CRLF, turning the `#!/bin/sh` shebang into `#!/bin/sh\r`; the
+# container kernel then looks for an interpreter literally named "/bin/sh\r",
+# fails with "no such file or directory", and the nginx image reports a broken
+# /docker-entrypoint.d entry point.
+*.sh              text eol=lf
+**/docker-entrypoint.d/** text eol=lf
+Dockerfile        text eol=lf
+*.Dockerfile      text eol=lf
+.dockerignore     text eol=lf
+
+# Windows batch scripts, conversely, require CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Common binaries: never touch their bytes.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary

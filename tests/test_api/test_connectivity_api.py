@@ -146,3 +146,55 @@ class TestGetAndDeleteConnectivityService:
         get_resp = app.get(f"{_BASE}/connectivity-service={uuid}")
         assert get_resp.status_code == 200
         assert get_resp.json()["tapi-connectivity:connectivity-service"]["name"][0]["value"] == "replaced-name"
+
+    def test_put_failed_replace_restores_original_service(
+        self, app: TestClient, monkeypatch
+    ) -> None:
+        """A replacement that can't be admitted must not tear the service down.
+
+        Simulates an RMSA failure on the incoming service and asserts the
+        original allocation is re-admitted and still reachable afterwards.
+        """
+        from twinlight.state.context import InsufficientSpectrumError
+
+        sip_a, sip_z = _get_two_sip_uuids(app)
+        create = app.post(
+            f"{_BASE}/connectivity-service",
+            json=_create_service_payload(sip_a, sip_z),
+        )
+        assert create.status_code == 201
+        uuid = create.json()["tapi-connectivity:connectivity-service"]["uuid"]
+
+        # Fail only the first add_service call (the incoming replacement); let
+        # the rollback re-admission of the original service go through for real.
+        ctx = app.app.state.context
+        real_add = ctx.add_service
+        calls = {"n": 0}
+
+        async def flaky_add(svc):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise InsufficientSpectrumError("simulated: no spectrum")
+            return await real_add(svc)
+
+        monkeypatch.setattr(ctx, "add_service", flaky_add)
+
+        put_body = {
+            "tapi-connectivity:connectivity-service": {
+                "uuid": uuid,
+                "name": [{"value-name": "service-name", "value": "would-be-replacement"}],
+                "modulation-format": "DP-QPSK",
+                "end-point": [
+                    {"local-id": "a-end", "service-interface-point": {"service-interface-point-uuid": sip_a}},
+                    {"local-id": "z-end", "service-interface-point": {"service-interface-point-uuid": sip_z}},
+                ],
+            }
+        }
+        put_resp = app.put(f"{_BASE}/connectivity-service={uuid}", json=put_body)
+        assert put_resp.status_code == 409
+
+        # The original service survived the failed replacement.
+        get_resp = app.get(f"{_BASE}/connectivity-service={uuid}")
+        assert get_resp.status_code == 200
+        restored = get_resp.json()["tapi-connectivity:connectivity-service"]
+        assert restored["name"][0]["value"] == "test-link"
