@@ -21,14 +21,13 @@ import pytest
 
 from twinlight.cli import load_config
 from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
+from twinlight.example_data import find_example_file
 from twinlight.physics.backend import build_backend
 from twinlight.physics.gnpy_backend import GnpyBackend
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
-_GNPY_EQUIPMENT = (
-    Path(__file__).resolve().parents[2]
-    / "venv/lib/python3.12/site-packages/gnpy/example-data/eqpt_config.json"
-)
+# Resolved from the installed gnpy package — see tests/conftest.py.
+_GNPY_EQUIPMENT = find_example_file("eqpt_config.json")
 
 
 class TestPhysicsConfig:
@@ -45,8 +44,8 @@ class TestPhysicsConfig:
 
 class TestBuildBackend:
     def _gnpy_config(self) -> TwinConfig:
-        if not _GNPY_EQUIPMENT.exists():
-            pytest.skip(f"gnpy equipment not installed at {_GNPY_EQUIPMENT}")
+        if _GNPY_EQUIPMENT is None:
+            pytest.skip("gnpy is not installed with its example-data equipment library")
         return TwinConfig(
             gnpy=GnpyConfig(
                 topology=FIXTURES / "edfa_example_network.json",

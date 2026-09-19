@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from gnpy.core.elements import Edfa, Fiber, Roadm
 
+from twinlight.example_data import find_example_file
 from twinlight.physics.element_params import (
     ALLOWED,
     ParamValidationError,
@@ -26,20 +27,17 @@ from twinlight.physics.element_params import (
 from twinlight.physics.gnpy_adapter import build_gnpy_network, build_uid_map
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
-GNPY_EXAMPLE_DATA = (
-    Path(__file__).resolve().parents[2]
-    / "venv/lib/python3.12/site-packages/gnpy/example-data"
-)
+# Resolved from the installed gnpy package — see tests/conftest.py.
+_GNPY_EQUIPMENT = find_example_file("eqpt_config.json")
 
 
 @pytest.fixture(scope="module")
 def uid_map() -> dict[str, object]:
     """Real GNPy network → {uid: element} map for the test topology."""
     topology = FIXTURES / "edfa_example_network.json"
-    equipment = GNPY_EXAMPLE_DATA / "eqpt_config.json"
-    if not equipment.exists():
-        pytest.skip(f"gnpy equipment file not installed at {equipment}")
-    network, _ = build_gnpy_network(topology, equipment)
+    if _GNPY_EQUIPMENT is None:
+        pytest.skip("gnpy is not installed with its example-data equipment library")
+    network, _ = build_gnpy_network(topology, _GNPY_EQUIPMENT)
     return build_uid_map(network)
 
 

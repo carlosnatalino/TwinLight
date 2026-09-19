@@ -9,17 +9,16 @@ from fastapi.testclient import TestClient
 
 from twinlight.app import create_app
 from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
+from twinlight.example_data import find_example_file
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
-_GNPY_EQUIPMENT = (
-    Path(__file__).resolve().parents[2]
-    / "venv/lib/python3.12/site-packages/gnpy/example-data/eqpt_config.json"
-)
+# Resolved from the installed gnpy package — see tests/conftest.py.
+_GNPY_EQUIPMENT = find_example_file("eqpt_config.json")
 
 
 def _make_client(backend: str = "gnpy") -> TestClient:
-    if backend == "gnpy" and not _GNPY_EQUIPMENT.exists():
-        pytest.skip("gnpy equipment file not installed")
+    if backend == "gnpy" and _GNPY_EQUIPMENT is None:
+        pytest.skip("gnpy is not installed with its example-data equipment library")
     cfg = TwinConfig(
         gnpy=GnpyConfig(
             topology=FIXTURES / "edfa_example_network.json",
