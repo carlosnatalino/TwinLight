@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from twinlight.app import create_app
 from twinlight.config import GnpyConfig, TwinConfig
+from twinlight.example_data import find_example_file
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -45,10 +46,10 @@ def app(twin_config: TwinConfig) -> TestClient:
 # baseline invalidation, GSNR shifts on parameter mutation, etc.
 # ---------------------------------------------------------------------------
 
-_GNPY_EQUIPMENT = (
-    Path(__file__).resolve().parents[1]
-    / "venv/lib/python3.12/site-packages/gnpy/example-data/eqpt_config.json"
-)
+# Resolved from the installed gnpy package, never from a hardcoded virtualenv
+# path: a fixed "venv/..." path silently skips every GNPy-backed test whenever
+# the layout differs (CI builds a ".venv/" via uv), hiding failures in a green run.
+_GNPY_EQUIPMENT = find_example_file("eqpt_config.json")
 
 
 @pytest.fixture
@@ -59,10 +60,8 @@ def gnpy_twin_config(edfa_topology_path: Path) -> TwinConfig:
     without the gnpy package). Use this in tests that exercise GNPy
     propagation or the ``/config`` element overrides.
     """
-    if not _GNPY_EQUIPMENT.exists():
-        pytest.skip(
-            f"gnpy equipment file not installed at {_GNPY_EQUIPMENT}"
-        )
+    if _GNPY_EQUIPMENT is None:
+        pytest.skip("gnpy is not installed with its example-data equipment library")
     return TwinConfig(
         gnpy=GnpyConfig(
             topology=edfa_topology_path,

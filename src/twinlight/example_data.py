@@ -56,6 +56,21 @@ def gnpy_example_data_dir() -> Path:
     return data_dir
 
 
+def find_example_file(name: str) -> Path | None:
+    """Return the path to a GNPy example file, or None when it is unavailable.
+
+    The non-raising counterpart to :func:`gnpy_example_data_dir`, for callers
+    that need to *probe* for the reference data rather than demand it. Resolving
+    through the installed package keeps this independent of the virtualenv
+    layout (``venv/``, ``.venv/``, tox, or a system install).
+    """
+    try:
+        path = gnpy_example_data_dir() / name
+    except (ModuleNotFoundError, FileNotFoundError):
+        return None
+    return path if path.is_file() else None
+
+
 def provision(dest: Path = DEFAULT_DEST, *, force: bool = False) -> list[Path]:
     """Copy the required GNPy example files into ``dest``.
 
