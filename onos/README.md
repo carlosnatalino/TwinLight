@@ -82,6 +82,7 @@ memory, or ONOS will OOM mid-boot.
 # from the repository root
 ./onos/scripts/demo-up.sh        # builds + boots everything, registers the device
 ./onos/scripts/validate.sh       # 16 checks; green means the demo will work
+./onos/scripts/seed-demo.sh      # optional: provision 8 lightpaths to explore
 ```
 
 `demo-up.sh` is idempotent — re-run it freely. First run takes 5–10 minutes
@@ -123,6 +124,14 @@ and carrying a DWDM lambda set derived from the twin's own spectrum context.
 
 Point out in the ONOS GUI that this is an ordinary ONOS device — the controller
 does not know or care that the domain beneath it is simulated.
+
+**Finding the ports in the GUI**, which is not where most people first look: the
+**Topology** view shows the OLS as a single node and does not draw ports at all,
+so it looks empty. Use **Devices** in the left nav instead — the table has a
+*Ports* column, and clicking the row opens a detail panel whose ports icon lists
+all 75 with their lambda and SIP-UUID annotations. If a view ever looks stale,
+`curl -u onos:rocks localhost:8181/onos/v1/devices/rest:172.28.0.10:8282/ports`
+is the authoritative answer.
 
 To map port numbers back to cities:
 
@@ -256,6 +265,7 @@ Restore with `./onos/scripts/fault.sh heal-all`.
 |--------|---------|
 | `scripts/demo-up.sh` | Build and boot the stack, verify the ODTN apps, push the netcfg, wait for discovery |
 | `scripts/validate.sh` | 16 end-to-end checks across all layers; non-zero exit on any failure |
+| `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range, so every UI has state to show (`--reset` clears first) |
 | `scripts/lightpath.sh` | `create <A> <Z>` / `list` / `delete <flow-id>` / `clear` — provisioning driven from ONOS |
 | `scripts/fault.sh` | `list` / `cut <uid>` / `cut-path <svc-uuid>` / `heal <uid>` / `heal-all` |
 | `scripts/onos-cli.sh` | ONOS Karaf CLI, interactive or one-shot |
