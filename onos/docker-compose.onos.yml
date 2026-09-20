@@ -1,0 +1,103 @@
+# TwinLight + ONOS — hierarchical orchestration demo overlay.
+#
+# This is an *overlay* on the root docker-compose.yml, not a standalone stack.
+# Always pass both files, from the repository root:
+#
+#   docker compose -f docker-compose.yml -f onos/docker-compose.onos.yml up -d
+#
+# or just run onos/scripts/demo-up.sh, which does exactly that.
+#
+# Adds two services to the base stack (twin, ui, prometheus, grafana):
+#
+#   tapi-adapter — T-API v2.6.0 → v2.1 version adapter (see adapter/tapi_adapter.py)
+#   onos         — ONOS 2.7 with the ODTN "ols" driver over the REST southbound
+#
+# Ports published on the host:
+#   8181  ONOS REST API + GUI   (onos / rocks)
+#   8101  ONOS CLI over SSH     (onos / rocks)
+#   8282  T-API adapter         (/restconf/... for ONOS, /adapter/... for humans)
+#
+# Why static IPs: ONOS's netcfg `rest` block is parsed into an IpAddress, so a
+# compose service name will not resolve there. The adapter therefore needs a
+# fixed address that onos/netcfg/twinlight-ols.json can hard-code, and the ONOS
+# device id (rest:172.28.0.10:8282) is derived from it.
+
+services:
+
+  tapi-adapter:
+    build:
+      # Relative to the project directory, which Compose takes from the FIRST
+      # -f file — i.e. the repo root. Hence ./onos/adapter, not ./adapter.
+      context: ./onos/adapter
+      dockerfile: Dockerfile
+    image: twinlight-tapi-adapter:latest
+    container_name: twinlight-tapi-adapter
+    environment:
+      TWIN_BASE_URL: "http://twin:8080"
+      # Modulation the adapter asks the twin for. ONOS's T-API 2.1 connectivity
+      # request cannot carry one, so it is adapter policy. Set to DP-16QAM to
+      # make the twin refuse long-haul requests — see onos/README.md § Act 3.
+      ADAPTER_MODULATION: "DP-QPSK"
+      # Only G_50GHZ and G_25GHZ are safe: ONOS's getChannelSpacing() has
+      # trailing spaces in its other case labels and silently returns CHL_0GHZ,
+      # which then divides by zero in getOchSignal().
+      ADAPTER_GRID_GRANULARITY: "G_50GHZ"
+      # Hide twin-native lightpaths from ONOS. ONOS deletes every connectivity
+      # service it can see whenever its flow cache for the device is empty,
+      # which would wipe anything the UI or examples/demo_services.py created.
+      ADAPTER_EXPOSE_TWIN_SERVICES: "false"
+      ADAPTER_LOG_LEVEL: "INFO"
+    ports:
+      - "8282:8282"
+    networks:
+      default:
+        ipv4_address: 172.28.0.10
+    depends_on:
+      twin:
+        condition: service_healthy
+    restart: unless-stopped
+
+  onos:
+    # ONOS publishes linux/amd64 images only — there is no arm64 tag for any
+    # release. On Apple Silicon this runs under Rosetta, which roughly triples
+    # the Karaf boot time (expect 2–4 min to a usable CLI, not 40 s).
+    image: onosproject/onos:2.7-latest
+    platform: linux/amd64
+    container_name: twinlight-onos
+    environment:
+      # Apps activated at boot. ONOS resolves each to org.onosproject.<name>.
+      #   drivers        — base driver subsystem
+      #   restsb         — REST southbound, the transport the ols driver uses
+      #   odtn-service   — ODTN app; pulls in drivers.odtn-driver, which owns
+      #                    the "ols" driver and the TapiDevice* behaviours
+      #   optical-model  — OchPort/OpticalDevice model the ols driver needs
+      #   gui2           — web UI at :8181/onos/ui
+      ONOS_APPS: "drivers,restsb,odtn-service,optical-model,gui2"
+    ports:
+      - "8181:8181"   # REST API + GUI
+      - "8101:8101"   # Karaf CLI over SSH
+    networks:
+      default:
+        ipv4_address: 172.28.0.20
+    depends_on:
+      tapi-adapter:
+        condition: service_healthy
+    healthcheck:
+      # /onos/v1/docs is served once the REST API bundle is up, which is a
+      # later and more meaningful signal than the port being open.
+      test: ["CMD-SHELL", "curl -sf -u onos:rocks http://localhost:8181/onos/v1/devices >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      # Generous because of Rosetta; a native amd64 host reaches this much sooner.
+      start_period: 180s
+    restart: unless-stopped
+
+# Pin the subnet so the adapter's address is predictable and the netcfg file can
+# be checked in. Bringing this overlay up for the first time recreates the base
+# stack's containers, because the default network changes definition.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

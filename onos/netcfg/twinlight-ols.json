@@ -1,0 +1,22 @@
+{
+  "devices": {
+    "rest:172.28.0.10:8282": {
+      "basic": {
+        "driver": "ols",
+        "manufacturer": "TwinLight",
+        "hwVersion": "digital-twin",
+        "swVersion": "tapi-2.6.0-via-adapter",
+        "type": "OLS"
+      },
+      "rest": {
+        "ip": "172.28.0.10",
+        "port": 8282,
+        "protocol": "http",
+        "testUrl": "/restconf/data/tapi-common:context",
+        "manufacturer": "TwinLight",
+        "hwVersion": "digital-twin",
+        "swVersion": "tapi-2.6.0-via-adapter"
+      }
+    }
+  }
+}
