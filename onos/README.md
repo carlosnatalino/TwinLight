@@ -60,6 +60,67 @@ hide.
 
 ---
 
+## Which direction changes flow
+
+Worth knowing before the talk, because the asymmetry is total and someone will
+try the wrong direction live.
+
+| Change | Reaches the other side? |
+|---|---|
+| Lightpath provisioned **from ONOS** | **Yes, immediately.** Flow rule → T-API POST → twin admits or refuses. Visible in the twin's UI, `/internal/opm`, Prometheus and Grafana within one poll. |
+| Lightpath created **in the TwinLight UI** | **No — never**, and no setting changes that. |
+| Fiber cut via `/config/` | Not as an event. The twin reports `status=link-failed` and its OPM collapses; ONOS keeps the device up and the flow installed. |
+| SIP list / spectrum changes | Only after an explicit resync (below). |
+
+**ONOS → twin works; twin → ONOS does not.** Two upstream behaviours cause
+this, neither configurable:
+
+1. `TapiFlowRuleProgrammable.getFlowEntries()` reads ONOS's own
+   `DeviceConnectionCache`, never the device. The call that would read the
+   device's connectivity services back is commented out upstream:
+
+   ```java
+   //TODO this is a blocking call on ADVA OLS, right now using cache.
+   //return getFlowsFromConnectivityServices(deviceId);
+   ```
+
+   So a lightpath created anywhere but through ONOS cannot appear in the Flows
+   view. This is a hard limit, not a configuration gap.
+
+2. `RestDeviceProvider.checkAndUpdateDevice()` re-runs port discovery **only
+   when the port list is already empty**:
+
+   ```java
+   //if ports are not discovered, retry the discovery
+   if (deviceService.getPorts(deviceId).isEmpty()) { discoverPorts(deviceId); }
+   ```
+
+   So after the initial 75 ports are found, `discoverPortDetails()` is never
+   called again and no change to the SIP list reaches ONOS on its own.
+
+### Forcing a resync
+
+```bash
+./onos/scripts/resync.sh          # bounce the device, re-run port discovery
+./onos/scripts/resync.sh --check  # compare what each side holds, change nothing
+```
+
+This removes and re-adds the device in netcfg, which is the supported way to
+make ONOS re-run discovery. It refreshes **the port list and its annotations**.
+It does **not** surface twin-created lightpaths — nothing can.
+
+It is also the one operation that can tear down ONOS-created lightpaths, via
+`removeInitalConnectivityServices()`, if ONOS's flow cache happens to be empty
+at reconnect. In testing the cache survived and the lightpaths did too, but the
+script checks afterwards and tells you if they did not.
+
+This asymmetry is not a flaw in the demo — it is the honest state of ODTN's
+`ols` driver, and saying so is more interesting than pretending otherwise. The
+demo's thesis is that **ONOS is the orchestrator**: provisioning originates
+there, and the twin is the physics authority that answers. Creating lightpaths
+in the TwinLight UI is an out-of-band change, which in a real network would also
+require a controller resync.
+
 ## Prerequisites
 
 - Docker with Compose v2 (Docker Desktop ≥ 4.30 is fine)
@@ -176,6 +237,27 @@ Now switch to the **TwinLight UI** — the lightpath is on the map and in the
 spectrum heat map — and to **Grafana**, where the OPM series has started moving.
 Poll it twice: the numbers change, because the four transient models are
 re-evaluated at read time rather than cached.
+
+**The full sequence, if you want to show it live rather than run the script.**
+Have the twin's *Monitoring* page open on the projector before you start — it is
+the only page that auto-refreshes, on the interval set in Settings. The
+*Services* page does not poll, so reload it after provisioning.
+
+```bash
+# 1. establish that the twin has no such lightpath
+curl -s localhost:8080/data/tapi-connectivity:connectivity-context/connectivity-service \
+  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["tapi-connectivity:connectivity-context"]["connectivity-service"]), "services")'
+
+# 2. provision it FROM ONOS — a flow rule, nothing T-API in sight
+./onos/scripts/lightpath.sh create Boston New_York
+
+# 3. the same lightpath, now on the twin, with GNPy physics attached
+./onos/scripts/correlate.sh
+```
+
+Then point at the twin's Services page: a new entry named
+`ONOS port 11->40  (Boston -> New_York)`, with a path, a frequency slot and live
+OPM that ONOS never supplied and could not have computed.
 
 **Tying the two views together.** ONOS and the twin share no identifier: ONOS's
 flow id never leaves ONOS, and the T-API service UUID the driver generates never
@@ -302,6 +384,7 @@ Restore with `./onos/scripts/fault.sh heal-all`.
 | `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range, so every UI has state to show (`--reset` clears first) |
 | `scripts/lightpath.sh` | `create <A> <Z>` / `list` / `delete <flow-id>` / `clear` — provisioning driven from ONOS |
 | `scripts/correlate.sh` | Join the ONOS Flows view to the twin's service list, one row per flow (`--json` for the raw join) |
+| `scripts/resync.sh` | Force ONOS to re-discover ports (`--check` just compares the two sides) |
 | `scripts/fault.sh` | `list` / `cut <uid>` / `cut-path <svc-uuid>` / `heal <uid>` / `heal-all` |
 | `scripts/onos-cli.sh` | ONOS Karaf CLI, interactive or one-shot |
 | `scripts/demo-down.sh` | Stop the stack (`--purge` also drops volumes) |

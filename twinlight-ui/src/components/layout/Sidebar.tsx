@@ -2,18 +2,27 @@ import { NavLink } from "react-router-dom";
 import { LayoutDashboard, Network, Activity, Settings, PlusCircle, List, Cpu, Route, Radio, LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-const navItems = [
+type NavItem =
+  | { to: string; label: string; icon: typeof LayoutDashboard; end: boolean }
+  | { divider: true };
+
+// Read-only views first, then the one action that mutates network state.
+// "Add Service" is fenced by dividers so it is not hit by accident while
+// navigating during a demo, and Settings is kept apart for the same reason.
+const navItems: readonly NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/topology", label: "Topology", icon: Network, end: false },
-  { to: "/monitoring", label: "Monitoring", icon: Activity, end: false },
   { to: "/services", label: "Services", icon: List, end: true },
-  { to: "/services/new", label: "Add Service", icon: PlusCircle, end: false },
   { to: "/equipment", label: "Equipment", icon: Cpu, end: true },
   { to: "/path", label: "Path", icon: Route, end: true },
   { to: "/spectrum", label: "Spectrum", icon: Radio, end: true },
   { to: "/spectrum/grid", label: "Spectrum grid", icon: LayoutGrid, end: true },
+  { to: "/monitoring", label: "Monitoring", icon: Activity, end: false },
+  { divider: true },
+  { to: "/services/new", label: "Add Service", icon: PlusCircle, end: false },
+  { divider: true },
   { to: "/settings", label: "Settings", icon: Settings, end: false },
-] as const;
+];
 
 export default function Sidebar() {
   return (
@@ -31,24 +40,33 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 px-3 space-y-1">
-        {navItems.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                isActive
-                  ? "bg-blue-600 text-white"
-                  : "text-slate-300 hover:bg-slate-800 hover:text-white"
-              )
-            }
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            {label}
-          </NavLink>
-        ))}
+        {navItems.map((item, index) =>
+          "divider" in item ? (
+            <hr
+              // Dividers have no stable id of their own; the index is stable
+              // because navItems is a module-level constant.
+              key={`divider-${index}`}
+              className="!my-2 border-0 border-t border-slate-700"
+            />
+          ) : (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  isActive
+                    ? "bg-blue-600 text-white"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                )
+              }
+            >
+              <item.icon className="h-4 w-4 shrink-0" />
+              {item.label}
+            </NavLink>
+          )
+        )}
       </nav>
 
       {/* Footer */}
