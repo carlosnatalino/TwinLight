@@ -25,6 +25,11 @@ from twinlight.config import TwinConfig
 
 _logger = logging.getLogger(__name__)
 
+# Sentinel for a bare ``--restore`` (no path): "load the shutdown checkpoint".
+# argparse needs a `const`, and the checkpoint's location is not known until the
+# config has been merged, so the decision is deferred to _resolve_startup_state.
+_RESTORE_CHECKPOINT = Path("\x00checkpoint")
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argument parser with groups mirroring YAML sections."""
@@ -138,15 +143,38 @@ def build_parser() -> argparse.ArgumentParser:
     log_group.add_argument("--log-format", type=str, default=None)
 
     # -- State restoration ------------------------------------------------
-    parser.add_argument(
-        "--restore", type=Path, default=None,
-        metavar="SNAPSHOT.json",
-        help="Restore state from this snapshot file.",
+    #
+    # Default behaviour, with none of these flags: load the shutdown checkpoint
+    # if one exists, otherwise start from scratch. The twin writes that
+    # checkpoint itself when it stops gracefully, so a restart resumes where it
+    # left off without anyone having to ask.
+    state_group = parser.add_argument_group(
+        "State",
+        "By default the twin resumes from the checkpoint written at the last "
+        "graceful shutdown, and starts from scratch when there is none.",
     )
-    parser.add_argument(
+    restore_group = state_group.add_mutually_exclusive_group()
+    restore_group.add_argument(
+        "--restore",
+        nargs="?",
+        type=Path,
+        default=None,
+        const=_RESTORE_CHECKPOINT,
+        metavar="SNAPSHOT.json",
+        help="Restore saved state. Bare --restore loads the checkpoint and "
+             "fails if there is none; with a path, loads that snapshot file.",
+    )
+    restore_group.add_argument(
+        "--reset",
+        action="store_true",
+        help="Ignore any existing checkpoint and start from scratch. The old "
+             "checkpoint is kept as <name>.bak so a reset is recoverable.",
+    )
+    restore_group.add_argument(
         "--restore-latest",
         action="store_true",
-        help="Restore state from the most recent snapshot in snapshots/.",
+        help="Restore the most recent timestamped snapshot in the snapshot "
+             "directory, rather than the shutdown checkpoint.",
     )
 
     return parser
@@ -318,20 +346,8 @@ def load_config(argv: list[str] | None = None) -> TwinConfig:
             "  --topology TOPOLOGY.json"
         )
 
-    # Step 4: Attach restore path (explicit path wins over --restore-latest)
-    if args.restore is not None:
-        merged["restore_path"] = str(args.restore.resolve())
-    elif args.restore_latest:
-        _snapshot_dir = Path("snapshots")
-        candidates = list(_snapshot_dir.glob("*.json")) if _snapshot_dir.is_dir() else []
-        if not candidates:
-            parser.error(
-                "No snapshot files found in snapshots/. "
-                "Use --restore PATH to specify a snapshot file, or create one via "
-                "POST /admin/snapshot first."
-            )
-        latest = max(candidates, key=lambda p: p.stat().st_mtime)
-        merged["restore_path"] = str(latest.resolve())
+    # Step 4: Decide what state to start from
+    _resolve_startup_state(merged, args, parser)
 
     # Step 5: Validate with Pydantic
     try:
@@ -340,3 +356,77 @@ def load_config(argv: list[str] | None = None) -> TwinConfig:
         parser.error(f"Configuration validation failed:\n{e}")
 
     return config
+
+
+def _snapshot_dir_of(merged: dict[str, Any]) -> Path:
+    """Snapshot directory from merged config, honouring its default."""
+    raw = merged.get("simulation", {}).get("snapshot_dir")
+    return Path(raw) if raw else Path("snapshots")
+
+
+def _checkpoint_path_of(merged: dict[str, Any]) -> Path:
+    name = merged.get("simulation", {}).get("checkpoint_file") or "checkpoint.json"
+    return _snapshot_dir_of(merged) / name
+
+
+def _resolve_startup_state(
+    merged: dict[str, Any],
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Set ``restore_path`` / ``reset`` on the merged config.
+
+    The four cases, in the order argparse guarantees are mutually exclusive:
+
+    ``--reset``          start clean, and let main.py move any checkpoint aside
+    ``--restore``        load the checkpoint; an error when there is none, since
+                         asking for it explicitly and silently getting an empty
+                         twin is the kind of thing that ruins an experiment
+    ``--restore PATH``   load that snapshot file
+    ``--restore-latest`` load the newest timestamped snapshot
+    *(no flag)*          load the checkpoint if it exists, else start clean
+    """
+    checkpoint = _checkpoint_path_of(merged)
+
+    if args.reset:
+        merged["reset"] = True
+        return
+
+    if args.restore is not None:
+        if args.restore == _RESTORE_CHECKPOINT:
+            if not checkpoint.is_file():
+                parser.error(
+                    f"--restore was given but no checkpoint exists at {checkpoint}.\n"
+                    "A checkpoint is written when the twin shuts down gracefully. "
+                    "Start without any flag to begin from scratch, or use "
+                    "--restore PATH for a specific snapshot."
+                )
+            merged["restore_path"] = str(checkpoint.resolve())
+        else:
+            explicit = args.restore
+            if not explicit.is_file():
+                parser.error(f"Snapshot file not found: {explicit}")
+            merged["restore_path"] = str(explicit.resolve())
+        return
+
+    if args.restore_latest:
+        snapshot_dir = _snapshot_dir_of(merged)
+        candidates = (
+            [p for p in snapshot_dir.glob("*.json") if p != checkpoint]
+            if snapshot_dir.is_dir()
+            else []
+        )
+        if not candidates:
+            parser.error(
+                f"No snapshot files found in {snapshot_dir}/. "
+                "Use --restore PATH to specify a snapshot file, or create one via "
+                "POST /admin/snapshot first."
+            )
+        latest = max(candidates, key=lambda p: p.stat().st_mtime)
+        merged["restore_path"] = str(latest.resolve())
+        return
+
+    # No flag: resume from the checkpoint when there is one. Absence is the
+    # normal first-run case, not an error.
+    if checkpoint.is_file():
+        merged["restore_path"] = str(checkpoint.resolve())

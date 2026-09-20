@@ -114,8 +114,15 @@ docker compose run --rm --service-ports twin \
     twinlight --config /app/examples/twin_config.yaml --rest-host 0.0.0.0
 ```
 
-Snapshots written by `POST /admin/snapshot` land in `./snapshots/` on the host,
-and the stack restores the most recent one automatically on restart.
+`./snapshots/` is mounted from the host, so both the shutdown checkpoint and any
+`POST /admin/snapshot` files survive container rebuilds. `docker compose down`
+sends SIGTERM, so the twin checkpoints itself and the next `up` resumes where it
+left off. To start clean instead, add `--reset`:
+
+```bash
+docker compose run --rm --service-ports twin \
+    twinlight --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0 --reset
+```
 
 ```bash
 docker compose down          # stop the stack, keep Prometheus/Grafana volumes
@@ -265,13 +272,26 @@ OPM (OSNR, GSNR, pre-FEC BER, Q-factor, chromatic dispersion, PMD) over gNMI.
 
 ### Checkpoint and restore
 
+The twin checkpoints itself when it shuts down gracefully — Ctrl+C, SIGTERM,
+`docker compose down` — and resumes from that checkpoint next time it starts.
+Nothing needs to be passed for a twin to survive a restart:
+
 ```bash
-curl -X POST http://localhost:8080/admin/snapshot            # -> snapshots/twin-<ISO8601>.json
-twinlight --config examples/twin_config.yaml --restore-latest
-twinlight --config examples/twin_config.yaml --restore snapshots/twin-….json
+twinlight --config examples/twin_config.yaml            # resume, or start clean if there is no checkpoint
+twinlight --config examples/twin_config.yaml --restore  # resume; error if there is no checkpoint
+twinlight --config examples/twin_config.yaml --reset    # start clean, keeping checkpoint.json.bak
 ```
 
-Snapshots record the physical-layer backend that produced them; restoring one
+The checkpoint is `snapshots/checkpoint.json`. Explicit, timestamped snapshots
+are separate and are never loaded on their own:
+
+```bash
+curl -X POST http://localhost:8080/admin/snapshot        # -> snapshots/twin-<ISO8601>.json
+twinlight --config examples/twin_config.yaml --restore snapshots/twin-….json
+twinlight --config examples/twin_config.yaml --restore-latest
+```
+
+Both kinds record the physical-layer backend that produced them; restoring one
 under a different backend is rejected rather than silently reinterpreted.
 
 ## Architecture

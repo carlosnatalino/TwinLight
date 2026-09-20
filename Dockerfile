@@ -93,5 +93,13 @@ EXPOSE 8080 50051
 # equipment files were provisioned into examples/gnpy-data/ during the
 # build, so the first-run demo needs no host bind-mounts. Override with:
 #   docker run … twinlight --config /path/to/your.yaml --rest-host 0.0.0.0
+#
+# --snapshot-dir is passed explicitly because a snapshot_dir set in a YAML file
+# is resolved relative to *that file's* directory: the config lives in
+# /app/examples, so its "snapshots/" would mean /app/examples/snapshots and miss
+# the /app/snapshots volume above. On the command line it resolves against the
+# working directory instead, which is what the volume expects. Without this the
+# shutdown checkpoint would be written inside the container layer and lost on
+# every rebuild.
 CMD ["twinlight", "--config", "/app/examples/coronet_conus_config.yaml", \
-     "--rest-host", "0.0.0.0"]
+     "--rest-host", "0.0.0.0", "--snapshot-dir", "/app/snapshots"]

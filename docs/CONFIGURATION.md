@@ -89,7 +89,9 @@ simulation:
 | `clock_mode` | `wall` | `wall` \| `accelerated` \| `step`. Transient models are functions of time; this selects which clock feeds them |
 | `time_scale` | `1.0` | Multiplier for `accelerated` mode |
 | `auto_snapshot_interval` | `60` | Seconds between automatic snapshots; `0` disables |
-| `snapshot_dir` | `snapshots/` | Where `/admin/snapshot` writes and `--restore-latest` reads |
+| `snapshot_dir` | `snapshots/` | Where `/admin/snapshot` writes, and where the checkpoint lives |
+| `checkpoint_file` | `checkpoint.json` | Name of the shutdown checkpoint inside `snapshot_dir` |
+| `auto_checkpoint` | `true` | Write the checkpoint on graceful shutdown |
 
 ## `transients` — time-varying impairment models
 
@@ -251,12 +253,53 @@ corresponding YAML field.
 | `--physics-backend {gnpy,egn}` | `physics.backend` |
 | `--num-slots`, `--slot-width-ghz`, `--center-frequency-thz` | `spectrum.*` |
 | `-v` / `-vv`, `--log-level`, `--log-format` | `logging.*` |
-| `--restore SNAPSHOT.json` | restore this snapshot at startup |
-| `--restore-latest` | restore the newest snapshot in `simulation.snapshot_dir` |
+| `--restore` | restore the shutdown checkpoint |
+| `--restore SNAPSHOT.json` | restore this snapshot file |
+| `--reset` | ignore the checkpoint and start from scratch |
+| `--restore-latest` | restore the newest timestamped snapshot in `simulation.snapshot_dir` |
 
-Note that `--restore-latest` is a hard error when no snapshot exists. The
-Compose stack guards against this by checking the mounted directory before
-choosing which command to run.
+### Startup state
+
+The twin writes a **checkpoint** when it shuts down gracefully (SIGINT or
+SIGTERM, so `docker compose down` and Ctrl+C both count) and picks it up again
+on the next start. Nothing has to be passed for that to happen:
+
+| Invocation | Starts from |
+|---|---|
+| *(no flag)* | the checkpoint if one exists, otherwise a clean twin |
+| `--restore` | the checkpoint; **errors** if there is none |
+| `--restore PATH` | that snapshot file; errors if it does not exist |
+| `--reset` | a clean twin; the old checkpoint is kept as `checkpoint.json.bak` |
+| `--restore-latest` | the newest timestamped snapshot, ignoring the checkpoint |
+
+These four are mutually exclusive.
+
+Absence of a checkpoint is an error for a bare `--restore` but not for the
+no-flag case, and the asymmetry is deliberate: asking to restore and silently
+getting an empty twin would falsify whatever experiment follows, whereas a first
+run with nothing to resume is the ordinary case.
+
+The checkpoint is a single file, `simulation.checkpoint_file` inside
+`simulation.snapshot_dir` — distinct from the timestamped snapshots
+`POST /admin/snapshot` writes into the same directory, which are never loaded
+automatically. `--reset` keeps exactly one generation of backup, so a second
+reset overwrites the first one's `.bak`.
+
+Set `simulation.auto_checkpoint: false` to stop the twin checkpointing itself at
+shutdown. A checkpoint that cannot be written is logged and the shutdown still
+completes cleanly, so a read-only or full `snapshot_dir` will not make the
+process exit non-zero.
+
+> **Where the checkpoint actually lands.** `snapshot_dir` is a path field, so a
+> value set **in a YAML file** is resolved relative to *that file's* directory,
+> while `--snapshot-dir` on the command line resolves against the working
+> directory. `snapshot_dir: "snapshots/"` inside `examples/twin_config.yaml`
+> therefore means `examples/snapshots/`, not `./snapshots/`. This is why the
+> Dockerfile and Compose stack pass `--snapshot-dir /app/snapshots` explicitly:
+> without it the checkpoint would be written inside the container layer rather
+> than the mounted volume, and lost on every rebuild. Note that
+> `POST /admin/snapshot` does not use this setting at all — it always writes to
+> `snapshots/` relative to the working directory.
 
 ## Runtime overrides
 

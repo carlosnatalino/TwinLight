@@ -6,6 +6,7 @@ import asyncio
 import logging
 import signal
 import sys
+from typing import Any
 
 import uvicorn
 
@@ -26,6 +27,46 @@ def configure_logging(config: TwinConfig) -> None:
     )
 
 
+def archive_checkpoint(config: TwinConfig) -> None:
+    """Move an existing checkpoint aside so ``--reset`` is recoverable.
+
+    A reset would otherwise destroy the previous state twice over: once by not
+    loading it, and again when the next graceful shutdown overwrites the file.
+    Keeping one generation costs nothing and has saved demos.
+    """
+    checkpoint = config.checkpoint_path()
+    if not checkpoint.is_file():
+        return
+    backup = checkpoint.with_suffix(checkpoint.suffix + ".bak")
+    try:
+        checkpoint.replace(backup)
+    except OSError as exc:
+        logger.warning("Could not archive checkpoint %s: %s", checkpoint, exc)
+        return
+    logger.info("Reset: previous checkpoint moved to %s", backup)
+
+
+def write_checkpoint(app: Any, config: TwinConfig) -> None:
+    """Persist twin state so the next start can resume from it.
+
+    Called on the graceful shutdown path only. Any failure here is logged and
+    swallowed: a checkpoint that cannot be written is worth complaining about,
+    but not worth turning a clean stop into a non-zero exit.
+    """
+    if not config.simulation.auto_checkpoint:
+        return
+    context = getattr(app.state, "context", None)
+    if context is None:
+        return
+    checkpoint = config.checkpoint_path()
+    try:
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        context.snapshot(checkpoint)
+        logger.info("Checkpoint saved: %s", checkpoint)
+    except Exception:
+        logger.exception("Could not write checkpoint to %s", checkpoint)
+
+
 async def async_main() -> None:
     config = load_config()
     configure_logging(config)
@@ -34,8 +75,15 @@ async def async_main() -> None:
     log.info("Starting TwinLight")
     log.info("Topology: %s", config.gnpy.topology)
 
-    if config.restore_path is not None:
-        log.info("Restoring from snapshot: %s", config.restore_path)
+    if config.reset:
+        archive_checkpoint(config)
+        log.info("Reset requested — starting from scratch")
+    elif config.restore_path is not None:
+        log.info("Restoring state from: %s", config.restore_path)
+    else:
+        log.info(
+            "No checkpoint at %s — starting from scratch", config.checkpoint_path()
+        )
 
     app = create_app(config)
 
@@ -92,6 +140,9 @@ async def async_main() -> None:
         # CancelledError traceback on an otherwise clean stop.
         uvicorn_server.should_exit = True
         await asyncio.gather(task_uvicorn, task_grpc, return_exceptions=True)
+        # After the servers have drained, so the state written is not being
+        # mutated by an in-flight request.
+        write_checkpoint(app, config)
         log.info("Shutdown complete")
 
     task_supervisor = asyncio.create_task(supervisor())

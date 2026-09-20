@@ -50,6 +50,8 @@ simulation:
   time_scale: 1.0
   auto_snapshot_interval: 60
   snapshot_dir: "snapshots/"
+  checkpoint_file: "checkpoint.json"
+  auto_checkpoint: true
 
 # ---------------------------------------------------------------------------
 # Transient models (defaults: literature/deep research/

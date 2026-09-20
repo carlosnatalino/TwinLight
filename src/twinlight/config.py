@@ -73,6 +73,12 @@ class SimulationConfig(BaseModel):
     time_scale: float = Field(default=1.0, gt=0)
     auto_snapshot_interval: int = Field(default=60, ge=0)
     snapshot_dir: Path = Path("snapshots/")
+    # The checkpoint is written on graceful shutdown and picked up again on the
+    # next start, so a twin survives a restart without anyone asking it to.
+    # It is a single well-known file, distinct from the timestamped snapshots
+    # that POST /admin/snapshot writes into the same directory.
+    checkpoint_file: str = Field(default="checkpoint.json", min_length=1)
+    auto_checkpoint: bool = True
 
 
 # -- Transient model sections -----------------------------------------------
@@ -287,3 +293,11 @@ class TwinConfig(BaseModel):
     physics: PhysicsConfig = Field(default_factory=PhysicsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     restore_path: Path | None = Field(default=None, exclude=True)
+    # Set by --reset. Startup state is decided entirely in cli.py, but the file
+    # operation the flag implies (moving an existing checkpoint aside) belongs
+    # with the other startup side effects in main.py, not in a config loader.
+    reset: bool = Field(default=False, exclude=True)
+
+    def checkpoint_path(self) -> Path:
+        """Absolute-ish path of the shutdown checkpoint."""
+        return self.simulation.snapshot_dir / self.simulation.checkpoint_file

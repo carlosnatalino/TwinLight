@@ -37,23 +37,27 @@ services:
       - "8080:8080"   # REST (TAPI + /config + /metrics + /admin)
       - "50051:50051" # gNMI gRPC
     volumes:
-      # /admin/snapshot writes land here on the host so they survive
-      # container rebuilds. Created on first up if it doesn't exist.
-      # Also read on startup by --restore-latest (see command:).
+      # Snapshots and the shutdown checkpoint land here on the host so they
+      # survive container rebuilds. Created on first up if it doesn't exist.
       - ./snapshots:/app/snapshots
-    # Restore the most recent snapshot on startup when the mounted snapshots/
-    # dir has one; otherwise start clean. The guard matters because
-    # --restore-latest hard-errors (and, with restart: unless-stopped below,
-    # crash-loops) when no snapshot exists yet.
+    # No restore flag needed: the twin checkpoints itself on SIGTERM (which is
+    # what `docker compose down`/`stop` sends) and resumes from that checkpoint
+    # on the next start, or begins clean when there is none. Add --reset to
+    # start from scratch, keeping the old checkpoint as checkpoint.json.bak.
+    # --snapshot-dir is explicit because a snapshot_dir set inside a YAML file
+    # resolves relative to that file's directory (/app/examples), which would
+    # miss the volume mounted above. See the same note in the Dockerfile.
     command:
-      - sh
-      - -c
-      - >-
-        if ls /app/snapshots/*.json >/dev/null 2>&1; then
-        exec twinlight --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0 --restore-latest;
-        else
-        exec twinlight --config /app/examples/coronet_conus_config.yaml --rest-host 0.0.0.0;
-        fi
+      - twinlight
+      - --config
+      - /app/examples/coronet_conus_config.yaml
+      - --rest-host
+      - "0.0.0.0"
+      - --snapshot-dir
+      - /app/snapshots
+    # Give the twin time to write its checkpoint before SIGKILL. Docker's
+    # default is 10s, which is tight for a large topology.
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]

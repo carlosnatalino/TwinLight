@@ -55,6 +55,8 @@ simulation:
   time_scale: 1.0                      # multiplier for accelerated mode
   auto_snapshot_interval: 60           # seconds between auto-snapshots (0 = disabled)
   snapshot_dir: "snapshots/"
+  checkpoint_file: "checkpoint.json"   # shutdown checkpoint, inside snapshot_dir
+  auto_checkpoint: true                # save state on graceful shutdown, resume on next start
 
 # ---------------------------------------------------------------------------
 # Transient models: per-model enable/disable + tunable parameters

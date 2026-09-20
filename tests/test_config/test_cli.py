@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 from textwrap import dedent
 
@@ -181,6 +183,133 @@ class TestCLIOnly:
         monkeypatch.chdir(tmp_path)
         with pytest.raises(SystemExit):
             load_config(["--topology", str(topo), "--restore-latest"])
+
+    def test_restore_latest_ignores_the_checkpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--restore-latest is about timestamped snapshots. The checkpoint is
+        usually the newest file in the directory, so it must be excluded or the
+        flag would silently become a synonym for a bare --restore."""
+        topo = tmp_path / "net.json"
+        topo.write_text("{}")
+        snap_dir = tmp_path / "snapshots"
+        snap_dir.mkdir()
+        (snap_dir / "twin-old.json").write_text("{}")
+        checkpoint = snap_dir / "checkpoint.json"
+        checkpoint.write_text("{}")
+        os.utime(checkpoint, (time.time() + 100, time.time() + 100))
+        monkeypatch.chdir(tmp_path)
+        config = load_config(["--topology", str(topo), "--restore-latest"])
+        assert config.restore_path is not None
+        assert Path(config.restore_path).name == "twin-old.json"
+
+
+# ===========================================================================
+# Checkpoint lifecycle: what the twin starts from
+# ===========================================================================
+
+class TestCheckpointStartupState:
+    """The twin checkpoints itself on graceful shutdown and resumes from it.
+
+    These cover the decision made at startup. Writing the checkpoint is
+    main.write_checkpoint(); archiving on reset is main.archive_checkpoint().
+    """
+
+    @staticmethod
+    def _topology(tmp_path: Path) -> Path:
+        topo = tmp_path / "net.json"
+        topo.write_text("{}")
+        return topo
+
+    @staticmethod
+    def _checkpoint(tmp_path: Path) -> Path:
+        snap_dir = tmp_path / "snapshots"
+        snap_dir.mkdir(exist_ok=True)
+        checkpoint = snap_dir / "checkpoint.json"
+        checkpoint.write_text("{}")
+        return checkpoint
+
+    def test_no_flag_starts_clean_when_no_checkpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        topo = self._topology(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        config = load_config(["--topology", str(topo)])
+        assert config.restore_path is None
+        assert config.reset is False
+
+    def test_no_flag_resumes_from_checkpoint_when_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        topo = self._topology(tmp_path)
+        checkpoint = self._checkpoint(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        config = load_config(["--topology", str(topo)])
+        assert config.restore_path == checkpoint
+
+    def test_bare_restore_loads_the_checkpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        topo = self._topology(tmp_path)
+        checkpoint = self._checkpoint(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        config = load_config(["--topology", str(topo), "--restore"])
+        assert config.restore_path == checkpoint
+
+    def test_bare_restore_errors_when_no_checkpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Asking to restore and silently getting an empty twin would falsify
+        whatever experiment follows, so absence is an error here even though it
+        is the normal case with no flag at all."""
+        topo = self._topology(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit):
+            load_config(["--topology", str(topo), "--restore"])
+
+    def test_restore_with_path_still_works(self, tmp_path: Path) -> None:
+        topo = self._topology(tmp_path)
+        snap = tmp_path / "explicit.json"
+        snap.write_text("{}")
+        config = load_config(["--topology", str(topo), "--restore", str(snap)])
+        assert config.restore_path == snap
+
+    def test_restore_with_missing_path_errors(self, tmp_path: Path) -> None:
+        topo = self._topology(tmp_path)
+        with pytest.raises(SystemExit):
+            load_config(
+                ["--topology", str(topo), "--restore", str(tmp_path / "nope.json")]
+            )
+
+    def test_reset_ignores_an_existing_checkpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        topo = self._topology(tmp_path)
+        self._checkpoint(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        config = load_config(["--topology", str(topo), "--reset"])
+        assert config.restore_path is None
+        assert config.reset is True
+
+    def test_reset_and_restore_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        topo = self._topology(tmp_path)
+        with pytest.raises(SystemExit):
+            load_config(["--topology", str(topo), "--reset", "--restore"])
+
+    def test_checkpoint_path_follows_configured_snapshot_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        topo = self._topology(tmp_path)
+        elsewhere = tmp_path / "state"
+        elsewhere.mkdir()
+        checkpoint = elsewhere / "checkpoint.json"
+        checkpoint.write_text("{}")
+        monkeypatch.chdir(tmp_path)
+        config = load_config(
+            ["--topology", str(topo), "--snapshot-dir", str(elsewhere)]
+        )
+        assert config.restore_path == checkpoint
+        assert config.checkpoint_path() == checkpoint
 
 
 # ===========================================================================
