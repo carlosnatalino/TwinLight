@@ -174,13 +174,24 @@ class OnosServiceRegistry:
 
     def __init__(self) -> None:
         self._services: dict[str, dict[str, Any]] = {}
+        self._endpoints: dict[str, dict[str, Any]] = {}
         self.rejections: list[dict[str, Any]] = []
 
-    def record(self, uuid: str, payload: dict[str, Any]) -> None:
+    def record(
+        self, uuid: str, payload: dict[str, Any], endpoints: dict[str, Any] | None = None
+    ) -> None:
         self._services[uuid] = payload
+        if endpoints is not None:
+            # The ONOS port pair is the only field both sides share: ONOS's
+            # Flows view keys on it, and it is what correlate.sh joins on.
+            self._endpoints[uuid] = endpoints
+
+    def endpoints(self, uuid: str) -> dict[str, Any]:
+        return self._endpoints.get(uuid, {})
 
     def forget(self, uuid: str) -> None:
         self._services.pop(uuid, None)
+        self._endpoints.pop(uuid, None)
 
     def record_rejection(self, uuid: str, reason: str, detail: str) -> None:
         # Bounded: a demo left running for hours should not grow without limit.
@@ -266,6 +277,14 @@ def _to_twin_sip(onos_uuid: str) -> str:
     """Recover the twin's SIP UUID from the ONOS-visible indexed form."""
     match = _INDEXED_SIP_RE.match(onos_uuid)
     return match.group("real") if match else onos_uuid
+
+
+def _node_name(sip: dict[str, Any]) -> str:
+    """The GNPy element name a SIP sits on, e.g. "Atlanta" from "trx Atlanta"."""
+    for entry in sip.get("name") or []:
+        if entry.get("value-name") == "node-name":
+            return str(entry.get("value", "")).replace("trx ", "")
+    return ""
 
 
 def _decorate_sip(
@@ -410,11 +429,15 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
     await _ensure_catalogue(request)
 
     twin_endpoints = []
+    onos_ports: list[int | None] = []
+    node_names: list[str] = []
     for local_id, endpoint in enumerate(endpoints, start=1):
         onos_sip = str(
             endpoint.get("service-interface-point", {}).get("service-interface-point-uuid", "")
         )
         twin_sip = _to_twin_sip(onos_sip)
+        onos_ports.append(catalogue.port_of(onos_sip))
+        node_names.append(_node_name(catalogue.twin_sip(onos_sip) or {}))
         twin_endpoints.append(
             {
                 "local-id": str(local_id),
@@ -422,10 +445,28 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
             }
         )
 
+    # The ONOS Flows view identifies a rule by its in/out port pair, and that
+    # pair is the only identifier both systems hold: ONOS's own flow id never
+    # reaches the adapter (the driver sends a freshly generated service UUID and
+    # nothing else), and the service UUID never appears in the Flows view.
+    # Stamping the pair into the T-API name list is therefore what lets an
+    # operator look at a row in ONOS and find the same lightpath in the
+    # TwinLight UI, which renders "service-name". Extra name entries are
+    # ordinary T-API NameAndValue pairs, so nothing non-standard is introduced.
+    port_pair = f"{onos_ports[0]}->{onos_ports[1]}"
+    endpoint_pair = " -> ".join(n or "?" for n in node_names)
+
     twin_body = {
         "tapi-connectivity:connectivity-service": {
             "uuid": onos_uuid,
-            "name": [{"value-name": "service-name", "value": f"onos-{onos_uuid[:8]}"}],
+            "name": [
+                {
+                    "value-name": "service-name",
+                    "value": f"ONOS port {port_pair}  ({endpoint_pair})",
+                },
+                {"value-name": "onos-port-pair", "value": port_pair},
+                {"value-name": "provisioned-by", "value": "onos-odtn"},
+            ],
             "modulation-format": MODULATION_FORMAT,
             "end-point": twin_endpoints,
         }
@@ -451,7 +492,17 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
 
     if response.status_code in (200, 201):
         payload = response.json()
-        registry.record(onos_uuid, payload)
+        registry.record(
+            onos_uuid,
+            payload,
+            endpoints={
+                "onos-in-port": onos_ports[0],
+                "onos-out-port": onos_ports[1],
+                "onos-port-pair": port_pair,
+                "a-end": node_names[0],
+                "z-end": node_names[1],
+            },
+        )
         service = payload.get("tapi-connectivity:connectivity-service", {})
         slot = service.get("frequency-slot", {})
         log.info(
@@ -558,6 +609,8 @@ async def adapter_status(request: Request) -> dict[str, Any]:
         "expose-twin-services": EXPOSE_TWIN_SERVICES,
         "sip-count": len(catalogue),
         "onos-created-services": registry.all(),
+        # Join key between the ONOS Flows view and the twin's service list.
+        "service-endpoints": {u: registry.endpoints(u) for u in registry.uuids()},
         "recent-rejections": registry.rejections[-10:],
     }
 

@@ -266,6 +266,53 @@ def test_list_body_is_translated_to_the_twins_object_form(client, twin):
     assert got == [TWIN_SIP_A, TWIN_SIP_Z]
 
 
+def test_service_name_carries_the_onos_port_pair(client, twin):
+    """The port pair is the only identifier ONOS and the twin share, so it is
+    stamped into the T-API name list — that is what makes a row in the ONOS
+    Flows view findable in the TwinLight UI, which renders "service-name"."""
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    names = {
+        n["value-name"]: n["value"]
+        for n in twin.posted[0]["tapi-connectivity:connectivity-service"]["name"]
+    }
+    assert names["onos-port-pair"] == "1->2"
+    assert names["provisioned-by"] == "onos-odtn"
+    # Both the ports (to match ONOS) and the cities (to be readable on stage).
+    assert "1->2" in names["service-name"]
+    assert "Abilene -> Atlanta" in names["service-name"]
+
+
+def test_status_exposes_the_join_key(client, twin):
+    """correlate.sh joins ONOS flows to twin services on the port pair."""
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    endpoints = client.get("/adapter/status").json()["service-endpoints"]["onos-uuid-1"]
+    assert endpoints["onos-in-port"] == 1
+    assert endpoints["onos-out-port"] == 2
+    assert endpoints["onos-port-pair"] == "1->2"
+    assert (endpoints["a-end"], endpoints["z-end"]) == ("Abilene", "Atlanta")
+
+
+def test_endpoints_are_forgotten_on_delete(client, twin):
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    client.delete(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/"
+        "connectivity-service=onos-uuid-1"
+    )
+    assert client.get("/adapter/status").json()["service-endpoints"] == {}
+
+
 def test_qot_refusal_is_relayed_unchanged_and_recorded(client, twin):
     """A 409 is the twin refusing on physics grounds. ONOS must see it, so the
     flow rule fails rather than appearing installed."""

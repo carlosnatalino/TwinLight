@@ -107,8 +107,17 @@ wait_for() {
 }
 
 require_stack() {
-  curl -sSf "${ADAPTER_URL}/health" >/dev/null 2>&1 \
-    || die "adapter not reachable at ${ADAPTER_URL} — run onos/scripts/demo-up.sh first"
+  # Tolerate a short startup window: these scripts are often run immediately
+  # after demo-up.sh or a `compose up --build` of the adapter, where the
+  # container is up but uvicorn has not bound yet. Anything longer than this is
+  # a real problem worth reporting rather than waiting on.
+  local waited=0
+  until curl -sSf "${ADAPTER_URL}/health" >/dev/null 2>&1; do
+    [ "${waited}" -lt 30 ] \
+      || die "adapter not reachable at ${ADAPTER_URL} — run onos/scripts/demo-up.sh first"
+    sleep 3
+    waited=$((waited + 3))
+  done
   onos_ready \
     || die "ONOS not ready at ${ONOS_URL} — run onos/scripts/demo-up.sh first"
 }

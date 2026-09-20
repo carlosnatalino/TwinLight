@@ -177,6 +177,34 @@ spectrum heat map — and to **Grafana**, where the OPM series has started movin
 Poll it twice: the numbers change, because the four transient models are
 re-evaluated at read time rather than cached.
 
+**Tying the two views together.** ONOS and the twin share no identifier: ONOS's
+flow id never leaves ONOS, and the T-API service UUID the driver generates never
+appears in the Flows view. What they do share is the **in/out port pair**, so
+that is the join key. The adapter stamps it into the service's T-API name, which
+is what the TwinLight UI renders — a flow shown in ONOS as `2 -> 6` appears in
+the twin's service list as:
+
+```
+ONOS port 2->6  (Albany -> Baltimore)
+```
+
+For the full correspondence, including ONOS's flow ids and the twin's physics in
+one table:
+
+```bash
+./onos/scripts/correlate.sh
+```
+
+```
+  ONOS FLOW ID         ONOS STATE   PORTS   LIGHTPATH                  SERVICE          KM  GSNR dB        BER
+  ----------------------------------------------------------------------------------------------------------
+  48976649027695507    ADDED        32->58  Los_Angeles -> San_Diego   b12fa809      223.8    20.87    2.0e-28
+  48976650132659142    ADDED        2->6    Albany -> Baltimore        eca1f799      830.6    11.43    1.9e-04
+  48976647806749592    ADDED        1->4    Abilene -> Atlanta         761bf68f     2148.7     3.02    1.6e-01
+```
+
+A flow with no twin service in that table is one the twin refused.
+
 > **Worth being explicit about on stage**, because someone will ask: admission
 > gates on the *pristine GNPy baseline* (11.9 dB here), while `/internal/opm`
 > reports the baseline **after** the transient layer, which is why the live GSNR
@@ -206,10 +234,16 @@ curl -s -X POST localhost:8282/adapter/modulation \
 ```
 
 The twin returns RFC 8040 `409 resource-denied`, the adapter relays it
-unchanged, and ONOS leaves the flow rule in `PENDING_ADD` rather than `ADDED` —
-visible in `./onos/scripts/lightpath.sh list` and in the ONOS GUI. The same A–Z
+unchanged, and ONOS leaves the flow rule stuck in `PENDING_ADD`. The same A–Z
 pair that closes at DP-QPSK does not close at DP-16QAM, and the twin is what
 knows that.
+
+> **Read `PENDING_ADD` carefully — it is not by itself a refusal.** Every flow
+> starts there, and an *admitted* one transitions to `ADDED` on ONOS's next
+> reconciliation poll, which took about a minute in testing. A refused flow is
+> one that is *still* `PENDING_ADD` after that. The unambiguous signal is
+> `./onos/scripts/correlate.sh`: a refused flow has no twin service against it,
+> and the reason is spelled out at `localhost:8282/adapter/status`.
 
 For a sharper version of the same point, try a *marginal* pair instead — this
 one misses by 0.2 dB, which makes it obvious the twin is doing real arithmetic
@@ -267,6 +301,7 @@ Restore with `./onos/scripts/fault.sh heal-all`.
 | `scripts/validate.sh` | 16 end-to-end checks across all layers; non-zero exit on any failure |
 | `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range, so every UI has state to show (`--reset` clears first) |
 | `scripts/lightpath.sh` | `create <A> <Z>` / `list` / `delete <flow-id>` / `clear` — provisioning driven from ONOS |
+| `scripts/correlate.sh` | Join the ONOS Flows view to the twin's service list, one row per flow (`--json` for the raw join) |
 | `scripts/fault.sh` | `list` / `cut <uid>` / `cut-path <svc-uuid>` / `heal <uid>` / `heal-all` |
 | `scripts/onos-cli.sh` | ONOS Karaf CLI, interactive or one-shot |
 | `scripts/demo-down.sh` | Stop the stack (`--purge` also drops volumes) |
