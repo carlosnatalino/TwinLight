@@ -70,7 +70,7 @@ TWIN_BASE_URL = os.getenv("TWIN_BASE_URL", "http://twin:8080").rstrip("/")
 # Modulation format the adapter requests when ONOS asks for a lightpath. ONOS's
 # TAPI 2.1 connectivity request has nowhere to carry one, so it is adapter
 # policy. Flipping this to DP-16QAM is the "the twin refuses an infeasible
-# request" demo beat -- see onos/README.md.
+# request" demo beat -- see integrations/onos/README.md.
 MODULATION_FORMAT = os.getenv("ADAPTER_MODULATION", "DP-QPSK")
 
 # Must be one of the strings ONOS's TapiDeviceHelper.getChannelSpacing()

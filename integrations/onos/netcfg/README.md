@@ -1,10 +1,11 @@
 # netcfg — registering the twin as an ODTN device
 
-`twinlight-ols.json` is pushed to ONOS by `../scripts/demo-up.sh`:
+`twinlight-ols.json` is pushed to ONOS by
+`integrations/onos/scripts/demo-up.sh`. Run from the repository root:
 
 ```bash
 curl -u onos:rocks -X POST -H 'Content-Type: application/json' \
-     -d @onos/netcfg/twinlight-ols.json \
+     -d @integrations/onos/netcfg/twinlight-ols.json \
      http://localhost:8181/onos/v1/network/configuration
 ```
 

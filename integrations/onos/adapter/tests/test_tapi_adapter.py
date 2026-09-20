@@ -10,7 +10,7 @@ integration run.
 Run them directly (the root ``pytest`` only collects ``tests/``, which keeps
 the twin's coverage gate measuring the twin):
 
-    .venv/bin/pytest onos/adapter/tests -q
+    .venv/bin/pytest integrations/onos/adapter/tests -q
 """
 
 from __future__ import annotations

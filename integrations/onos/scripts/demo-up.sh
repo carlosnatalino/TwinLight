@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bring up TwinLight + ONOS and register the twin as an ODTN open line system.
 #
-#   onos/scripts/demo-up.sh
+#   integrations/onos/scripts/demo-up.sh
 #
 # Idempotent: safe to re-run. On Apple Silicon expect 3–6 minutes end to end,
 # almost all of it ONOS's Karaf boot under Rosetta.
@@ -69,7 +69,7 @@ wait_for "port discovery" 180 bash -c "
   curl -sS -u '${ONOS_AUTH}' '${ONOS_URL}/onos/v1/devices/${DEVICE_ID}/ports' | python3 -c \"
 import json, sys
 sys.exit(0 if len(json.load(sys.stdin).get('ports', [])) > 0 else 1)
-\"" || die "ONOS discovered the device but zero ports — see onos/README.md § Troubleshooting"
+\"" || die "ONOS discovered the device but zero ports — see integrations/onos/README.md § Troubleshooting"
 
 discovered="$(onos_api GET "/onos/v1/devices/${DEVICE_ID}/ports" \
   | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["ports"]))')"
@@ -80,12 +80,12 @@ cat <<EOF
 ${C_BOLD}Stack is up.${C_RESET}
 
   ONOS GUI        ${ONOS_URL}/onos/ui          (onos / rocks)
-  ONOS CLI        onos/scripts/onos-cli.sh
+  ONOS CLI        integrations/onos/scripts/onos-cli.sh
   TwinLight UI    http://localhost:5173
   Grafana         http://localhost:3000        (admin / admin)
   Adapter status  ${ADAPTER_URL}/adapter/status
 
 Next:
-  onos/scripts/validate.sh                     # prove the integration works
-  onos/scripts/lightpath.sh create Abilene Atlanta
+  integrations/onos/scripts/validate.sh                     # prove the integration works
+  integrations/onos/scripts/lightpath.sh create Abilene Atlanta
 EOF

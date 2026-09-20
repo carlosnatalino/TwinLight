@@ -9,7 +9,7 @@ The distinction matters beyond tidiness: anything in column "twin" is a real
 T-API compliance improvement that benefits every client, and belongs in
 `docs/TAPI_COMPLIANCE.md`. Anything in column "adapter" is ONOS-specific glue
 that must **never** migrate into `src/twinlight` — that is exactly what
-[CLAUDE.md constraint #1](../CLAUDE.md) protects.
+[CLAUDE.md constraint #1](../../CLAUDE.md) protects.
 
 | # | Issue | Verdict |
 |---|-------|---------|
@@ -41,7 +41,7 @@ the last group of a UUID is a decimal port index — an assumption that holds fo
 the ADVA OLS the driver was written against and for nothing else.
 
 T-API's `uuid` is an RFC 4122 UUID, and TwinLight's `uuid5(NAMESPACE_DNS, ...)`
-is both correct and required by [CLAUDE.md constraint #8](../CLAUDE.md)
+is both correct and required by [CLAUDE.md constraint #8](../../CLAUDE.md)
 (determinism). Its last group is hex, so `decode()` throws.
 
 **Verdict: adapter, permanently.** Renumbering SIPs in the twin to please one
@@ -120,7 +120,7 @@ deleted.
 standard T-API, not an ONOS invention — ONOS is entitled to expect it.
 
 TwinLight does not expose it, which
-[docs/TAPI_COMPLIANCE.md](../docs/TAPI_COMPLIANCE.md) already concedes
+[docs/TAPI_COMPLIANCE.md](../../docs/TAPI_COMPLIANCE.md) already concedes
 ("Photonic Media — ◐ Partial … Media-channel and OTSi resources are not
 exposed"). ONOS dereferences it with no null check, so its absence is what
 produces a device with zero ports.

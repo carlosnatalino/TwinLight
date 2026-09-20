@@ -132,7 +132,7 @@ after="$(curl -sS "${ADAPTER_URL}/adapter/status" \
 printf '\n'
 if [ "${after}" = "0" ] && [ "$(onos_flow_count)" != "0" ]; then
   warn "ONOS-created lightpaths were torn down by removeInitalConnectivityServices()"
-  warn "re-provision them with: onos/scripts/seed-demo.sh --reset"
+  warn "re-provision them with: integrations/onos/scripts/seed-demo.sh --reset"
 else
   ok "resync complete; ONOS-created lightpaths survived"
 fi

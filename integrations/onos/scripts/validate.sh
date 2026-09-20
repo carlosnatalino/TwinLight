@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end validation of the TwinLight <-> ONOS integration.
 #
-#   onos/scripts/validate.sh
+#   integrations/onos/scripts/validate.sh
 #
 # Runs 16 checks across all three layers and exits non-zero if any fail. Run it
 # once before the talk; if it is green, the demo will work.
@@ -11,7 +11,7 @@
 # makes check 13 (admit) and check 14 (refuse) both meaningful. Override for
 # another topology:
 #
-#   VALIDATE_A=Albany VALIDATE_Z=Baltimore onos/scripts/validate.sh
+#   VALIDATE_A=Albany VALIDATE_Z=Baltimore integrations/onos/scripts/validate.sh
 
 . "$(dirname "$0")/lib.sh"
 

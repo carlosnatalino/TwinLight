@@ -6,7 +6,8 @@ set -euo pipefail
 
 # Repo root, regardless of where the caller invoked the script from.
 ONOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_ROOT="$(cd "${ONOS_DIR}/.." && pwd)"
+# integrations/onos/scripts -> integrations/onos -> integrations -> repo root.
+REPO_ROOT="$(cd "${ONOS_DIR}/../.." && pwd)"
 
 ONOS_URL="${ONOS_URL:-http://localhost:8181}"
 ONOS_AUTH="${ONOS_AUTH:-onos:rocks}"
@@ -114,10 +115,10 @@ require_stack() {
   local waited=0
   until curl -sSf "${ADAPTER_URL}/health" >/dev/null 2>&1; do
     [ "${waited}" -lt 30 ] \
-      || die "adapter not reachable at ${ADAPTER_URL} — run onos/scripts/demo-up.sh first"
+      || die "adapter not reachable at ${ADAPTER_URL} — run integrations/onos/scripts/demo-up.sh first"
     sleep 3
     waited=$((waited + 3))
   done
   onos_ready \
-    || die "ONOS not ready at ${ONOS_URL} — run onos/scripts/demo-up.sh first"
+    || die "ONOS not ready at ${ONOS_URL} — run integrations/onos/scripts/demo-up.sh first"
 }

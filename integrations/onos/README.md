@@ -10,7 +10,7 @@ with real GNPy physics — including refusing requests that will not close.
                  │  ODTN "ols" driver, REST southbound
                  │  T-API v2.1 over /restconf/data/…
                  ▼
-     T-API adapter  (:8282)          ← onos/adapter/tapi_adapter.py
+     T-API adapter  (:8282)          ← integrations/onos/adapter/tapi_adapter.py
                  │  T-API v2.6.0 over /data/…
                  ▼
        TwinLight  (:8080 REST, :50051 gNMI)
@@ -27,7 +27,7 @@ ONOS's ODTN driver was written against **T-API v2.1** in 2018 and has not moved
 since; TwinLight serves **T-API v2.6.0**. The adapter is the version bridge. It
 is deliberately outside `src/twinlight`, because the reshaping it performs is
 *not* standard T-API and
-[CLAUDE.md constraint #1](../CLAUDE.md) keeps the twin's T-API modules pure.
+[CLAUDE.md constraint #1](../../CLAUDE.md) keeps the twin's T-API modules pure.
 
 Four concrete incompatibilities, all read off the ONOS driver source rather than
 any specification:
@@ -101,8 +101,8 @@ this, neither configurable:
 ### Forcing a resync
 
 ```bash
-./onos/scripts/resync.sh          # bounce the device, re-run port discovery
-./onos/scripts/resync.sh --check  # compare what each side holds, change nothing
+./integrations/onos/scripts/resync.sh          # bounce the device, re-run port discovery
+./integrations/onos/scripts/resync.sh --check  # compare what each side holds, change nothing
 ```
 
 This removes and re-adds the device in netcfg, which is the supported way to
@@ -139,28 +139,50 @@ memory, or ONOS will OOM mid-boot.
 
 ## Quick start
 
+**Every command in this document is run from the repository root.**
+
 ```bash
-# from the repository root
-./onos/scripts/demo-up.sh        # builds + boots everything, registers the device
-./onos/scripts/validate.sh       # 16 checks; green means the demo will work
-./onos/scripts/seed-demo.sh      # optional: provision 8 lightpaths to explore
+./integrations/onos/scripts/demo-up.sh     # builds + boots everything, registers the device
+./integrations/onos/scripts/validate.sh    # 16 checks; green means the demo will work
+./integrations/onos/scripts/seed-demo.sh   # optional: provision 8 lightpaths to explore
 ```
 
 `demo-up.sh` is idempotent — re-run it freely. First run takes 5–10 minutes
 (image pulls, the amd64 twin build, ONOS boot); later runs are much quicker.
+
+### Driving Compose directly
+
+`demo-up.sh` wraps Compose and additionally waits for ONOS, activates the ODTN
+apps and pushes the netcfg — so prefer it. If you want the raw command, the ONOS
+file is an **overlay** on the root stack and both files must be passed together,
+from the repository root:
+
+```bash
+docker compose -f docker-compose.yml \
+               -f integrations/onos/docker-compose.onos.yml up -d --build
+```
+
+Order matters and the working directory matters: Compose takes its project
+directory from the **first** `-f` file, and the adapter's build context
+(`./integrations/onos/adapter`) is resolved against it. Running this from inside
+`integrations/onos/` will not work.
+
+Bringing the stack up this way leaves the device unregistered in ONOS, so run
+`./integrations/onos/scripts/demo-up.sh` afterwards — or push the netcfg
+yourself, as [netcfg/README.md](netcfg/README.md) describes.
 
 When it finishes:
 
 | What | Where | Credentials |
 |------|-------|-------------|
 | ONOS GUI | <http://localhost:8181/onos/ui> | `onos` / `rocks` |
-| ONOS CLI | `./onos/scripts/onos-cli.sh` | `onos` / `rocks` |
+| ONOS CLI | `./integrations/onos/scripts/onos-cli.sh` | `onos` / `rocks` |
 | TwinLight UI | <http://localhost:5173> | — |
 | Grafana | <http://localhost:3000> | `admin` / `admin` |
 | Adapter status | <http://localhost:8282/adapter/status> | — |
 | Twin API docs | <http://localhost:8080/docs> | — |
 
-Tear down with `./onos/scripts/demo-down.sh` (add `--purge` to drop volumes).
+Tear down with `./integrations/onos/scripts/demo-down.sh` (add `--purge` to drop volumes).
 
 ---
 
@@ -175,8 +197,8 @@ the ONOS GUI, the TwinLight UI, and Grafana.
 domain, with no twin-specific code in the controller.*
 
 ```bash
-./onos/scripts/onos-cli.sh devices
-./onos/scripts/onos-cli.sh ports rest:172.28.0.10:8282
+./integrations/onos/scripts/onos-cli.sh devices
+./integrations/onos/scripts/onos-cli.sh ports rest:172.28.0.10:8282
 ```
 
 `devices` shows one device of type `OLS`. `ports` shows **75 OCh ports**, one per
@@ -209,7 +231,7 @@ port 4 is `trx Atlanta`.
 RMSA + QoT admission, not a bookkeeping entry.*
 
 ```bash
-./onos/scripts/lightpath.sh create Abilene Atlanta
+./integrations/onos/scripts/lightpath.sh create Abilene Atlanta
 ```
 
 What happens, and it is worth narrating:
@@ -249,10 +271,10 @@ curl -s localhost:8080/data/tapi-connectivity:connectivity-context/connectivity-
   | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["tapi-connectivity:connectivity-context"]["connectivity-service"]), "services")'
 
 # 2. provision it FROM ONOS — a flow rule, nothing T-API in sight
-./onos/scripts/lightpath.sh create Boston New_York
+./integrations/onos/scripts/lightpath.sh create Boston New_York
 
 # 3. the same lightpath, now on the twin, with GNPy physics attached
-./onos/scripts/correlate.sh
+./integrations/onos/scripts/correlate.sh
 ```
 
 Then point at the twin's Services page: a new entry named
@@ -274,7 +296,7 @@ For the full correspondence, including ONOS's flow ids and the twin's physics in
 one table:
 
 ```bash
-./onos/scripts/correlate.sh
+./integrations/onos/scripts/correlate.sh
 ```
 
 ```
@@ -307,7 +329,7 @@ curl -s -X POST localhost:8282/adapter/modulation \
      -H 'Content-Type: application/json' \
      -d '{"modulation-format":"DP-16QAM"}'
 
-./onos/scripts/lightpath.sh create Abilene Atlanta
+./integrations/onos/scripts/lightpath.sh create Abilene Atlanta
 ```
 
 ```
@@ -324,7 +346,7 @@ knows that.
 > starts there, and an *admitted* one transitions to `ADDED` on ONOS's next
 > reconciliation poll, which took about a minute in testing. A refused flow is
 > one that is *still* `PENDING_ADD` after that. The unambiguous signal is
-> `./onos/scripts/correlate.sh`: a refused flow has no twin service against it,
+> `./integrations/onos/scripts/correlate.sh`: a refused flow has no twin service against it,
 > and the reason is spelled out at `localhost:8282/adapter/status`.
 
 For a sharper version of the same point, try a *marginal* pair instead — this
@@ -332,7 +354,7 @@ one misses by 0.2 dB, which makes it obvious the twin is doing real arithmetic
 rather than applying a distance cutoff:
 
 ```bash
-./onos/scripts/lightpath.sh create Albany Baltimore
+./integrations/onos/scripts/lightpath.sh create Albany Baltimore
 #   REFUSED by the twin (rmsa-qot-refused)
 #     Path GSNR 15.8 dB below required 16.0 dB (req 14.5 + margin 1.5)
 ```
@@ -348,26 +370,26 @@ curl -s -X POST localhost:8282/adapter/modulation \
 > so once modulation is back at DP-QPSK the previously-refused flow may install
 > itself a few seconds later and appear as a new lightpath. That is ONOS's
 > normal flow-reconciliation behaviour and is worth pointing at rather than
-> being surprised by. `./onos/scripts/lightpath.sh clear` between acts avoids
+> being surprised by. `./integrations/onos/scripts/lightpath.sh clear` between acts avoids
 > it.
 
 ### Act 4 (optional) — fiber cut (≈1 min)
 
 ```bash
-./onos/scripts/lightpath.sh create Albany Baltimore
-./onos/scripts/fault.sh cut-path <service-uuid>      # uuid from the output above
+./integrations/onos/scripts/lightpath.sh create Albany Baltimore
+./integrations/onos/scripts/fault.sh cut-path <service-uuid>      # uuid from the output above
 ```
 
 The twin's `/config/` plane marks the fiber failed, invalidates every affected
 baseline, and OPM for the lightpath collapses to `status=link-failed`. Grafana
 shows the drop immediately.
 
-Restore with `./onos/scripts/fault.sh heal-all`.
+Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 
 > **Be honest about the boundary here.** ONOS is *not* notified of the fault
 > through a standard interface: T-API v2.6 defines a `tapi-fault` module and
 > TwinLight does not implement it (see
-> [docs/TAPI_COMPLIANCE.md](../docs/TAPI_COMPLIANCE.md)). ONOS keeps the device
+> [docs/TAPI_COMPLIANCE.md](../../docs/TAPI_COMPLIANCE.md)). ONOS keeps the device
 > up and the flow installed; what changes is the physics the twin reports. That
 > gap — closing the loop from twin-detected impairment back to controller
 > re-optimisation — is the natural next step, and a good thing to say out loud
@@ -412,7 +434,7 @@ Introspection, safe to call any time:
 
 ## Configuration
 
-`onos/docker-compose.onos.yml` environment, on the `tapi-adapter` service:
+`integrations/onos/docker-compose.onos.yml` environment, on the `tapi-adapter` service:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
@@ -452,7 +474,7 @@ A compose service name will not work there: ONOS parses that field as an
 `IpAddress`.
 
 **`ols` driver missing.** `org.onosproject.odtn-service` did not activate.
-`./onos/scripts/onos-cli.sh apps -a -s` to check, then
+`./integrations/onos/scripts/onos-cli.sh apps -a -s` to check, then
 `app activate org.onosproject.odtn-service`.
 
 **Flow rule stays `PENDING_ADD`.** Expected when the twin refused the request —
