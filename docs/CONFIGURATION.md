@@ -117,7 +117,7 @@ edfa_reservoir:
 | Field | Default | Meaning and source |
 |-------|---------|--------------------|
 | `tau_ms` | `10.0` | Erbium metastable lifetime [ms] — Sun, Zyskind & Srivastava 1997 |
-| `gain_per_channel_db` | `0.3` | Per-channel GSNR contribution [dB]; the cascade accumulates linearly in dB |
+| `gain_per_channel_db` | `0.3` | Peak gain excursion [dB] per channel of load step, at the moment of an add/drop; the cascade accumulates linearly in dB (Sun 1997). It decays to zero with τ_e — it is **not** a standing per-channel penalty, see [PHYSICS.md § 2.1](PHYSICS.md) |
 | `tau_add_factor` | `0.001` | τ_e/τ for channel-add events — Bononi & Rusch 1998 Eq. 29 (≈1–10 µs) |
 | `tau_drop_factor` | `0.01` | τ_e/τ for channel-drop events — ibid. (≈100–500 µs) |
 | `drift_period_multiplier` | `100.0` | Sinusoidal-fallback drift period multiplier |

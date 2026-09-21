@@ -74,13 +74,20 @@ class TestApplyAllTransients:
         )
 
         baseline = self._make_baseline()
-        result = apply_all_transients(
+        # At the event: 2 EDFAs × -0.3 dB of gain excursion.
+        peak = apply_all_transients(
+            baseline, "svc-1", "DP-QPSK", t=1e-9,
+            cfg=cfg, edfa_tracker=tracker,
+        )
+        assert abs(peak["gsnr-db"] - (25.0 - 0.6)) < 0.1
+
+        # Once relaxed, the cascade is back at the designed operating
+        # point the baseline already represents — no standing offset.
+        settled = apply_all_transients(
             baseline, "svc-1", "DP-QPSK", t=100.0,
             cfg=cfg, edfa_tracker=tracker,
         )
-        # After settling: 2 EDFAs × -0.3 = -0.6 dB
-        expected_gsnr = 25.0 - 0.6
-        assert abs(result["gsnr-db"] - expected_gsnr) < 0.1
+        assert abs(settled["gsnr-db"] - 25.0) < 0.1
 
     def test_all_models_degrade_gsnr(self):
         """With all models enabled, GSNR should be lower than baseline."""

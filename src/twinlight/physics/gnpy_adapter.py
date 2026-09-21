@@ -165,6 +165,10 @@ def compute_path_baseline(
             si = el(si)
 
     # Extract worst-channel (min GSNR) metrics.
+    # Unit conversions follow gnpy's own Transceiver._calc_* methods, which
+    # are the authority for what SpectralInformation carries: accumulated
+    # CD is in s/m (×1e3 → ps/nm), PMD in s (×1e12 → ps), latency in s
+    # (×1e3 → ms).
     worst = int(np.argmin(si.gsnr_db))
     pmd_ps = float(np.max(si.pmd) * 1e12)   # s → ps
     latency_ms = float(si.latency[0] * 1e3)  # s → ms (same for all channels)
@@ -172,7 +176,7 @@ def compute_path_baseline(
     return OpmBaseline(
         gsnr_db=float(si.gsnr_db[worst]),
         osnr_ase_db=float(si.snr_lin_db[worst]),
-        cd_ps_nm=float(si.chromatic_dispersion[worst]),
+        cd_ps_nm=float(si.chromatic_dispersion[worst]) * 1e3,  # s/m → ps/nm
         pmd_ps=pmd_ps,
         latency_ms=latency_ms,
         total_fiber_km=_sum_fiber_km(path_items),

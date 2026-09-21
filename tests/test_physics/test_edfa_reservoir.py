@@ -36,8 +36,15 @@ class TestEdfaStateTracker:
         )
         assert result != 0.0
 
-    def test_transient_decays_exponentially(self):
-        """Deviation should decay toward new steady state."""
+    def test_transient_decays_to_designed_operating_point(self):
+        """Deviation decays back to zero, not to a standing offset.
+
+        The QoT baseline already represents the amplifier's designed
+        operating point, so a settled EDFA must contribute 0 dB. A
+        non-zero steady state would double-count the loading and, summed
+        over a long cascade, swamp the baseline (the -9 dB Abilene→Atlanta
+        regression this test guards).
+        """
         tracker = EdfaStateTracker()
         cfg = EdfaReservoirConfig(
             tau_ms=10.0,
@@ -49,22 +56,21 @@ class TestEdfaStateTracker:
             ["edfa1"], delta_channels=+1, cfg=cfg, t=t_event
         )
 
-        # Right after event: far from steady state
+        # Right after the event: the full excursion, gain compressed.
         early = tracker.get_total_delta_gsnr_db(
-            ["edfa1"], t=t_event + 1e-6
+            ["edfa1"], t=t_event + 1e-9
         )
-        # After many time constants: close to steady state
+        assert abs(early - (-0.3)) < 0.01
+
+        # After many time constants: relaxed back to the baseline.
         late = tracker.get_total_delta_gsnr_db(
             ["edfa1"], t=t_event + 1.0  # 1 s >> 10 µs tau_eff
         )
-        # Steady state for 1 channel: -1 * 0.3 = -0.3 dB
-        assert abs(late - (-0.3)) < 0.01
-        # Right after the event the transient has barely started, so `early`
-        # is much further from the -0.3 dB steady state than `late`.
-        assert abs(early - (-0.3)) > abs(late - (-0.3))
+        assert abs(late) < 0.01
+        assert abs(early) > abs(late)
 
     def test_asymmetric_time_constants(self):
-        """Add should be faster than drop (smaller tau_eff)."""
+        """Add should relax faster than drop (smaller tau_eff)."""
         cfg = EdfaReservoirConfig(
             tau_ms=10.0,
             gain_per_channel_db=0.3,
@@ -72,69 +78,97 @@ class TestEdfaStateTracker:
             tau_drop_factor=0.01,   # 100 µs
         )
 
-        # Test add transient
+        # Add transient: settled after 5 tau_add.
         tracker_add = EdfaStateTracker()
         t0 = 0.0
         tracker_add.notify_channel_change(
             ["edfa1"], delta_channels=+1, cfg=cfg, t=t0
         )
-        # At t = 50 µs (5× add tau, 0.5× drop tau)
-        t_test = t0 + 50e-6
         add_dev = tracker_add.get_total_delta_gsnr_db(
-            ["edfa1"], t=t_test
+            ["edfa1"], t=t0 + 50e-6   # 5× add tau, 0.5× drop tau
         )
-        # Should be mostly settled after 5 tau_add
-        ss = -0.3  # steady state for 1 channel
-        assert abs(add_dev - ss) < 0.01
+        assert abs(add_dev) < 0.01
 
-        # Test drop transient
+        # Drop transient from a settled amplifier: at 50 µs only half a
+        # tau_drop has elapsed, so a sizeable positive excursion remains.
         tracker_drop = EdfaStateTracker()
         tracker_drop.notify_channel_change(
             ["edfa1"], delta_channels=+1, cfg=cfg, t=t0
         )
-        # Let it settle
         tracker_drop.notify_channel_change(
             ["edfa1"], delta_channels=-1, cfg=cfg, t=t0 + 1.0
         )
-        t_test2 = t0 + 1.0 + 50e-6
         drop_dev = tracker_drop.get_total_delta_gsnr_db(
-            ["edfa1"], t=t_test2
+            ["edfa1"], t=t0 + 1.0 + 50e-6
         )
-        # Drop should NOT be settled yet at 50 µs (tau_drop = 100 µs)
-        # It's transitioning from -0.3 to 0.0
-        assert drop_dev < -0.05  # still significantly displaced
+        # Dropping a channel lets gain overshoot: positive excursion.
+        assert drop_dev > 0.05
 
     def test_cascade_accumulates(self):
-        """Multiple EDFAs should accumulate deviations linearly."""
+        """Multiple EDFAs accumulate excursions linearly in dB."""
         tracker = EdfaStateTracker()
         cfg = EdfaReservoirConfig(gain_per_channel_db=0.3)
         edfa_uids = [f"edfa{i}" for i in range(5)]
         tracker.notify_channel_change(
             edfa_uids, delta_channels=+1, cfg=cfg, t=0.0
         )
-        # After settling: each EDFA contributes -0.3 dB
-        result = tracker.get_total_delta_gsnr_db(
-            edfa_uids, t=10.0  # well past any transient
+        # At the event, each EDFA contributes -0.3 dB: 5 × -0.3 = -1.5 dB
+        # (Sun 1997 cascade accumulation).
+        peak = tracker.get_total_delta_gsnr_db(edfa_uids, t=1e-9)
+        assert abs(peak - (-1.5)) < 0.01
+
+        # Well past the transient the whole cascade is back at baseline.
+        settled = tracker.get_total_delta_gsnr_db(edfa_uids, t=10.0)
+        assert abs(settled) < 0.01
+
+    def test_multi_channel_step_scales_excursion(self):
+        """Excursion scales with the size of the load step."""
+        tracker = EdfaStateTracker()
+        cfg = EdfaReservoirConfig(gain_per_channel_db=0.3)
+        tracker.notify_channel_change(
+            ["edfa1"], delta_channels=+4, cfg=cfg, t=0.0
         )
-        # 5 × -0.3 = -1.5 dB
-        assert abs(result - (-1.5)) < 0.01
+        peak = tracker.get_total_delta_gsnr_db(["edfa1"], t=1e-9)
+        assert abs(peak - (-1.2)) < 0.01
+
+    def test_repeated_adds_do_not_accumulate_a_standing_offset(self):
+        """Successive settled adds must not stack into a permanent penalty.
+
+        This is the shape of the original defect: each admitted service
+        pushed the steady state further negative, so N services on the
+        same amplifiers read N × 0.3 dB low forever.
+        """
+        tracker = EdfaStateTracker()
+        cfg = EdfaReservoirConfig(gain_per_channel_db=0.3)
+        for i in range(10):
+            tracker.notify_channel_change(
+                ["edfa1"], delta_channels=+1, cfg=cfg, t=float(i),
+            )
+        assert abs(tracker.get_total_delta_gsnr_db(["edfa1"], t=100.0)) < 0.01
 
     def test_channel_drop_releases(self):
-        """Dropping a channel should move toward less negative SS."""
+        """Dropping a channel settles back to zero deviation."""
         tracker = EdfaStateTracker()
         cfg = EdfaReservoirConfig(gain_per_channel_db=0.3)
         tracker.notify_channel_change(
             ["edfa1"], delta_channels=+1, cfg=cfg, t=0.0
         )
-        # Let it settle at -0.3
         tracker.notify_channel_change(
             ["edfa1"], delta_channels=-1, cfg=cfg, t=10.0
         )
-        # After settling again: 0 channels → 0.0 dB deviation
         result = tracker.get_total_delta_gsnr_db(
             ["edfa1"], t=20.0
         )
         assert abs(result) < 0.01
+
+    def test_drop_below_zero_channels_is_not_an_event(self):
+        """A drop that the zero-clamp absorbs perturbs nothing."""
+        tracker = EdfaStateTracker()
+        cfg = EdfaReservoirConfig(gain_per_channel_db=0.3)
+        tracker.notify_channel_change(
+            ["edfa1"], delta_channels=-1, cfg=cfg, t=0.0
+        )
+        assert tracker.get_total_delta_gsnr_db(["edfa1"], t=1e-9) == 0.0
 
 
 class TestDeltaGsnrDbFunction:
@@ -147,12 +181,20 @@ class TestDeltaGsnrDbFunction:
         tracker.notify_channel_change(
             ["edfa1"], delta_channels=+1, cfg=cfg, t=0.0
         )
-        result = delta_gsnr_db(
-            t=100.0, edfa_uids=["edfa1"],
-            cfg=cfg, edfa_tracker=tracker,
-        )
-        # Should be at steady state: -0.5 dB
-        assert abs(result - (-0.5)) < 0.01
+        # At the event: the full -0.5 dB excursion.
+        assert abs(
+            delta_gsnr_db(
+                t=1e-9, edfa_uids=["edfa1"],
+                cfg=cfg, edfa_tracker=tracker,
+            ) - (-0.5)
+        ) < 0.01
+        # Long after: relaxed to the designed operating point.
+        assert abs(
+            delta_gsnr_db(
+                t=100.0, edfa_uids=["edfa1"],
+                cfg=cfg, edfa_tracker=tracker,
+            )
+        ) < 0.01
 
     def test_without_tracker_uses_sinusoidal(self):
         """Without tracker, should fall back to sinusoidal model."""
