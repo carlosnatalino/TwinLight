@@ -31,6 +31,41 @@ from urllib.error import HTTPError
 
 MODULATION_FORMATS = ("DP-QPSK", "DP-16QAM", "DP-64QAM")
 
+# T-API v2.6.0 has no modulation leaf on connectivity-service; the photonic
+# module augments the end-point instead. Duplicated here rather than imported
+# because this script is deliberately stdlib-only. Note ONF spells 16QAM as
+# MT_DP-QAM16.
+_OTSIA_CSEP_SPEC = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
+_MODULATION_TO_MT = {
+    "DP-QPSK": "MT_DP-QPSK",
+    "DP-16QAM": "MT_DP-QAM16",
+    "DP-64QAM": "MT_DP-QAM64",
+}
+
+
+def _end_point(local_id: str, sip_uuid: str, modulation: str) -> dict:
+    """A connectivity-service end-point carrying the modulation augment."""
+    return {
+        "local-id": local_id,
+        "service-interface-point": {"service-interface-point-uuid": sip_uuid},
+        "layer-protocol-constraint": [
+            {
+                "local-id": "otsi",
+                _OTSIA_CSEP_SPEC: {
+                    "otsi-config": [
+                        {
+                            "local-id": "1",
+                            "modulation": {
+                                "standard-modulation-technique":
+                                    _MODULATION_TO_MT[modulation],
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+
 
 def _create_service(base: str, sips: list, modulation: str, attempts: int) -> bool:
     """Try random endpoint pairs until one service of `modulation` is admitted.
@@ -45,16 +80,9 @@ def _create_service(base: str, sips: list, modulation: str, attempts: int) -> bo
         body = {
             "tapi-connectivity:connectivity-service": {
                 "name": [{"value-name": "service-name", "value": name}],
-                "modulation-format": modulation,
                 "end-point": [
-                    {
-                        "local-id": "a-end",
-                        "service-interface-point": {"service-interface-point-uuid": a["uuid"]},
-                    },
-                    {
-                        "local-id": "z-end",
-                        "service-interface-point": {"service-interface-point-uuid": z["uuid"]},
-                    },
+                    _end_point("a-end", a["uuid"], modulation),
+                    _end_point("z-end", z["uuid"], modulation),
                 ],
             }
         }

@@ -128,10 +128,93 @@ export interface HealthResponse {
 export interface ConnectivityServiceEndPoint {
   "local-id": string;
   "service-interface-point": { "service-interface-point-uuid": string };
-  direction: string;
+  direction?: string;
+  /** Where T-API v2.6.0 carries modulation — see LayerProtocolConstraint. */
+  "layer-protocol-constraint"?: LayerProtocolConstraint[];
 }
 
 export type ModulationFormat = "DP-QPSK" | "DP-16QAM" | "DP-64QAM";
+
+/**
+ * ONF `tapi-photonic-media` modulation identities.
+ *
+ * `tapi-connectivity` has no modulation leaf, so T-API expresses it as an
+ * augment on the end-point. Note ONF spells 16QAM as `MT_DP-QAM16`.
+ */
+export type ModulationTechnique =
+  | "MT_DP-QPSK"
+  | "MT_DP-QAM16"
+  | "MT_DP-QAM64";
+
+export const MODULATION_TO_MT: Record<ModulationFormat, ModulationTechnique> = {
+  "DP-QPSK": "MT_DP-QPSK",
+  "DP-16QAM": "MT_DP-QAM16",
+  "DP-64QAM": "MT_DP-QAM64",
+};
+
+export const MT_TO_MODULATION: Record<ModulationTechnique, ModulationFormat> = {
+  "MT_DP-QPSK": "DP-QPSK",
+  "MT_DP-QAM16": "DP-16QAM",
+  "MT_DP-QAM64": "DP-64QAM",
+};
+
+/** The augment's JSON member name, module-qualified per RFC 7951 §4. */
+export const OTSIA_CSEP_SPEC =
+  "tapi-photonic-media:otsia-connectivity-service-end-point-spec";
+
+export interface LayerProtocolConstraint {
+  "local-id": string;
+  "layer-protocol-name"?: string;
+  [OTSIA_CSEP_SPEC]?: {
+    "otsi-config": {
+      "local-id": string;
+      modulation: { "standard-modulation-technique": ModulationTechnique };
+    }[];
+    "number-of-otsi"?: number;
+  };
+}
+
+/** Build an end-point carrying the T-API modulation augment. */
+export function tapiEndPoint(
+  localId: string,
+  sipUuid: string,
+  modulation: ModulationFormat,
+  direction?: string,
+): ConnectivityServiceEndPoint {
+  return {
+    "local-id": localId,
+    "service-interface-point": { "service-interface-point-uuid": sipUuid },
+    ...(direction ? { direction } : {}),
+    "layer-protocol-constraint": [
+      {
+        "local-id": "otsi",
+        [OTSIA_CSEP_SPEC]: {
+          "otsi-config": [
+            {
+              "local-id": "1",
+              modulation: {
+                "standard-modulation-technique": MODULATION_TO_MT[modulation],
+              },
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
+/** Read the modulation back off a service, or undefined if absent. */
+export function modulationOf(
+  service: ConnectivityService,
+): ModulationFormat | undefined {
+  const spec = service["end-point"]?.[0]?.["layer-protocol-constraint"]?.[0]?.[
+    OTSIA_CSEP_SPEC
+  ];
+  const mt = spec?.["otsi-config"]?.[0]?.modulation?.[
+    "standard-modulation-technique"
+  ];
+  return mt ? MT_TO_MODULATION[mt] : undefined;
+}
 
 /** T-API photonic media frequency-slot (assigned spectrum, read-only). */
 export interface FrequencySlot {
@@ -146,7 +229,6 @@ export interface ConnectivityService {
   "administrative-state": string;
   "operational-state": string;
   "lifecycle-state": string;
-  "modulation-format"?: ModulationFormat;
   /** Present when service has spectrum allocation (T-API L0). */
   "frequency-slot"?: FrequencySlot;
 }
@@ -157,7 +239,6 @@ export interface CreateConnectivityServiceRequest {
     "end-point": ConnectivityServiceEndPoint[];
     "administrative-state": string;
     "lifecycle-state": string;
-    "modulation-format"?: ModulationFormat;
   };
 }
 

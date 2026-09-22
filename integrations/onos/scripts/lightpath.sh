@@ -57,6 +57,20 @@ EOF
   printf '%s' "${after}" | python3 -c "
 import json, sys
 after = json.load(sys.stdin)
+def modulation_of(svc):
+    # T-API 2.6 puts modulation on the end-point, not on the service.
+    spec_key = 'tapi-photonic-media:otsia-connectivity-service-end-point-spec'
+    names = {'MT_DP-QPSK': 'DP-QPSK', 'MT_DP-QAM16': 'DP-16QAM',
+             'MT_DP-QAM64': 'DP-64QAM'}
+    for ep in svc.get('end-point') or []:
+        for lpc in ep.get('layer-protocol-constraint') or []:
+            for cfg in (lpc.get(spec_key) or {}).get('otsi-config') or []:
+                mt = (cfg.get('modulation') or {}).get(
+                    'standard-modulation-technique', '')
+                if mt.split(':')[-1] in names:
+                    return names[mt.split(':')[-1]]
+    return '?'
+
 before = json.loads(sys.argv[1])
 new = set(after['onos-created-services']) - set(before['onos-created-services'])
 rej_before = {(r['uuid'], r['at']) for r in before['recent-rejections']}
@@ -68,7 +82,7 @@ if new:
         slot = svc.get('frequency-slot') or {}
         print('  ADMITTED by the twin')
         print('    service uuid  : %s' % svc['uuid'])
-        print('    modulation    : %s' % svc.get('modulation-format'))
+        print('    modulation    : %s' % modulation_of(svc))
         print('    centre freq   : %s THz' % slot.get('nominal-central-frequency'))
         print('    slot width    : %s GHz' % slot.get('slot-width'))
 elif new_rej:
@@ -126,13 +140,26 @@ for f in mine:
   say "Connectivity services on the twin (created via ONOS)"
   curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c "
 import json, sys
+def modulation_of(svc):
+    # T-API 2.6 puts modulation on the end-point, not on the service.
+    spec_key = 'tapi-photonic-media:otsia-connectivity-service-end-point-spec'
+    names = {'MT_DP-QPSK': 'DP-QPSK', 'MT_DP-QAM16': 'DP-16QAM',
+             'MT_DP-QAM64': 'DP-64QAM'}
+    for ep in svc.get('end-point') or []:
+        for lpc in ep.get('layer-protocol-constraint') or []:
+            for cfg in (lpc.get(spec_key) or {}).get('otsi-config') or []:
+                mt = (cfg.get('modulation') or {}).get(
+                    'standard-modulation-technique', '')
+                if mt.split(':')[-1] in names:
+                    return names[mt.split(':')[-1]]
+    return '?'
 svcs = json.load(sys.stdin)['onos-created-services']
 if not svcs:
     print('    (none)')
 for u, payload in svcs.items():
     s = payload['tapi-connectivity:connectivity-service']
     slot = s.get('frequency-slot') or {}
-    print('    %s  %-9s  %s THz' % (u[:8], s.get('modulation-format'),
+    print('    %s  %-9s  %s THz' % (u[:8], modulation_of(s),
                                     slot.get('nominal-central-frequency')))
 "
 }

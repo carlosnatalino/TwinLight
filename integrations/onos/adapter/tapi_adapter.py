@@ -38,9 +38,12 @@ what the T-API specification says it should do. The four behaviours that matter:
 
 4. ``TapiFlowRuleProgrammable`` POSTs a connectivity-service whose body is a
    **JSON list** under ``tapi-connectivity:connectivity-service`` and carries
-   ``service-layer`` / ``service-type`` but no modulation format. TwinLight
-   expects a single object and a ``modulation-format``. Translated in
-   :func:`create_connectivity_service`.
+   ``service-layer`` / ``service-type`` but no modulation format. The twin
+   accepts either spelling of the body now (RFC 7951 §5.4 makes the array of
+   one correct, so that is no longer an incompatibility), but it still needs
+   a modulation, which T-API 2.1 has nowhere to carry. The adapter supplies
+   one as policy, in the T-API 2.6 place: a ``tapi-photonic-media`` augment
+   on the end-point. Translated in :func:`create_connectivity_service`.
 
 Non-T-API adapter introspection lives under ``/adapter/`` so it can never be
 confused with the RESTCONF surface ONOS polls.
@@ -97,6 +100,54 @@ HTTP_TIMEOUT = float(os.getenv("ADAPTER_HTTP_TIMEOUT", "120"))
 
 # ONOS re-publishes SIP UUIDs as "<real-uuid>-<index>"; this peels the index off.
 _INDEXED_SIP_RE = re.compile(r"^(?P<real>.+)-(?P<index>\d+)$")
+
+# T-API v2.6.0 has no modulation leaf on connectivity-service -- the photonic
+# module augments the end-point's layer-protocol-constraint instead, and that
+# is what the twin now accepts. Duplicated here rather than imported because
+# this adapter is a standalone container that does not install TwinLight.
+# Note ONF spells 16QAM as MT_DP-QAM16, not MT_DP-16QAM.
+OTSIA_CSEP_SPEC = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
+MODULATION_TO_MT = {
+    "DP-QPSK": "MT_DP-QPSK",
+    "DP-16QAM": "MT_DP-QAM16",
+    "DP-64QAM": "MT_DP-QAM64",
+}
+MT_TO_MODULATION = {mt: fmt for fmt, mt in MODULATION_TO_MT.items()}
+
+
+def _modulation_augment(modulation: str) -> dict[str, Any]:
+    """The layer-protocol-constraint entry carrying a modulation format."""
+    return {
+        "local-id": "otsi",
+        "layer-protocol-name": "PHOTONIC_MEDIA",
+        OTSIA_CSEP_SPEC: {
+            "otsi-config": [
+                {
+                    "local-id": "1",
+                    "modulation": {
+                        "standard-modulation-technique": MODULATION_TO_MT[
+                            modulation
+                        ],
+                    },
+                },
+            ],
+        },
+    }
+
+
+def _modulation_of(service: dict[str, Any]) -> str | None:
+    """Read a modulation format back off a twin connectivity-service."""
+    for end_point in service.get("end-point") or []:
+        for constraint in end_point.get("layer-protocol-constraint") or []:
+            spec = constraint.get(OTSIA_CSEP_SPEC) or {}
+            for cfg in spec.get("otsi-config") or []:
+                identity = (cfg.get("modulation") or {}).get(
+                    "standard-modulation-technique", ""
+                )
+                fmt = MT_TO_MODULATION.get(identity.split(":")[-1])
+                if fmt is not None:
+                    return fmt
+    return None
 
 
 class TwinUnavailableError(RuntimeError):
@@ -442,6 +493,11 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
             {
                 "local-id": str(local_id),
                 "service-interface-point": {"service-interface-point-uuid": twin_sip},
+                # The twin takes modulation as a T-API 2.6 photonic augment
+                # on the end-point, not as a field on the service.
+                "layer-protocol-constraint": [
+                    _modulation_augment(MODULATION_FORMAT)
+                ],
             }
         )
 
@@ -467,7 +523,6 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
                 {"value-name": "onos-port-pair", "value": port_pair},
                 {"value-name": "provisioned-by", "value": "onos-odtn"},
             ],
-            "modulation-format": MODULATION_FORMAT,
             "end-point": twin_endpoints,
         }
     }

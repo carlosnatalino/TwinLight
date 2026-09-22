@@ -53,6 +53,42 @@ MODULATION_TABLE: dict[str, ModulationParams] = {
 }
 
 
+# T-API v2.6.0 spells modulation as a `tapi-photonic-media:MT` identity on
+# the connectivity-service end-point (see models/connectivity.py). These are
+# the identities defined in tapi-photonic-media.yang; note the ONF naming is
+# MT_DP-QAM16, not MT_DP-16QAM.
+MODULATION_TO_MT: dict[ModulationFormat, str] = {
+    ModulationFormat.DP_QPSK: "MT_DP-QPSK",
+    ModulationFormat.DP_16QAM: "MT_DP-QAM16",
+    ModulationFormat.DP_64QAM: "MT_DP-QAM64",
+}
+
+MT_TO_MODULATION: dict[str, ModulationFormat] = {
+    mt: fmt for fmt, mt in MODULATION_TO_MT.items()
+}
+
+
+def modulation_from_mt(identity: str) -> ModulationFormat:
+    """Resolve a T-API ``MT`` identityref to a :class:`ModulationFormat`.
+
+    RFC 7951 §6.8 only requires the module prefix when the identity comes
+    from a different module than the leaf, which is not the case here — so
+    the canonical encoding is the bare ``MT_DP-QPSK``. A prefixed spelling
+    is still legal, and clients do send it, so both are accepted.
+
+    Raises:
+        ValueError: The identity is not one this twin can transmit.
+    """
+    bare = identity.split(":")[-1].strip()
+    try:
+        return MT_TO_MODULATION[bare]
+    except KeyError:
+        raise ValueError(
+            f"Unsupported modulation technique {identity!r}; "
+            f"this twin supports {sorted(MT_TO_MODULATION)}"
+        ) from None
+
+
 def get_params(fmt: str | ModulationFormat) -> ModulationParams:
     """Return ModulationParams for a given format string or enum value."""
     key = ModulationFormat(fmt) if isinstance(fmt, str) else fmt

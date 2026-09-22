@@ -10,8 +10,48 @@ from fastapi.testclient import TestClient
 from twinlight.app import create_app
 from twinlight.config import GnpyConfig, TwinConfig
 from twinlight.example_data import find_example_file
+from twinlight.models.connectivity import OTSIA_CSEP_SPEC
+from twinlight.physics.modulation import MODULATION_TO_MT, ModulationFormat
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def tapi_end_point(
+    local_id: str,
+    sip_uuid: str,
+    modulation: str = "DP-QPSK",
+) -> dict:
+    """A connectivity-service end-point in T-API v2.6.0 shape.
+
+    T-API expresses modulation as a ``tapi-photonic-media`` augment on the
+    end-point's layer-protocol-constraint, never as a field on the service
+    itself. Built here once so the modules that create services do not each
+    re-encode the augment — and so a future shape change is one edit.
+    """
+    return {
+        "local-id": local_id,
+        "service-interface-point": {
+            "service-interface-point-uuid": sip_uuid,
+        },
+        "layer-protocol-constraint": [
+            {
+                "local-id": "otsi",
+                OTSIA_CSEP_SPEC: {
+                    "otsi-config": [
+                        {
+                            "local-id": "1",
+                            "modulation": {
+                                "standard-modulation-technique":
+                                    MODULATION_TO_MT[
+                                        ModulationFormat(modulation)
+                                    ],
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    }
 
 
 @pytest.fixture

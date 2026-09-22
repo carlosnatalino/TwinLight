@@ -5,6 +5,7 @@ import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
 import { createClient, ApiError } from "@/api/client";
 import { extractName } from "@/lib/tapi-helpers";
+import { tapiEndPoint } from "@/api/types";
 import type { ModulationFormat, ServiceInterfacePoint, TapiNode } from "@/api/types";
 import { cn } from "@/lib/cn";
 
@@ -162,20 +163,13 @@ export default function AddServicePage() {
           ? { name: [{ "value-name": "service-name", value: serviceName.trim() }] }
           : {}),
         "end-point": [
-          {
-            "local-id": "a-end",
-            "service-interface-point": { "service-interface-point-uuid": aEndSip },
-            direction: aEndDir,
-          },
-          {
-            "local-id": "z-end",
-            "service-interface-point": { "service-interface-point-uuid": zEndSip },
-            direction: zEndDir,
-          },
+          // Modulation rides on the end-point: T-API v2.6.0 has no
+          // modulation leaf on the connectivity-service itself.
+          tapiEndPoint("a-end", aEndSip, modulationFormat, aEndDir),
+          tapiEndPoint("z-end", zEndSip, modulationFormat, zEndDir),
         ],
         "administrative-state": adminState,
         "lifecycle-state": lifecycleState,
-        "modulation-format": modulationFormat,
       },
     };
 

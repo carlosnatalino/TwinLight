@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests.conftest import tapi_end_point
+
 
 def _create_service(app: TestClient) -> str:
     """Create a test connectivity service and return its UUID."""
@@ -18,20 +20,9 @@ def _create_service(app: TestClient) -> str:
     body = {
         "tapi-connectivity:connectivity-service": {
             "name": [{"value-name": "service-name", "value": "test-diagram"}],
-            "modulation-format": "DP-QPSK",
             "end-point": [
-                {
-                    "local-id": "a-end",
-                    "service-interface-point": {
-                        "service-interface-point-uuid": sip_a
-                    },
-                },
-                {
-                    "local-id": "z-end",
-                    "service-interface-point": {
-                        "service-interface-point-uuid": sip_z
-                    },
-                },
+                tapi_end_point("a-end", sip_a),
+                tapi_end_point("z-end", sip_z),
             ],
         }
     }

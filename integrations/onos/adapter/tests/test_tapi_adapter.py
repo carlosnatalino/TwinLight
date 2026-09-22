@@ -260,7 +260,10 @@ def test_list_body_is_translated_to_the_twins_object_form(client, twin):
     assert isinstance(sent, dict), "twin expects a single object, not a list"
     # ONOS's UUID is reused so its later DELETE resolves without a lookup.
     assert sent["uuid"] == "onos-uuid-1"
-    assert sent["modulation-format"] == "DP-QPSK"
+    # Modulation goes in the T-API 2.6 place -- an augment on the end-point,
+    # since tapi-connectivity has no modulation leaf.
+    assert "modulation-format" not in sent
+    assert tapi_adapter._modulation_of(sent) == "DP-QPSK"
     # Index suffixes must be stripped or the twin cannot resolve the SIPs.
     got = [e["service-interface-point"]["service-interface-point-uuid"] for e in sent["end-point"]]
     assert got == [TWIN_SIP_A, TWIN_SIP_Z]
@@ -405,9 +408,49 @@ def test_modulation_switch_changes_what_the_twin_is_asked_for(client, twin, fmt)
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
     )
     sent = twin.posted[-1]["tapi-connectivity:connectivity-service"]
-    assert sent["modulation-format"] == fmt
+    assert tapi_adapter._modulation_of(sent) == fmt
 
 
 def test_unknown_modulation_is_rejected(client):
     r = client.post("/adapter/modulation", json={"modulation-format": "DP-256QAM"})
     assert r.status_code == 400
+
+
+def test_modulation_augment_has_the_tapi_2_6_shape(client, twin):
+    """The augment the twin is sent must match tapi-photonic-media.yang.
+
+    ONOS cannot express a modulation at all, so this is adapter policy --
+    but the shape it sends has to be the standard one, or the twin refuses
+    it and every ONOS flow rule fails.
+    """
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "u"}}
+    client.post("/adapter/modulation", json={"modulation-format": "DP-16QAM"})
+    client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    sent = twin.posted[-1]["tapi-connectivity:connectivity-service"]
+    for end_point in sent["end-point"]:
+        constraint = end_point["layer-protocol-constraint"][0]
+        assert constraint["layer-protocol-name"] == "PHOTONIC_MEDIA"
+        spec = constraint[tapi_adapter.OTSIA_CSEP_SPEC]
+        modulation = spec["otsi-config"][0]["modulation"]
+        # ONF spells 16QAM as MT_DP-QAM16.
+        assert modulation["standard-modulation-technique"] == "MT_DP-QAM16"
+
+
+def test_list_or_object_both_reach_the_twin(client, twin):
+    """The twin now accepts RFC 7951's array-of-one, so B3 is not adapter work.
+
+    The adapter still unwraps, because it has to read the end-points to
+    strip SIP index suffixes -- but it no longer does so to work around a
+    twin limitation.
+    """
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "u"}}
+    body = onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2")
+    assert isinstance(body["tapi-connectivity:connectivity-service"], list)
+    r = client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=body,
+    )
+    assert r.status_code == 201

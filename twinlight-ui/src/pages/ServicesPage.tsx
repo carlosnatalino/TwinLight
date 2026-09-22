@@ -7,6 +7,7 @@ import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
 import { useServicesStore } from "@/store/services";
 import { useServiceGraph } from "@/hooks/useServiceGraph";
+import { modulationOf } from "@/api/types";
 import type { ConnectivityService, ServiceInfoResponse } from "@/api/types";
 import { extractName, getNodeDisplayName } from "@/lib/tapi-helpers";
 import { createClient } from "@/api/client";
@@ -243,10 +244,10 @@ function ServiceDetailPanel({
               <p className="text-sm text-slate-800">{name}</p>
             </>
           )}
-          {service["modulation-format"] && (
+          {modulationOf(service) && (
             <>
               <p className="text-xs text-slate-500 mt-2 mb-1">Modulation format</p>
-              <p className="text-sm text-slate-800 font-mono">{service["modulation-format"]}</p>
+              <p className="text-sm text-slate-800 font-mono">{modulationOf(service)}</p>
             </>
           )}
           {service["frequency-slot"] && (

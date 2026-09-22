@@ -6,6 +6,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from tests.conftest import tapi_end_point
+
 _BASE = "/data/tapi-connectivity:connectivity-context"
 
 
@@ -20,10 +22,9 @@ def _create_service(app: TestClient, sip_a: str, sip_z: str) -> str:
     payload = {
         "tapi-connectivity:connectivity-service": {
             "name": [{"value-name": "service-name", "value": "snap-test"}],
-            "modulation-format": "DP-QPSK",
             "end-point": [
-                {"local-id": "a", "service-interface-point": {"service-interface-point-uuid": sip_a}},
-                {"local-id": "z", "service-interface-point": {"service-interface-point-uuid": sip_z}},
+                tapi_end_point("a", sip_a),
+                tapi_end_point("z", sip_z),
             ],
         }
     }

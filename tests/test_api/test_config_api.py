@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests.conftest import tapi_end_point
+
 
 def _device_uids_by_type(client: TestClient) -> dict[str, list[str]]:
     """Group device UIDs from GET /config/get by GNPy element type."""
@@ -23,14 +25,9 @@ def _create_service_via_api(client: TestClient) -> str:
     body = {
         "tapi-connectivity:connectivity-service": {
             "name": [{"value-name": "service-name", "value": "config-api-test"}],
-            "modulation-format": "DP-QPSK",
             "end-point": [
-                {"local-id": "a", "service-interface-point": {
-                    "service-interface-point-uuid": sip_a,
-                }},
-                {"local-id": "z", "service-interface-point": {
-                    "service-interface-point-uuid": sip_z,
-                }},
+                tapi_end_point("a", sip_a),
+                tapi_end_point("z", sip_z),
             ],
         }
     }
