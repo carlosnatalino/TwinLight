@@ -98,6 +98,35 @@ def _fiber_length_km(gnpy_element: Any, parsed_element: Any) -> float | None:
     return length / 1000.0 if units in ("m", "meter", "metre", "meters", "metres") else length
 
 
+# ---------------------------------------------------------------------------
+# T-API adjustment granularity
+# ---------------------------------------------------------------------------
+
+# ADJUSTMENT_GRANULARITY identities from tapi-photonic-media.yang, keyed by
+# the slot width they denote in GHz. T-API takes an identityref here, not a
+# number, so an unlisted slot width has no truthful spelling.
+_ADJUSTMENT_GRANULARITIES: dict[float, str] = {
+    100.0: "ADJUSTMENT_GRANULARITY_G_100GHZ",
+    50.0: "ADJUSTMENT_GRANULARITY_G_50GHZ",
+    25.0: "ADJUSTMENT_GRANULARITY_G_25GHZ",
+    12.5: "ADJUSTMENT_GRANULARITY_G_12_5GHZ",
+    6.25: "ADJUSTMENT_GRANULARITY_G_6_25GHZ",
+    3.125: "ADJUSTMENT_GRANULARITY_G_3_125GHZ",
+}
+
+
+def _adjustment_granularity(slot_width_ghz: float) -> str:
+    """Map a configured slot width to its T-API identity.
+
+    Falls back to ``ADJUSTMENT_GRANULARITY_UNCONSTRAINED`` rather than
+    guessing: claiming a grid the twin is not using would mislead a client
+    into computing channel centres that do not line up with its slots.
+    """
+    return _ADJUSTMENT_GRANULARITIES.get(
+        round(slot_width_ghz, 4), "ADJUSTMENT_GRANULARITY_UNCONSTRAINED"
+    )
+
+
 class TapiContext:
     """In-memory TAPI context with indexed lookups."""
 
@@ -364,6 +393,118 @@ class TapiContext:
         return {
             "nominal-central-frequency": round(center_thz, 6),
             "slot-width": round(width_ghz, 3),
+        }
+
+    # -- T-API photonic spectrum capability on a SIP -----------------------
+
+    def _slot_range_hz(self, start_slot: int, width: int) -> tuple[int, int]:
+        """Frequency bounds [Hz] of a slot block, as a T-API spectrum-band.
+
+        Grid convention, which is subtle enough to be worth stating: slot
+        index *i* denotes the slot's **centre** at
+        ``center_frequency + (i - num_slots/2) x slot_width``, the same
+        arithmetic ``get_service_spectrum`` uses. The band edges are
+        therefore half a slot outside the first and last slot centres.
+
+        That convention is the one that keeps the twin ITU-T G.694.1 legal:
+        the standard allows nominal central frequencies at
+        193.1 THz + n x 6.25 GHz, and with slot *centres* on the grid an
+        odd-width block — which is what RMSA allocates, channel plus one
+        guard slot — centres on a grid point. Reading the index as a lower
+        edge instead would put every such block half a granule off-grid.
+        """
+        cfg = self._config.spectrum
+        centre_hz = cfg.center_frequency_thz * 1e12
+        slot_hz = cfg.slot_width_ghz * 1e9
+        first_centre = centre_hz + (start_slot - cfg.num_slots / 2.0) * slot_hz
+        lower = first_centre - slot_hz / 2.0
+        upper = lower + width * slot_hz
+        # T-API types these as uint64 Hz, so they are rounded, not truncated.
+        return round(lower), round(upper)
+
+    def _sip_occupied_slots(self, sip_uuid: str) -> list[tuple[int, int]]:
+        """(start, width) blocks occupied by services terminating on a SIP."""
+        blocks: list[tuple[int, int]] = []
+        for svc in self._services.values():
+            terminates_here = any(
+                ep.service_interface_point.service_interface_point_uuid
+                == sip_uuid
+                for ep in svc.end_point
+            )
+            if not terminates_here:
+                continue
+            alloc = self._service_allocation.get(svc.uuid)
+            if alloc is not None:
+                _edges, start, width = alloc
+                blocks.append((start, width))
+        return sorted(blocks)
+
+    def spectrum_capability_for_sip(self, sip_uuid: str) -> dict:
+        """Build ``spectrum-capability-pac`` for a SIP (T-API v2.6.0).
+
+        ``tapi-photonic-media`` augments the SIP with
+        ``photonic-media-service-interface-point-spec``, whose
+        ``spectrum-capability-pac`` carries three lists of spectrum-bands:
+        supportable, available and occupied. Frequencies are uint64 **Hz**
+        (``spectrum-band`` in tapi-photonic-media.yang).
+
+        What "available at a SIP" means here: a SIP sits on a transceiver,
+        and this reports **SIP-local** occupancy — the blocks used by
+        services terminating on this SIP, and everything else in the
+        supportable range as available. That is the only reading that
+        makes the answer a property of the SIP itself, which is what the
+        YANG models; folding in the occupancy of links downstream would
+        attribute link state to a port, and which link that is depends on
+        where the lightpath is going.
+        """
+        cfg = self._config.spectrum
+        band_lower, band_upper = self._slot_range_hz(0, cfg.num_slots)
+        constraint = {
+            # The grid is ITU-T G.694.1 flexi-grid: for GRID_TYPE_FLEX the
+            # adjustment granularity is half the minimum slot width.
+            "grid-type": "GRID_TYPE_FLEX",
+            "adjustment-granularity": _adjustment_granularity(
+                cfg.slot_width_ghz
+            ),
+        }
+
+        def band(lower: int, upper: int) -> dict:
+            return {
+                "upper-frequency": upper,
+                "lower-frequency": lower,
+                "frequency-constraint": dict(constraint),
+            }
+
+        occupied_blocks = self._sip_occupied_slots(sip_uuid)
+        occupied = [
+            band(*self._slot_range_hz(start, width))
+            for start, width in occupied_blocks
+        ]
+
+        # Available = supportable minus occupied, as maximal free runs.
+        available: list[dict] = []
+        cursor = 0
+        for start, width in occupied_blocks:
+            if start > cursor:
+                available.append(band(*self._slot_range_hz(cursor, start - cursor)))
+            cursor = max(cursor, start + width)
+        if cursor < cfg.num_slots:
+            available.append(
+                band(*self._slot_range_hz(cursor, cfg.num_slots - cursor))
+            )
+
+        return {
+            "supportable-spectrum": [band(band_lower, band_upper)],
+            "available-spectrum": available,
+            "occupied-spectrum": occupied,
+        }
+
+    def sip_photonic_spec(self, sip_uuid: str) -> dict:
+        """The ``tapi-photonic-media`` augment for one SIP."""
+        return {
+            "spectrum-capability-pac": self.spectrum_capability_for_sip(
+                sip_uuid
+            ),
         }
 
     def delete_service(self, uuid: str) -> bool:
