@@ -42,9 +42,10 @@ class RestconfContentTypeMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, restconf_root: str = "") -> None:
         super().__init__(app)
-        self._prefixes = ("/data/",)
+        prefixes = ["/data/"]
         if restconf_root:
-            self._prefixes += (f"{restconf_root}/data/",)
+            prefixes.append(f"{restconf_root}/data/")
+        self._prefixes = tuple(prefixes)
 
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)

@@ -1,11 +1,13 @@
 """ONOS-facing T-API adapter for the TwinLight digital twin.
 
 ONOS's ODTN ``ols`` driver (``org.onosproject.drivers.odtn.tapi.*``) speaks
-**T-API v2.1** over a RESTCONF root, while TwinLight serves **T-API v2.6.0**
-under ``/data/``. This process is the version adapter between the two. It is
-deliberately *not* part of ``src/twinlight``: the reshaping it does is not
-standard T-API, and CLAUDE.md constraint #1 keeps the twin's T-API modules
-pure.
+**T-API v2.1**, while TwinLight serves **T-API v2.6.0**. This process is the
+version adapter between the two. It is deliberately *not* part of
+``src/twinlight``: the reshaping it does is not standard T-API, and CLAUDE.md
+constraint #1 keeps the twin's T-API modules pure.
+
+Both now sit under an RFC 8040 RESTCONF root, so the root itself is no longer
+one of the differences -- see ``TWIN_DATA_ROOT``.
 
 Everything here is driven by what the ONOS driver source actually does, not by
 what the T-API specification says it should do. The four behaviours that matter:
@@ -26,9 +28,12 @@ what the T-API specification says it should do. The four behaviours that matter:
 
 2. The same method dereferences
    ``tapi-photonic-media:media-channel-service-interface-point-spec`` →
-   ``mc-pool`` → ``available-spectrum`` unconditionally. TwinLight's SIPs carry
-   no such block, so it is synthesised here from the twin's real spectrum
-   context.
+   ``mc-pool`` → ``available-spectrum`` unconditionally. That is the T-API
+   **2.1** shape; 2.6 has no ``mc-pool`` at all, and publishes the same
+   information as ``photonic-media-service-interface-point-spec`` →
+   ``spectrum-capability-pac``. The twin publishes the 2.6 form, and
+   :func:`_mc_pool` translates it -- including Hz to MHz and identityrefs to
+   the bare tokens ONOS's string switches match.
 
 3. ``TapiDeviceLambdaQuery`` GETs
    ``/restconf/data/tapi-common:context/service-interface-point=<uuid>`` and
@@ -69,6 +74,12 @@ logging.basicConfig(
 log = logging.getLogger("tapi-adapter")
 
 TWIN_BASE_URL = os.getenv("TWIN_BASE_URL", "http://twin:8080").rstrip("/")
+
+# Where the twin serves its T-API data resources. It now mounts them under an
+# RFC 8040 root (default /restconf) as well as the bare /data/ it has always
+# used, so this adapter asks at the canonical location. Override with
+# TWIN_DATA_ROOT=/data to talk to a twin predating that change.
+TWIN_DATA_ROOT = os.getenv("TWIN_DATA_ROOT", "/restconf/data").rstrip("/")
 
 # Modulation format the adapter requests when ONOS asks for a lightpath. ONOS's
 # TAPI 2.1 connectivity request has nowhere to carry one, so it is adapter
@@ -307,7 +318,9 @@ async def _twin_get(request: Request, path: str) -> Any:
 
 
 async def _list_sips(request: Request) -> list[dict[str, Any]]:
-    payload = await _twin_get(request, "/data/tapi-common:context/service-interface-point")
+    payload = await _twin_get(
+        request, f"{TWIN_DATA_ROOT}/tapi-common:context/service-interface-point"
+    )
     return payload.get("tapi-common:context", {}).get("service-interface-point", [])
 
 
@@ -494,7 +507,8 @@ async def get_connectivity_context(request: Request) -> JSONResponse:
     """
     try:
         payload = await _twin_get(
-            request, "/data/tapi-connectivity:connectivity-context/connectivity-service"
+            request,
+            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context/connectivity-service",
         )
     except TwinUnavailableError as exc:
         raise HTTPException(
@@ -604,7 +618,7 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
 
     try:
         response = await request.app.state.client.post(
-            "/data/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context/connectivity-service",
             json=twin_body,
         )
     except httpx.HTTPError as exc:
@@ -658,7 +672,8 @@ async def delete_connectivity_service(uuid: str, request: Request) -> Response:
     """Delete a lightpath. ONOS treats only 204 as success."""
     try:
         response = await request.app.state.client.delete(
-            f"/data/tapi-connectivity:connectivity-context/connectivity-service={uuid}"
+            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context"
+            f"/connectivity-service={uuid}"
         )
     except httpx.HTTPError as exc:
         raise HTTPException(

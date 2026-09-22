@@ -47,15 +47,40 @@ for app in odtn-service drivers.odtn-driver optical-model restsb; do
   fi
 done
 
+push_netcfg() {
+  local response code
+  response="$(curl -sS -u "${ONOS_AUTH}" -X POST \
+    -H 'Content-Type: application/json' \
+    -d @"${ONOS_DIR}/netcfg/twinlight-ols.json" \
+    -w '\n%{http_code}' \
+    "${ONOS_URL}/onos/v1/network/configuration")"
+  code="$(printf '%s' "${response}" | tail -1)"
+  [ "${code}" = "200" ] || die "netcfg POST returned HTTP ${code}: ${response}"
+}
+
 say "Pushing the network configuration (registering ${DEVICE_ID})"
-netcfg_response="$(curl -sS -u "${ONOS_AUTH}" -X POST \
-  -H 'Content-Type: application/json' \
-  -d @"${ONOS_DIR}/netcfg/twinlight-ols.json" \
-  -w '\n%{http_code}' \
-  "${ONOS_URL}/onos/v1/network/configuration")"
-netcfg_code="$(printf '%s' "${netcfg_response}" | tail -1)"
-[ "${netcfg_code}" = "200" ] || die "netcfg POST returned HTTP ${netcfg_code}: ${netcfg_response}"
+push_netcfg
 ok "netcfg accepted"
+
+# An ACTIVE drivers.odtn-driver bundle does not mean the "ols" driver is
+# registered yet: on a cold Karaf boot the netcfg can land in the window
+# between the two, and RestDeviceProvider then logs "Driver not found" and
+# gives up permanently -- the device never appears, with nothing in the REST
+# API to say why. ONOS 2.7 has no /onos/v1/drivers resource to wait on, so
+# re-push once if the device has not materialised. The POST is idempotent.
+if ! wait_for "device ${DEVICE_ID} to register" 45 bash -c "
+  curl -sS -u '${ONOS_AUTH}' '${ONOS_URL}/onos/v1/devices' | python3 -c \"
+import json, sys
+devs = json.load(sys.stdin)['devices']
+sys.exit(0 if any(d['id'] == '${DEVICE_ID}' for d in devs) else 1)
+\""; then
+  warn "device did not register — re-pushing netcfg (driver was probably not yet bound)"
+  curl -sS -u "${ONOS_AUTH}" -X DELETE \
+    "${ONOS_URL}/onos/v1/network/configuration/devices/${DEVICE_ID}" >/dev/null || true
+  sleep 5
+  push_netcfg
+  ok "netcfg re-pushed"
+fi
 
 say "Waiting for ONOS to discover the twin and its ports"
 wait_for "device ${DEVICE_ID} available" 180 bash -c "

@@ -1,31 +1,44 @@
 #!/usr/bin/env bash
 # Drive lightpath provisioning *from ONOS* and read the physics back from the twin.
 #
-#   lightpath.sh create <CityA> <CityZ>   push an ONOS flow rule on the OLS device;
+#   lightpath.sh create <CityA> <CityZ> [format]
+#                                         push an ONOS flow rule on the OLS device;
 #                                         the ols driver turns it into a T-API
-#                                         connectivity-service on the twin
+#                                         connectivity-service on the twin.
+#                                         format is DP-QPSK (default), DP-16QAM
+#                                         or DP-64QAM
 #   lightpath.sh list                     ONOS flows + twin services side by side
 #   lightpath.sh delete <flow-id>         remove the flow; the driver DELETEs the service
 #   lightpath.sh clear                    remove every flow this script created
 #
 # The ONOS→twin direction is the whole point: nothing here talks to the twin's
 # connectivity API directly. Provisioning is entirely ONOS's decision; the twin
-# is free to refuse it, and does.
+# is free to refuse it, and does. The modulation format is the one thing ONOS
+# cannot express -- T-API 2.1 has no field for it -- so it is set on the
+# adapter, as policy, before the flow rule is pushed.
 
 . "$(dirname "$0")/lib.sh"
 
 APP_ID="${APP_ID:-org.onosproject.rest}"
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 cmd_create() {
-  [ $# -eq 2 ] || usage
+  [ $# -ge 2 ] && [ $# -le 3 ] || usage
   require_stack
 
-  local a_city="$1" z_city="$2" a_port z_port
+  local a_city="$1" z_city="$2" modulation="${3:-}" a_port z_port
   a_port="$(port_for_node "${a_city}")" || die "unknown transceiver: ${a_city}"
   z_port="$(port_for_node "${z_city}")" || die "unknown transceiver: ${z_city}"
   [ "${a_port}" != "${z_port}" ] || die "source and destination are the same port"
+
+  if [ -n "${modulation}" ]; then
+    curl -sSf -X POST -H 'Content-Type: application/json' \
+      -d "{\"modulation-format\":\"${modulation}\"}" \
+      "${ADAPTER_URL}/adapter/modulation" >/dev/null \
+      || die "adapter rejected modulation format: ${modulation}"
+    ok "adapter will request ${modulation}"
+  fi
 
   say "ONOS flow rule: port ${a_port} (${a_city}) -> port ${z_port} (${z_city}) on ${DEVICE_ID}"
 
