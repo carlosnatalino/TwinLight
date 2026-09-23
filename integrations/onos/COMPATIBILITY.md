@@ -33,6 +33,7 @@ summary, and they are marked.
 | B6 | `tapi-photonic-media:spectrum-context` is invented | **Twin defect — recorded, deferred** |
 | C5 | netcfg pushed before the `ols` driver is bound | Our tooling — fixed |
 | C6 | `gnpy.no_insert_edfas` is read by nothing | Our tooling — recorded, deferred |
+| C8 | `validate.sh` watched a counter that saturates at 10 | Our tooling — fixed |
 | D1 | Admission GSNR vs reported OPM diverged by ~9 dB | **Twin defect — fixed**; verdict reversed |
 | D2 | Accumulated CD stored in the wrong unit | **Twin defect — fixed** |
 
@@ -309,6 +310,7 @@ would bite anyone repeating this work.
 | OPM formatter crashes on a cut link | The twin correctly nulls every optical metric and pins pre-FEC BER to 1.0 when `status=link-failed`. |
 | **C5.** Device never appears; ONOS logs `Driver not found` once and gives up | An ACTIVE `drivers.odtn-driver` bundle does **not** mean the `ols` driver is bound yet. On a cold Karaf boot the netcfg can land in that window, `RestDeviceProvider` fails permanently, and nothing in the REST API says why. `demo-up.sh` now re-pushes the netcfg once if the device has not registered. |
 | **C7.** Twin refuses to start after a payload change, restoring its checkpoint | Expected — the loud failure from B4 working. But note the ordering trap: a running container writes a *fresh* checkpoint on SIGTERM, so deleting it before `demo-up.sh` just recreates it. Delete **after** the old container stops. |
+| **C8.** `validate.sh` check 15 reports "twin admitted a DP-16QAM path that should have failed QoT" while the adapter log plainly shows it refusing | The check watched `len(recent-rejections)` for an increase, but `/adapter/status` returns `rejections[-10:]` — the count **saturates at 10** and can never rise again. A stack that had already seen ten refusals failed the check no matter what the twin did, and the message blamed the topology. Now compares the newest rejection's identity instead, as `lightpath.sh` already did. A saturating value is not a change detector. |
 
 ### C6. `gnpy.no_insert_edfas` is read by nothing
 

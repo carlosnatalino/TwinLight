@@ -164,9 +164,16 @@ svc_count() {
   curl -sS "${ADAPTER_URL}/adapter/status" \
     | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["onos-created-services"]))'
 }
-rej_count() {
-  curl -sS "${ADAPTER_URL}/adapter/status" \
-    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["recent-rejections"]))'
+# Identity of the most recent rejection, or "none". NOT a count: /adapter/status
+# returns only rejections[-10:], so a count saturates at 10 and then never
+# changes again -- which made the DP-16QAM check below fail spuriously on any
+# stack that had already seen ten refusals.
+rej_latest() {
+  curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)["recent-rejections"]
+print("%s@%s" % (r[-1]["uuid"], r[-1]["at"]) if r else "none")
+'
 }
 
 check "DP-QPSK: ONOS flow rule becomes a lightpath on the twin" \
@@ -199,14 +206,14 @@ print(\"%s at %s THz, GSNR %.2f dB\" % (uuid[:8], slot[\"nominal-central-frequen
 
 check "DP-16QAM: the twin REFUSES the same path on QoT grounds" \
   bash -c "
-    $(declare -f set_modulation rej_count flow_body onos_api)
+    $(declare -f set_modulation rej_latest flow_body onos_api)
     ONOS_URL='${ONOS_URL}'; ONOS_AUTH='${ONOS_AUTH}'; ADAPTER_URL='${ADAPTER_URL}'; DEVICE_ID='${DEVICE_ID}'
     set_modulation DP-16QAM
-    before=\$(rej_count)
+    before=\$(rej_latest)
     onos_api POST '/onos/v1/flows/${DEVICE_ID}?appId=org.onosproject.rest' \"\$(flow_body ${Z_PORT} ${A_PORT})\" >/dev/null
     for i in \$(seq 1 24); do
       sleep 5
-      if [ \"\$(rej_count)\" -gt \"\$before\" ]; then
+      if [ \"\$(rej_latest)\" != \"\$before\" ]; then
         curl -sS '${ADAPTER_URL}/adapter/status' | python3 -c '
 import json, sys
 r = json.load(sys.stdin)[\"recent-rejections\"][-1]
