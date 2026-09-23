@@ -172,6 +172,18 @@ export interface LayerProtocolConstraint {
     }[];
     "number-of-otsi"?: number;
   };
+  /** Present only once the service holds an allocation; frequencies in Hz. */
+  "tapi-photonic-media:mcg-connectivity-service-end-point-spec"?: {
+    "number-of-mc"?: number;
+    "mc-spectrum-config-pac": {
+      "local-id": string;
+      spectrum: { "lower-frequency": number; "upper-frequency": number };
+      "edge-frequency-constraint"?: {
+        "grid-type"?: string;
+        "adjustment-granularity"?: string;
+      };
+    }[];
+  };
 }
 
 /** Build an end-point carrying the T-API modulation augment. */
@@ -216,10 +228,38 @@ export function modulationOf(
   return mt ? MT_TO_MODULATION[mt] : undefined;
 }
 
-/** T-API photonic media frequency-slot (assigned spectrum, read-only). */
-export interface FrequencySlot {
-  "nominal-central-frequency": number; // THz
-  "slot-width": number; // GHz
+/** The augment carrying assigned spectrum, on the same constraint entry. */
+export const MCG_CSEP_SPEC =
+  "tapi-photonic-media:mcg-connectivity-service-end-point-spec";
+
+/** A service's assigned spectrum, in the units the UI displays. */
+export interface AssignedSpectrum {
+  centreThz: number;
+  widthGhz: number;
+}
+
+/**
+ * Read a service's assigned spectrum off its end-point.
+ *
+ * T-API v2.6.0 has no `frequency-slot` leaf on connectivity-service; the
+ * photonic module augments the end-point's layer-protocol-constraint, with
+ * band edges in Hz. Returns undefined when the service holds no spectrum.
+ */
+export function spectrumOf(
+  service: ConnectivityService,
+): AssignedSpectrum | undefined {
+  const spec = service["end-point"]?.[0]?.["layer-protocol-constraint"]?.[0]?.[
+    MCG_CSEP_SPEC
+  ];
+  const band = spec?.["mc-spectrum-config-pac"]?.[0]?.spectrum;
+  if (!band) return undefined;
+  const lower = band["lower-frequency"];
+  const upper = band["upper-frequency"];
+  if (typeof lower !== "number" || typeof upper !== "number") return undefined;
+  return {
+    centreThz: (lower + upper) / 2 / 1e12,
+    widthGhz: (upper - lower) / 1e9,
+  };
 }
 
 export interface ConnectivityService {
@@ -229,8 +269,6 @@ export interface ConnectivityService {
   "administrative-state": string;
   "operational-state": string;
   "lifecycle-state": string;
-  /** Present when service has spectrum allocation (T-API L0). */
-  "frequency-slot"?: FrequencySlot;
 }
 
 export interface CreateConnectivityServiceRequest {
@@ -263,12 +301,17 @@ export interface UpdateConnectivityServiceRequest {
 export type UpdateConnectivityServiceResponse = CreateConnectivityServiceResponse;
 
 /** T-API photonic media spectrum context (grid parameters). */
+/**
+ * Grid parameters from `/internal/spectrum-context`.
+ *
+ * Not T-API: these three names are TwinLight's own, and T-API v2.6.0 has no
+ * `spectrum-context` container, so they are served unwrapped from the
+ * internal surface rather than under the ONF module prefix.
+ */
 export interface SpectrumContextResponse {
-  "tapi-photonic-media:spectrum-context": {
-    "num-slots": number;
-    "slot-width-ghz": number;
-    "nominal-central-frequency-thz": number;
-  };
+  "num-slots": number;
+  "slot-width-ghz": number;
+  "nominal-central-frequency-thz": number;
 }
 
 /** Per-service spectrum block (internal). */

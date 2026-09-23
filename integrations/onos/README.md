@@ -243,7 +243,8 @@ What happens, and it is worth narrating:
 3. The twin routes it (k-shortest paths over 2149 km, 9 hops), first-fits
    spectrum, runs GNPy split-step propagation, and checks GSNR against the
    DP-QPSK threshold plus the configured margin.
-4. It admits the request and returns the allocated `frequency-slot`.
+4. It admits the request and returns the allocated spectrum, as a
+   `tapi-photonic-media` augment on the service's end-points.
 
 The script prints the allocation and then the live OPM:
 

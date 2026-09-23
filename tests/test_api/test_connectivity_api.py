@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from tests.conftest import tapi_end_point
-from twinlight.models.connectivity import OTSIA_CSEP_SPEC
+from twinlight.models.connectivity import MCG_CSEP_SPEC, OTSIA_CSEP_SPEC
 
 _BASE = "/data/tapi-connectivity:connectivity-context"
 
@@ -196,7 +196,11 @@ class TestGetAndDeleteConnectivityService:
     def test_get_service_returns_frequency_slot_when_allocated(
         self, app: TestClient
     ) -> None:
-        """GET connectivity-service={uuid} returns frequency-slot (T-API L0) when allocated."""
+        """Assigned spectrum rides on the end-point, in the T-API 2.6 place.
+
+        ``tapi-connectivity`` has no ``frequency-slot`` leaf; the photonic
+        module augments the end-point's layer-protocol-constraint.
+        """
         sip_a, sip_z = _get_two_sip_uuids(app)
         create = app.post(
             f"{_BASE}/connectivity-service",
@@ -207,12 +211,39 @@ class TestGetAndDeleteConnectivityService:
         get_one = app.get(f"{_BASE}/connectivity-service={uuid}")
         assert get_one.status_code == 200
         svc = get_one.json()["tapi-connectivity:connectivity-service"]
-        assert "frequency-slot" in svc
-        fs = svc["frequency-slot"]
-        assert "nominal-central-frequency" in fs
-        assert "slot-width" in fs
-        assert isinstance(fs["nominal-central-frequency"], (int, float))
-        assert isinstance(fs["slot-width"], (int, float))
+
+        assert "frequency-slot" not in svc
+        for end_point in svc["end-point"]:
+            spec = end_point["layer-protocol-constraint"][0][MCG_CSEP_SPEC]
+            assert spec["number-of-mc"] == 1
+            config = spec["mc-spectrum-config-pac"][0]
+            spectrum = config["spectrum"]
+            # uint64 Hz, per grouping frequency-range.
+            assert isinstance(spectrum["lower-frequency"], int)
+            assert isinstance(spectrum["upper-frequency"], int)
+            assert spectrum["upper-frequency"] > spectrum["lower-frequency"]
+            assert config["edge-frequency-constraint"]["grid-type"] == (
+                "GRID_TYPE_FLEX"
+            )
+
+    def test_unallocated_service_carries_no_spectrum_spec(
+        self, app: TestClient
+    ) -> None:
+        """A service with no allocation says nothing, rather than zeroes."""
+        sip_a, sip_z = _get_two_sip_uuids(app)
+        create = app.post(
+            f"{_BASE}/connectivity-service",
+            json=_create_service_payload(sip_a, sip_z),
+        )
+        uuid = create.json()["tapi-connectivity:connectivity-service"]["uuid"]
+        ctx = app.app.state.context
+        ctx._service_allocation.pop(uuid, None)
+
+        svc = app.get(f"{_BASE}/connectivity-service={uuid}").json()[
+            "tapi-connectivity:connectivity-service"
+        ]
+        for end_point in svc["end-point"]:
+            assert MCG_CSEP_SPEC not in end_point["layer-protocol-constraint"][0]
 
     def test_get_services_includes_created(self, app: TestClient) -> None:
         sip_a, sip_z = _get_two_sip_uuids(app)

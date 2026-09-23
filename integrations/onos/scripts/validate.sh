@@ -190,18 +190,22 @@ check "DP-QPSK: ONOS flow rule becomes a lightpath on the twin" \
     echo \"no new service after 120s (before=\$before now=\$(svc_count))\"; exit 1
   "
 
-check "the lightpath has a T-API frequency-slot and live OPM on the twin" \
+check "the lightpath carries the T-API spectrum augment and live OPM" \
   bash -c "curl -sSf '${ADAPTER_URL}/adapter/status' | python3 -c '
 import json, sys, urllib.request
+sys.path.insert(0, \"${SCRIPT_DIR}\")
+from tapi_fields import spectrum_of
 svcs = json.load(sys.stdin)[\"onos-created-services\"]
 assert svcs, \"no ONOS-created services\"
 uuid, payload = next(iter(svcs.items()))
 svc = payload[\"tapi-connectivity:connectivity-service\"]
-slot = svc.get(\"frequency-slot\")
-assert slot and slot.get(\"nominal-central-frequency\"), \"no spectrum allocated\"
+# T-API 2.6 has no frequency-slot leaf; spectrum is an end-point augment.
+assert \"frequency-slot\" not in svc, \"non-standard frequency-slot key is back\"
+band = spectrum_of(svc)
+assert band, \"no spectrum allocated\"
 opm = json.load(urllib.request.urlopen(\"${TWIN_URL}/internal/opm/\" + uuid))[\"measurements\"]
 assert \"gsnr-db\" in opm and \"pre-fec-ber\" in opm, opm
-print(\"%s at %s THz, GSNR %.2f dB\" % (uuid[:8], slot[\"nominal-central-frequency\"], opm[\"gsnr-db\"]))
+print(\"%s at %.4f THz / %.2f GHz, GSNR %.2f dB\" % (uuid[:8], band[0], band[1], opm[\"gsnr-db\"]))
 '"
 
 check "DP-16QAM: the twin REFUSES the same path on QoT grounds" \

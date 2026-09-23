@@ -20,7 +20,6 @@ from twinlight.api import (
     equipment,
     internal,
     path_computation,
-    photonic_media,
     topology,
 )
 from twinlight.api import (
@@ -143,12 +142,18 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.state.config = config
 
     # Routers
-    # The six T-API modules are mounted twice: under the RESTCONF root
+    # The T-API modules are mounted twice: under the RESTCONF root
     # (RFC 8040 §3.1, the canonical location) and at the bare /data/ they
     # have always been served from. The bare mount is hidden from OpenAPI
     # so the documented surface shows one path per resource; it exists for
     # clients written against earlier releases, and docs/PENDING.md tracks
     # retiring it.
+    #
+    # There is no photonic-media router: the twin's photonic surface is the
+    # augments on the SIP and the connectivity-service end-point, served by
+    # common.router and connectivity.router. The grid parameters that used
+    # to be published here as tapi-photonic-media:spectrum-context are not
+    # T-API at all and now live at /internal/spectrum-context.
     root = config.server.restconf_root
     for tapi_router in (
         common.router,
@@ -156,7 +161,6 @@ def create_app(config: TwinConfig) -> FastAPI:
         connectivity.router,
         path_computation.router,
         equipment.router,
-        photonic_media.router,
     ):
         if root:
             app.include_router(tapi_router, prefix=root)

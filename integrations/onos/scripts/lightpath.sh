@@ -69,20 +69,9 @@ EOF
 
   printf '%s' "${after}" | python3 -c "
 import json, sys
+sys.path.insert(0, '${SCRIPT_DIR}')
+from tapi_fields import modulation_of, spectrum_of
 after = json.load(sys.stdin)
-def modulation_of(svc):
-    # T-API 2.6 puts modulation on the end-point, not on the service.
-    spec_key = 'tapi-photonic-media:otsia-connectivity-service-end-point-spec'
-    names = {'MT_DP-QPSK': 'DP-QPSK', 'MT_DP-QAM16': 'DP-16QAM',
-             'MT_DP-QAM64': 'DP-64QAM'}
-    for ep in svc.get('end-point') or []:
-        for lpc in ep.get('layer-protocol-constraint') or []:
-            for cfg in (lpc.get(spec_key) or {}).get('otsi-config') or []:
-                mt = (cfg.get('modulation') or {}).get(
-                    'standard-modulation-technique', '')
-                if mt.split(':')[-1] in names:
-                    return names[mt.split(':')[-1]]
-    return '?'
 
 before = json.loads(sys.argv[1])
 new = set(after['onos-created-services']) - set(before['onos-created-services'])
@@ -92,12 +81,13 @@ new_rej = [r for r in after['recent-rejections'] if (r['uuid'], r['at']) not in 
 if new:
     for uuid in new:
         svc = after['onos-created-services'][uuid]['tapi-connectivity:connectivity-service']
-        slot = svc.get('frequency-slot') or {}
+        band = spectrum_of(svc)
         print('  ADMITTED by the twin')
         print('    service uuid  : %s' % svc['uuid'])
         print('    modulation    : %s' % modulation_of(svc))
-        print('    centre freq   : %s THz' % slot.get('nominal-central-frequency'))
-        print('    slot width    : %s GHz' % slot.get('slot-width'))
+        if band:
+            print('    centre freq   : %.4f THz' % band[0])
+            print('    slot width    : %.2f GHz' % band[1])
 elif new_rej:
     for r in new_rej:
         print('  REFUSED by the twin (%s)' % r['reason'])
@@ -153,27 +143,16 @@ for f in mine:
   say "Connectivity services on the twin (created via ONOS)"
   curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c "
 import json, sys
-def modulation_of(svc):
-    # T-API 2.6 puts modulation on the end-point, not on the service.
-    spec_key = 'tapi-photonic-media:otsia-connectivity-service-end-point-spec'
-    names = {'MT_DP-QPSK': 'DP-QPSK', 'MT_DP-QAM16': 'DP-16QAM',
-             'MT_DP-QAM64': 'DP-64QAM'}
-    for ep in svc.get('end-point') or []:
-        for lpc in ep.get('layer-protocol-constraint') or []:
-            for cfg in (lpc.get(spec_key) or {}).get('otsi-config') or []:
-                mt = (cfg.get('modulation') or {}).get(
-                    'standard-modulation-technique', '')
-                if mt.split(':')[-1] in names:
-                    return names[mt.split(':')[-1]]
-    return '?'
+sys.path.insert(0, '${SCRIPT_DIR}')
+from tapi_fields import modulation_of, spectrum_of
 svcs = json.load(sys.stdin)['onos-created-services']
 if not svcs:
     print('    (none)')
 for u, payload in svcs.items():
     s = payload['tapi-connectivity:connectivity-service']
-    slot = s.get('frequency-slot') or {}
-    print('    %s  %-9s  %s THz' % (u[:8], modulation_of(s),
-                                    slot.get('nominal-central-frequency')))
+    band = spectrum_of(s)
+    print('    %s  %-9s  %s' % (u[:8], modulation_of(s),
+                                '%.4f THz' % band[0] if band else '--'))
 "
 }
 

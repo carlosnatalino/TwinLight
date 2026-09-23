@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import ValidationError
 
 from twinlight.models.connectivity import (
+    MCG_CSEP_SPEC,
     ConnectivityService,
     UpdateConnectivityServiceRequest,
 )
@@ -124,17 +125,28 @@ async def create_service(body: dict, request: Request) -> dict:
 
 
 def _connectivity_service_payload(ctx, svc) -> dict:
-    """Build connectivity-service dict with optional frequency-slot (T-API spectrum)."""
+    """Serialise a connectivity-service with its assigned spectrum.
+
+    Spectrum is live allocation state rather than something the client sent,
+    so it is merged in here instead of being carried on the model — the same
+    reason the SIP's spectrum capability is assembled per request.
+
+    It goes where T-API v2.6.0 puts it, on the end-point's
+    layer-protocol-constraint alongside the modulation augment;
+    ``tapi-connectivity`` has no ``frequency-slot`` leaf of its own.
+    """
     payload = svc.model_dump(by_alias=True)
-    spectrum = ctx.get_service_spectrum(svc.uuid)
-    if spectrum is not None:
-        payload["frequency-slot"] = spectrum
+    spec = ctx.service_spectrum_spec(svc.uuid)
+    if spec is not None:
+        for end_point in payload.get("end-point", []):
+            for constraint in end_point.get("layer-protocol-constraint", []):
+                constraint[MCG_CSEP_SPEC] = spec
     return payload
 
 
 @router.get(f"{_BASE}/connectivity-service")
 async def get_services(request: Request) -> dict:
-    """Return all connectivity services (with frequency-slot when allocated)."""
+    """Return all connectivity services, with assigned spectrum when held."""
     ctx = request.app.state.context
     return {
         "tapi-connectivity:connectivity-context": {
@@ -147,7 +159,7 @@ async def get_services(request: Request) -> dict:
 
 @router.get(f"{_BASE}/connectivity-service={{uuid}}")
 async def get_service(uuid: str, request: Request) -> dict:
-    """Return a specific connectivity service (with frequency-slot when allocated)."""
+    """Return one connectivity service, with assigned spectrum when held."""
     ctx = request.app.state.context
     svc = ctx.get_service(uuid)
     if svc is None:

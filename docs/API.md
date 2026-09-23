@@ -88,9 +88,42 @@ that cannot be satisfied is refused rather than admitted with a warning.
 | PATCH | Partial update of `name`, `administrative-state`, `lifecycle-state` only — **not** `modulation-format`, which would invalidate the admission decision |
 | DELETE | Releases spectrum, invalidates the cached baseline, records the channel drop with the EDFA tracker; returns 204 |
 
-Responses for services with a spectrum allocation include the T-API L0
-`frequency-slot` object: `nominal-central-frequency` (THz) and `slot-width`
-(GHz).
+A service with a spectrum allocation carries it on **each end-point**, beside
+the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
+`frequency-slot` leaf:
+
+```json
+"layer-protocol-constraint": [
+  {
+    "local-id": "otsi",
+    "layer-protocol-name": "PHOTONIC_MEDIA",
+    "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
+      "otsi-config": [
+        { "local-id": "1",
+          "modulation": { "standard-modulation-technique": "MT_DP-QPSK" } }
+      ],
+      "number-of-otsi": 1
+    },
+    "tapi-photonic-media:mcg-connectivity-service-end-point-spec": {
+      "number-of-mc": 1,
+      "mc-spectrum-config-pac": [
+        { "local-id": "1",
+          "spectrum": {
+            "lower-frequency": 190696875000000,
+            "upper-frequency": 190753125000000
+          },
+          "edge-frequency-constraint": {
+            "grid-type": "GRID_TYPE_FLEX",
+            "adjustment-granularity": "ADJUSTMENT_GRANULARITY_G_6_25GHZ"
+          } }
+      ]
+    }
+  }
+]
+```
+
+Frequencies are uint64 Hz. A service with no allocation carries no MCG spec at
+all, rather than a zeroed one.
 
 ### Path computation
 
@@ -110,12 +143,13 @@ analysis before creating a service.
 | GET | `/data/tapi-equipment:equipment-context` |
 | GET | `/data/tapi-equipment:equipment-context/equipment` |
 | GET | `/data/tapi-equipment:equipment-context/equipment={uuid}` |
-| GET | `/data/tapi-photonic-media:spectrum-context` |
 
-The spectrum context reports the grid parameters in use: `num-slots`,
-`slot-width-ghz`, `nominal-central-frequency-thz`. **None of those leaves is
-standard T-API** — the endpoint predates the per-SIP spectrum capability below
-and is scheduled to move under `/internal/`; see [PENDING.md](PENDING.md).
+There is no `tapi-photonic-media` resource of its own. The photonic surface is
+the augments on the SIP and on the connectivity-service end-point, so it is
+served by the Common and Connectivity routers. The grid parameters that used to
+be published as `tapi-photonic-media:spectrum-context` are twin configuration
+rather than T-API and now live at
+[`/internal/spectrum-context`](#internal--observation-and-metadata).
 
 Per-SIP spectrum is the standard surface, carried on every
 `service-interface-point` as a `tapi-photonic-media` augment:
@@ -197,6 +231,7 @@ bare `/data/…` paths and omits these three resources.
 | GET | `/internal/services/{service_uuid}` | Name, modulation format, path hops, total fiber km |
 | GET | `/internal/links` | Link inventory with per-link state, used by the UI |
 | GET | `/internal/spectrum-grid` | Per-link slot occupancy, used by the UI heat map |
+| GET | `/internal/spectrum-context` | Grid parameters: `num-slots`, `slot-width-ghz`, `nominal-central-frequency-thz` |
 | GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service |
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |

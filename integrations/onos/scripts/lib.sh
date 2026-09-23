@@ -8,6 +8,9 @@ set -euo pipefail
 ONOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # integrations/onos/scripts -> integrations/onos -> integrations -> repo root.
 REPO_ROOT="$(cd "${ONOS_DIR}/../.." && pwd)"
+# Where tapi_fields.py and find_pairs.py live, for the embedded python3 -c
+# snippets that import them.
+SCRIPT_DIR="${ONOS_DIR}/scripts"
 
 ONOS_URL="${ONOS_URL:-http://localhost:8181}"
 ONOS_AUTH="${ONOS_AUTH:-onos:rocks}"

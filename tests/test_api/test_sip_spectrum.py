@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import tapi_end_point
 from twinlight.api.common import PHOTONIC_SIP_SPEC
+from twinlight.models.connectivity import MCG_CSEP_SPEC
 
 _BASE = "/data/tapi-connectivity:connectivity-context"
 _SIPS = "/data/tapi-common:context/service-interface-point"
@@ -103,17 +104,21 @@ class TestOccupancyIsSipLocal:
             },
         )
         assert resp.status_code == 201
-        slot = resp.json()["tapi-connectivity:connectivity-service"][
-            "frequency-slot"
-        ]
+        end_point = resp.json()["tapi-connectivity:connectivity-service"][
+            "end-point"
+        ][0]
+        service_band = end_point["layer-protocol-constraint"][0][
+            MCG_CSEP_SPEC
+        ]["mc-spectrum-config-pac"][0]["spectrum"]
 
         pac = _pac(app, sip_a)
         assert len(pac["occupied-spectrum"]) == 1
         occupied = pac["occupied-spectrum"][0]
-        # The occupied band must agree with the service's own frequency-slot.
-        assert _width(occupied) == round(slot["slot-width"] * 1e9)
-        centre = (occupied["lower-frequency"] + occupied["upper-frequency"]) / 2
-        assert centre == round(slot["nominal-central-frequency"] * 1e12)
+        # The SIP's occupied band and the service's own MCG spectrum are two
+        # views of one allocation; if they disagree the twin is contradicting
+        # itself within a single response cycle.
+        assert occupied["lower-frequency"] == service_band["lower-frequency"]
+        assert occupied["upper-frequency"] == service_band["upper-frequency"]
 
         # Available is the rest of the band, and the two partition it.
         total_available = sum(_width(b) for b in pac["available-spectrum"])

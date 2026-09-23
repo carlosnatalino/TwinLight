@@ -60,7 +60,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 | **Compute-path RPC** | ✓ | `POST .../path-computation-service/compute-path` returns candidate paths without committing state |
 | **Equipment context** | ✓ | `GET /data/tapi-equipment:equipment-context`, `.../equipment`, `.../equipment={uuid}` |
 | **Spectrum capability** | ✓ | Per-SIP `spectrum-capability-pac` — supportable / available / occupied spectrum-bands in uint64 Hz, from live occupancy |
-| **Spectrum context** | ✗ | `GET /data/tapi-photonic-media:spectrum-context` returns grid parameters, but **none of its leaves exist in T-API 2.6** — see [§ 2.3](#23-data-model-gaps-within-implemented-modules) |
+| **Assigned spectrum** | ✓ | Per-service `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac` on the end-point |
 
 ---
 
@@ -101,7 +101,7 @@ So: **Common, Topology, Connectivity, Path Computation and Equipment** are imple
 - **ConnectivityService**: Minimal set of attributes. Standard T-API may include, for example: `connection`, `connectivity-service-end-point` refinements, `routing-constraint`, `resilience-constraint`, `cost-characteristic`, other QoS/route constraints. Only name, end-point and states are supported, plus the end-point's `layer-protocol-constraint` carrying modulation.
 - **Connection**: T-API often models a “Connection” (actual path/route) separate from “ConnectivityService”. This twin does not expose a separate Connection resource; path is internal (and exposed only via `/internal/services/{uuid}`).
 - **Modulation**: ✓ Carried where T-API 2.6 puts it — `end-point/layer-protocol-constraint/tapi-photonic-media:otsia-connectivity-service-end-point-spec/otsi-config/modulation/standard-modulation-technique`, with `MT_*` identities. `tapi-connectivity.yang` has no modulation leaf of its own.
-- **Spectrum / L0**: ◐ Connectivity-service responses include a **frequency-slot** key when allocated, but that key is **not** in T-API 2.6 — the standard location is the end-point's `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac`. Likewise `tapi-photonic-media:spectrum-context` publishes invented leaves under the ONF prefix. Both are recorded in [PENDING.md](PENDING.md). Spectrum assignment remains first-fit at create time; no client-specified slot in POST.
+- **Spectrum / L0**: ✓ Assigned spectrum is carried where T-API 2.6 puts it — `end-point/layer-protocol-constraint/tapi-photonic-media:mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac/spectrum`, in uint64 Hz. Available and occupied spectrum per port is the SIP's `spectrum-capability-pac`. The grid parameters themselves are twin configuration rather than T-API and are served from `/internal/spectrum-context`. Spectrum assignment remains first-fit at create time; no client-specified slot in POST.
 
 **Topology**
 
@@ -143,7 +143,7 @@ Neither interface implements authentication, authorization or TLS. T-API deploym
 |----------|-------------|------|
 | **T-API modules** | Common, Topology, Connectivity (full CRUD), Path Computation, Equipment, Photonic Media (SIP spectrum capability, OTSi modulation) | Virtual Network, OAM, Fault, Notification, T-API Streaming; media channels |
 | **RESTCONF** | Root resource + `host-meta` discovery + `yang-library-version`, paths, JSON, `yang-data+json` content type, `ietf-restconf:errors` error bodies, PUT, list-encoded bodies | `content`/`depth`/`filter`/`with-defaults` query parameters, XML, full YANG-aware PATCH/merge semantics |
-| **Data model** | Core topology + connectivity + SIP, per-SIP spectrum capability, standard modulation augment, link latency-characteristic | Separate Connection resource, routing/resilience/cost constraints, richer topology quality attributes; `frequency-slot` and `spectrum-context` are still non-standard ([PENDING.md](PENDING.md)) |
+| **Data model** | Core topology + connectivity + SIP, per-SIP spectrum capability, standard modulation and assigned-spectrum augments, link latency-characteristic | Separate Connection resource, routing/resilience/cost constraints, richer topology quality attributes |
 | **Behaviour** | Create/read/update/delete connectivity with QoT-aware admission; path computation; snapshot/restore | State and lifecycle semantics are stored but not enforced; modulation-format is immutable after create; QoT is exposed non-standardly |
 | **gNMI** | Capabilities, Subscribe (ONCE/STREAM/POLL) over context, topology and OPM paths | Get, Set, first-class connectivity paths, non-JSON encodings |
 | **Security** | — | Authentication, authorization, TLS |

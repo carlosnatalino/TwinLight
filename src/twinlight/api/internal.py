@@ -304,3 +304,26 @@ async def get_spectrum_grid(request: Request) -> dict:
     """
     ctx = request.app.state.context
     return ctx.get_spectrum_grid_data()
+
+
+@router.get("/spectrum-context")
+async def get_spectrum_context(request: Request) -> dict:
+    """Return the flexible-grid parameters this twin is configured with.
+
+    Lives under ``/internal/`` because it is twin *configuration*, not a
+    T-API resource: ``num-slots``, ``slot-width-ghz`` and
+    ``nominal-central-frequency-thz`` are names this project invented, and
+    T-API v2.6.0 defines no ``spectrum-context`` container to put them in.
+    Publishing them under the ``tapi-photonic-media`` prefix, as an earlier
+    release did, gave a client no way to tell they were not standard.
+
+    The standard view of the same grid is the per-SIP
+    ``spectrum-capability-pac`` on each service-interface-point, which
+    reports real bands in Hz.
+    """
+    spec = request.app.state.config.spectrum
+    return {
+        "num-slots": spec.num_slots,
+        "slot-width-ghz": spec.slot_width_ghz,
+        "nominal-central-frequency-thz": spec.center_frequency_thz,
+    }

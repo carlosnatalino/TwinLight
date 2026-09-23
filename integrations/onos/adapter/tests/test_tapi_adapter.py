@@ -74,6 +74,37 @@ SIPS = [
     _sip(TWIN_SIP_A, "trx Abilene"),
 ]
 
+# The block the twin reports back on an admitted service: 190.725 THz centre,
+# 56.25 GHz wide, as an end-point augment with edges in Hz. There is no
+# frequency-slot leaf in T-API 2.6.
+ADMITTED_CENTRE_THZ = 190.725
+ADMITTED_WIDTH_GHZ = 56.25
+
+
+def _admitted_end_point() -> dict:
+    half = ADMITTED_WIDTH_GHZ * 1e9 / 2
+    centre = ADMITTED_CENTRE_THZ * 1e12
+    return {
+        "local-id": "1",
+        "layer-protocol-constraint": [
+            {
+                "local-id": "otsi",
+                "tapi-photonic-media:mcg-connectivity-service-end-point-spec": {
+                    "number-of-mc": 1,
+                    "mc-spectrum-config-pac": [
+                        {
+                            "local-id": "1",
+                            "spectrum": {
+                                "lower-frequency": int(centre - half),
+                                "upper-frequency": int(centre + half),
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
 
 class TwinStub:
     """Minimal stand-in for the twin, recording what the adapter sends it."""
@@ -362,7 +393,7 @@ def test_list_body_is_translated_to_the_twins_object_form(client, twin):
     twin.create_body = {
         "tapi-connectivity:connectivity-service": {
             "uuid": "onos-uuid-1",
-            "frequency-slot": {"nominal-central-frequency": 190.725},
+            "end-point": [_admitted_end_point()],
         }
     }
     r = client.post(
@@ -529,6 +560,25 @@ def test_modulation_switch_changes_what_the_twin_is_asked_for(client, twin, fmt)
 def test_unknown_modulation_is_rejected(client):
     r = client.post("/adapter/modulation", json={"modulation-format": "DP-256QAM"})
     assert r.status_code == 400
+
+
+def test_spectrum_is_read_from_the_end_point_augment(client, twin):
+    """The adapter reads assigned spectrum where T-API 2.6 puts it.
+
+    It only logs this, but a reader that silently returns None would make
+    every admission look spectrum-less in the demo output.
+    """
+    service = {
+        "uuid": "u",
+        "end-point": [_admitted_end_point()],
+    }
+    centre, width = tapi_adapter._spectrum_of(service)
+    assert centre == pytest.approx(ADMITTED_CENTRE_THZ)
+    assert width == pytest.approx(ADMITTED_WIDTH_GHZ)
+
+    # A service with no allocation reports nothing rather than zeroes.
+    assert tapi_adapter._spectrum_of({"end-point": [{"local-id": "1"}]}) is None
+    assert tapi_adapter._spectrum_of({}) is None
 
 
 def test_modulation_augment_has_the_tapi_2_6_shape(client, twin):

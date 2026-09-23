@@ -372,10 +372,15 @@ class TapiContext:
         return self._services.get(uuid)
 
     def get_service_spectrum(self, uuid: str) -> dict | None:
-        """Return T-API frequency-slot for a service if it has an allocation.
+        """Return the assigned centre frequency and slot width for a service.
 
-        Returns dict with nominal-central-frequency (THz) and slot-width (GHz),
-        or None if the service has no spectrum allocation.
+        ``{nominal-central-frequency: THz, slot-width: GHz}``, or ``None``
+        when the service has no allocation.
+
+        This is *not* a T-API shape — ``tapi-connectivity`` has no
+        ``frequency-slot`` leaf. It stays because the ``/internal/`` views
+        and the UI read these units directly;
+        :meth:`service_spectrum_spec` is what goes on the wire.
         """
         allocation = self._service_allocation.get(uuid)
         if allocation is None:
@@ -395,7 +400,56 @@ class TapiContext:
             "slot-width": round(width_ghz, 3),
         }
 
+    def service_spectrum_spec(self, uuid: str) -> dict | None:
+        """The T-API v2.6.0 MCG spec for a service's assigned spectrum.
+
+        ``tapi-connectivity`` has no way to express assigned spectrum; the
+        photonic module augments the connectivity-service end-point's
+        layer-protocol-constraint:
+
+            tapi-photonic-media:mcg-connectivity-service-end-point-spec
+              mc-spectrum-config-pac[local-id]
+                spectrum { lower-frequency, upper-frequency }   # uint64 Hz
+                edge-frequency-constraint { grid-type, adjustment-granularity }
+
+        Returns ``None`` when the service has no allocation, in which case
+        the end-point carries no MCG spec at all — which is the honest
+        encoding for a service that holds no spectrum.
+        """
+        allocation = self._service_allocation.get(uuid)
+        if allocation is None:
+            return None
+        _path_edges, start_slot, block_width = allocation
+        lower, upper = self._slot_range_hz(start_slot, block_width)
+        return {
+            "number-of-mc": 1,
+            "mc-spectrum-config-pac": [
+                {
+                    "local-id": "1",
+                    "spectrum": {
+                        "lower-frequency": lower,
+                        "upper-frequency": upper,
+                    },
+                    "edge-frequency-constraint": self._frequency_constraint(),
+                },
+            ],
+        }
+
     # -- T-API photonic spectrum capability on a SIP -----------------------
+
+    def _frequency_constraint(self) -> dict:
+        """The grid this twin runs, as a T-API frequency-constraint.
+
+        ITU-T G.694.1 flexi-grid: for ``GRID_TYPE_FLEX`` the adjustment
+        granularity is half the minimum slot width, which is what the
+        configured ``slot_width_ghz`` denotes here.
+        """
+        return {
+            "grid-type": "GRID_TYPE_FLEX",
+            "adjustment-granularity": _adjustment_granularity(
+                self._config.spectrum.slot_width_ghz
+            ),
+        }
 
     def _slot_range_hz(self, start_slot: int, width: int) -> tuple[int, int]:
         """Frequency bounds [Hz] of a slot block, as a T-API spectrum-band.
@@ -459,14 +513,7 @@ class TapiContext:
         """
         cfg = self._config.spectrum
         band_lower, band_upper = self._slot_range_hz(0, cfg.num_slots)
-        constraint = {
-            # The grid is ITU-T G.694.1 flexi-grid: for GRID_TYPE_FLEX the
-            # adjustment granularity is half the minimum slot width.
-            "grid-type": "GRID_TYPE_FLEX",
-            "adjustment-granularity": _adjustment_granularity(
-                cfg.slot_width_ghz
-            ),
-        }
+        constraint = self._frequency_constraint()
 
         def band(lower: int, upper: int) -> dict:
             return {

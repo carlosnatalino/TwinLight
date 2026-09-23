@@ -19,6 +19,9 @@ require_stack
 JSON="$(python3 - "$@" <<PY
 import json, sys, urllib.request, base64
 
+sys.path.insert(0, "${SCRIPT_DIR}")
+from tapi_fields import spectrum_of
+
 onos_auth = base64.b64encode(b"${ONOS_AUTH}").decode()
 
 def get(url, auth=False):
@@ -63,7 +66,8 @@ for f in flows:
         ep = endpoints.get(uuid, {})
         row["a-end"], row["z-end"] = ep.get("a-end"), ep.get("z-end")
         svc = services.get(uuid, {}).get("tapi-connectivity:connectivity-service", {})
-        row["centre-thz"] = (svc.get("frequency-slot") or {}).get("nominal-central-frequency")
+        band = spectrum_of(svc)
+        row["centre-thz"] = round(band[0], 4) if band else None
         try:
             opm = get("${TWIN_URL}/internal/opm/" + uuid)
             info = get("${TWIN_URL}/internal/services/" + uuid)

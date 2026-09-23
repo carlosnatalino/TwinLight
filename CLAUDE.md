@@ -43,12 +43,18 @@ CLI), `twinlight-ui/` (React SPA). Console scripts: `twinlight`,
 These are the ones that are expensive to discover by breaking them.
 
 1. **T-API files are T-API only.** `api/common.py`, `api/topology.py`,
-   `api/connectivity.py`, `api/path_computation.py`, `api/equipment.py` and
-   `api/photonic_media.py` must implement only T-API v2.6.0 — standard paths,
-   standard hyphenated JSON keys. Anything proprietary (OPM, path metadata,
-   admin, diagrams, runtime config) goes in a separate module under
-   `/internal/`, `/admin/` or `/config/`. Never add a non-standard field to a
-   `/data/` response.
+   `api/connectivity.py`, `api/path_computation.py` and `api/equipment.py`
+   must implement only T-API v2.6.0 — standard paths, standard hyphenated JSON
+   keys. Anything proprietary (OPM, path metadata, admin, diagrams, runtime
+   config) goes in a separate module under `/internal/`, `/admin/` or
+   `/config/`. Never add a non-standard field to a `/data/` response.
+
+   "Standard" means *present in the v2.6.0 YANG*, not merely
+   standard-looking. Check the module before adding a key: a plausible name
+   under a `tapi-*` prefix that the spec does not define is worse than an
+   obviously proprietary one, because a client cannot tell. The photonic
+   layer in particular lives in **augments** on the SIP and the
+   connectivity-service end-point, not in top-level resources.
 
 2. **Preserve literature citations in comments.** Where a function implements a
    published formula, the comment naming the author, venue and equation is part

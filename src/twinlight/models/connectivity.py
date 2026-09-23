@@ -41,9 +41,12 @@ from twinlight.physics.modulation import (
     modulation_from_mt,
 )
 
-# The augment's JSON member name. Module-qualified per RFC 7951 §4, because
-# it is defined in tapi-photonic-media rather than tapi-connectivity.
+# The augments' JSON member names. Module-qualified per RFC 7951 §4, because
+# both are defined in tapi-photonic-media rather than tapi-connectivity, and
+# both augment the same layer-protocol-constraint list entry: OTSiA carries
+# the modulation, MCG the assigned spectrum.
 OTSIA_CSEP_SPEC = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
+MCG_CSEP_SPEC = "tapi-photonic-media:mcg-connectivity-service-end-point-spec"
 
 
 class SipRef(BaseModel):

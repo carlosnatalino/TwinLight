@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useConnectionStore } from "@/store/connection";
 import { createClient } from "@/api/client";
+import { spectrumOf } from "@/api/types";
 import type { SpectrumContextResponse } from "@/api/types";
 import type { ConnectivityService } from "@/api/types";
 import { extractName } from "@/lib/tapi-helpers";
@@ -45,8 +46,8 @@ export default function SpectrumPage() {
     );
   }
 
-  const grid = spectrumContext?.["tapi-photonic-media:spectrum-context"];
-  const withSlot = services.filter((s) => s["frequency-slot"]);
+  const grid = spectrumContext;
+  const withSlot = services.filter((s) => spectrumOf(s));
 
   return (
     <div className="p-6 space-y-6">
@@ -103,10 +104,10 @@ export default function SpectrumPage() {
                       )}
                     </td>
                     <td className="px-4 py-2 font-mono">
-                      {s["frequency-slot"]!["nominal-central-frequency"].toFixed(4)}
+                      {spectrumOf(s)!.centreThz.toFixed(4)}
                     </td>
                     <td className="px-4 py-2 font-mono">
-                      {s["frequency-slot"]!["slot-width"].toFixed(2)}
+                      {spectrumOf(s)!.widthGhz.toFixed(2)}
                     </td>
                   </tr>
                 ))}

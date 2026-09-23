@@ -118,6 +118,7 @@ _INDEXED_SIP_RE = re.compile(r"^(?P<real>.+)-(?P<index>\d+)$")
 # this adapter is a standalone container that does not install TwinLight.
 # Note ONF spells 16QAM as MT_DP-QAM16, not MT_DP-16QAM.
 OTSIA_CSEP_SPEC = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
+MCG_CSEP_SPEC = "tapi-photonic-media:mcg-connectivity-service-end-point-spec"
 
 # The twin's T-API 2.6 SIP augment, which this adapter translates into the
 # 2.1 mc-pool that ONOS reads. See _mc_pool().
@@ -150,6 +151,27 @@ def _modulation_augment(modulation: str) -> dict[str, Any]:
             ],
         },
     }
+
+
+def _spectrum_of(service: dict[str, Any]) -> tuple[float, float] | None:
+    """(centre THz, width GHz) of a twin service's assigned spectrum.
+
+    Like the modulation, T-API 2.6 puts this on the end-point rather than on
+    the connectivity-service -- there is no ``frequency-slot`` leaf. Band
+    edges are in Hz; this converts to the units the demo output prints.
+    """
+    for end_point in service.get("end-point") or []:
+        for constraint in end_point.get("layer-protocol-constraint") or []:
+            spec = constraint.get(MCG_CSEP_SPEC) or {}
+            for cfg in spec.get("mc-spectrum-config-pac") or []:
+                band = cfg.get("spectrum") or {}
+                lower, upper = (
+                    band.get("lower-frequency"),
+                    band.get("upper-frequency"),
+                )
+                if lower and upper:
+                    return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
+    return None
 
 
 def _modulation_of(service: dict[str, Any]) -> str | None:
@@ -640,13 +662,15 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
             },
         )
         service = payload.get("tapi-connectivity:connectivity-service", {})
-        slot = service.get("frequency-slot", {})
-        log.info(
-            "twin admitted %s at %s THz (slot width %s GHz)",
-            onos_uuid[:8],
-            slot.get("nominal-central-frequency"),
-            slot.get("slot-width"),
-        )
+        spectrum = _spectrum_of(service)
+        if spectrum is None:
+            log.info("twin admitted %s (no spectrum reported)", onos_uuid[:8])
+        else:
+            log.info(
+                "twin admitted %s at %.4f THz (slot width %.2f GHz)",
+                onos_uuid[:8],
+                *spectrum,
+            )
         return JSONResponse(payload, status_code=status.HTTP_201_CREATED)
 
     detail = _error_detail(response)

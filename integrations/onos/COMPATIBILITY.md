@@ -29,8 +29,8 @@ summary, and they are marked.
 | B2 | No `/restconf` RESTCONF root | **Twin gap — fixed** |
 | B3 | POST rejected a single-entry JSON array | **Twin defect — fixed**; verdict reversed |
 | B4 | `modulation-format` was a bare non-standard key | **Twin defect — fixed** |
-| B5 | `frequency-slot` is a bare non-standard key | **Twin defect — recorded, deferred** |
-| B6 | `tapi-photonic-media:spectrum-context` is invented | **Twin defect — recorded, deferred** |
+| B5 | `frequency-slot` was a bare non-standard key | **Twin defect — fixed** |
+| B6 | `tapi-photonic-media:spectrum-context` was invented | **Twin defect — fixed** |
 | C5 | netcfg pushed before the `ols` driver is bound | Our tooling — fixed |
 | C6 | `gnpy.no_insert_edfas` is read by nothing | Our tooling — recorded, deferred |
 | C8 | `validate.sh` watched a counter that saturates at 10 | Our tooling — fixed |
@@ -264,35 +264,47 @@ rather than silently defaulting to DP-QPSK, which would provision a working
 lightpath of the wrong format — worse than an error. Existing snapshots are in
 the old shape and were deleted; see [§ C.7](#c-not-incompatibilities-at-all--errors-in-this-integrations-own-tooling).
 
-### B5. `frequency-slot` is a bare non-standard key — deferred
+### B5. `frequency-slot` was a bare non-standard key — fixed
 
 The identical defect to B4, in the same payload: `tapi-connectivity.yang` has no
-`frequency-slot` leaf either. 2.6 expresses assigned spectrum as
-`mcg-connectivity-service-end-point-spec` → `mc-spectrum-config-pac` →
-`spectrum` on the end-point.
+`frequency-slot` leaf either. 2.6 expresses assigned spectrum as an augment on
+the end-point, beside the modulation one:
 
-**Verdict: twin defect.** Deferred deliberately, not overlooked — it is read by
-`validate.sh` check 14, the adapter's admission log, `lightpath.sh` and the UI,
-and bundling it with B4 would have made an ONOS validation failure ambiguous
-between the two. The twin is therefore *inconsistent right now*: modulation is
-standard-shaped and spectrum is not. Recorded in
-[docs/PENDING.md](../../docs/PENDING.md).
+```
+end-point → layer-protocol-constraint
+  → tapi-photonic-media:mcg-connectivity-service-end-point-spec
+      → mc-spectrum-config-pac → spectrum { lower-frequency, upper-frequency }
+```
 
-### B6. `tapi-photonic-media:spectrum-context` is invented — deferred
+in uint64 Hz, with an `edge-frequency-constraint` naming the grid. A service
+holding no allocation carries no MCG spec at all, rather than zeroes.
 
-`GET /data/tapi-photonic-media:spectrum-context` returns `num-slots`,
+**Verdict: twin defect, fixed.** It was deferred for one change, not
+overlooked: it is read by `validate.sh`, the adapter's admission log,
+`lightpath.sh`, `correlate.sh`, `demo_services.py` and two UI pages, and
+bundling it with B4 would have made an ONOS validation failure ambiguous
+between the two.
+
+With this the connectivity-service's top level is standard T-API throughout —
+`uuid`, `name`, `end-point` and the three states, nothing else.
+
+### B6. `tapi-photonic-media:spectrum-context` was invented — fixed
+
+`GET /data/tapi-photonic-media:spectrum-context` returned `num-slots`,
 `slot-width-ghz` and `nominal-central-frequency-thz`. **None of those leaves
 exists in T-API v2.6.0**, and neither does a `spectrum-context` container.
 
-This is arguably worse than B4 and B5: a bare key is visibly proprietary,
-whereas invented leaves published under the ONF module prefix give a client no
-way to tell they are not standard.
+This was arguably worse than B4 and B5: a bare key is visibly proprietary,
+whereas invented leaves published under the ONF module prefix gave a client no
+way to tell they were not standard.
 
-**Verdict: twin defect (constraint #1).** Deferred: the UI's Spectrum page reads
-it, and the replacement for most consumers is B1's per-SIP
-`spectrum-capability-pac`, which nothing has migrated to yet. The grid
-parameters are twin configuration, not T-API, and belong under `/internal/`.
-Recorded in [docs/PENDING.md](../../docs/PENDING.md).
+**Verdict: twin defect (constraint #1), fixed.** The grid parameters are twin
+*configuration*, so they moved to `GET /internal/spectrum-context`, served
+unwrapped. `api/photonic_media.py` is deleted: the twin's photonic surface is
+now the augments on the SIP (B1) and on the connectivity-service end-point
+(B4, B5), which are served by the common and connectivity routers. The
+standard view of the same grid is the per-SIP `spectrum-capability-pac`, which
+reports real bands in Hz rather than a slot count.
 
 ---
 
