@@ -1,6 +1,6 @@
 # API reference
 
-TwinLight exposes 38 REST operations plus a gNMI gRPC service. This document is
+TwinLight exposes 40 REST operations plus a gNMI gRPC service. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
 whenever the twin is running.
@@ -8,10 +8,17 @@ whenever the twin is running.
 Endpoints fall into two groups, kept strictly apart (see
 [ARCHITECTURE.md](ARCHITECTURE.md#2-t-api-surfaces-stay-standard)):
 
-- **`/data/…`** — T-API v2.6.0 only. Standard paths, hyphenated JSON keys,
-  RESTCONF errors, `application/yang-data+json` responses.
+- **`/restconf/data/…`** — T-API v2.6.0 only. Standard paths, hyphenated JSON
+  keys, RESTCONF errors, `application/yang-data+json` responses.
 - **`/internal/`, `/admin/`, `/config/`, `/metrics`** — everything the standard
   does not cover.
+
+> **The T-API paths below are written as `/data/…` throughout.** Every one is
+> also served under the RESTCONF root — `/restconf/data/…` by default, set by
+> `server.restconf_root` — which is the canonical location per RFC 8040 §3.1
+> and the one a client discovers from `/.well-known/host-meta`. The bare
+> `/data/…` mount is kept for clients written against earlier releases;
+> retiring it is tracked in [PENDING.md](PENDING.md).
 
 ## T-API v2.6.0 endpoints
 
@@ -106,7 +113,38 @@ analysis before creating a service.
 | GET | `/data/tapi-photonic-media:spectrum-context` |
 
 The spectrum context reports the grid parameters in use: `num-slots`,
-`slot-width-ghz`, `nominal-central-frequency-thz`.
+`slot-width-ghz`, `nominal-central-frequency-thz`. **None of those leaves is
+standard T-API** — the endpoint predates the per-SIP spectrum capability below
+and is scheduled to move under `/internal/`; see [PENDING.md](PENDING.md).
+
+Per-SIP spectrum is the standard surface, carried on every
+`service-interface-point` as a `tapi-photonic-media` augment:
+
+```json
+{
+  "tapi-photonic-media:photonic-media-service-interface-point-spec": {
+    "spectrum-capability-pac": {
+      "supportable-spectrum": [
+        {
+          "lower-frequency": 190696875000000,
+          "upper-frequency": 195496875000000,
+          "frequency-constraint": {
+            "grid-type": "GRID_TYPE_FLEX",
+            "adjustment-granularity": "ADJUSTMENT_GRANULARITY_G_6_25GHZ"
+          }
+        }
+      ],
+      "available-spectrum": [],
+      "occupied-spectrum": []
+    }
+  }
+}
+```
+
+Frequencies are **uint64 Hz**. `occupied-spectrum` lists the blocks held by
+services terminating on *that* SIP — it is a property of the port, not of the
+links the lightpath crosses — and `available-spectrum` is the remainder of the
+supportable band, merged into maximal contiguous runs.
 
 ### Error format
 
@@ -134,6 +172,19 @@ T-API paths contain literal colons (`tapi-common:context`). Browsers
 percent-encode those to `%3A` per the WHATWG URL specification, which would
 otherwise miss the route. `PathDecodeMiddleware` decodes them before routing, so
 both spellings work.
+
+### RESTCONF root
+
+| Method | Path | Returns |
+|--------|------|---------|
+| GET | `/.well-known/host-meta` | XRD (RFC 6415) advertising the RESTCONF root |
+| GET | `/restconf` | `ietf-restconf:restconf` with `data`, `operations`, `yang-library-version` |
+| GET | `/restconf/yang-library-version` | `{"ietf-restconf:yang-library-version": "2019-01-04"}` |
+
+RFC 8040 §3.1 has a client discover the root rather than assume it, so
+`host-meta` is XML by specification — a JSON variant would not be found. The
+root path itself is `server.restconf_root`; setting it to `""` serves only the
+bare `/data/…` paths and omits these three resources.
 
 ## Non-standard endpoints
 

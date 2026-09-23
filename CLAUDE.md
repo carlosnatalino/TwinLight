@@ -13,6 +13,7 @@ repository.
 | What does this config field do? | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
 | Which paper does this equation come from? | [docs/PHYSICS.md](docs/PHYSICS.md) |
 | Is this endpoint T-API compliant? | [docs/TAPI_COMPLIANCE.md](docs/TAPI_COMPLIANCE.md) |
+| Is this known-wrong already, and why is it not fixed? | [docs/PENDING.md](docs/PENDING.md) |
 | How do I set up, test and submit a change? | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Orientation

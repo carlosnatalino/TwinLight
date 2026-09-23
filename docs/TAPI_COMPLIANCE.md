@@ -15,9 +15,9 @@ For the endpoint catalogue itself see [API.md](API.md).
 | Aspect | Status | Notes |
 |--------|--------|------|
 | **Context** | ✓ | `GET /data/tapi-common:context` returns context with SIP list and topology-context ref |
-| **Service interface points** | ✓ | `GET .../service-interface-point`, `GET .../service-interface-point={uuid}` |
+| **Service interface points** | ✓ | `GET .../service-interface-point`, `GET .../service-interface-point={uuid}`; each SIP carries the `tapi-photonic-media:photonic-media-service-interface-point-spec` augment |
 | **Path & JSON keys** | ✓ | Hyphenated keys, `tapi-common:context` wrapper |
-| **Content-Type** | ✓ | Responses under `/data/` use `application/yang-data+json` (RESTCONF) |
+| **Content-Type** | ✓ | Responses under `/data/` and `{restconf-root}/data/` use `application/yang-data+json` (RESTCONF) |
 
 ### 1.2 TAPI Topology
 
@@ -45,8 +45,11 @@ For the endpoint catalogue itself see [API.md](API.md).
 
 ### 1.4 Protocol and conventions
 
+- **RESTCONF root**: The T-API modules are served under `server.restconf_root` (default `/restconf`), discoverable via `GET /.well-known/host-meta` (XRD, RFC 6415) as RFC 8040 §3.1 requires. They remain reachable at the bare `/data/...` for clients written against earlier releases; retiring that mount is tracked in [PENDING.md](PENDING.md).
+- **Capability discovery**: `GET {restconf-root}` and `GET {restconf-root}/yang-library-version` answer per RFC 8040 §3.3.
 - **URL path encoding**: Colons in paths handled (PathDecodeMiddleware for `%3A` → `:`).
 - **RESTCONF-style paths**: Resource paths follow the `.../connectivity-service={uuid}` pattern.
+- **List encoding**: POST accepts a list entry as a single-element JSON array (RFC 7951 §5.4, RFC 8040 App. B.2.1) as well as a bare object.
 - **gNMI**: Capabilities and Subscribe (ONCE / STREAM / POLL) over context, topology and OPM paths; JSON_IETF encoding.
 
 ### 1.5 Path computation and equipment
@@ -56,7 +59,8 @@ For the endpoint catalogue itself see [API.md](API.md).
 | **Path computation context** | ✓ | `GET /data/tapi-path-computation:path-computation-context`, `.../path-computation-service` |
 | **Compute-path RPC** | ✓ | `POST .../path-computation-service/compute-path` returns candidate paths without committing state |
 | **Equipment context** | ✓ | `GET /data/tapi-equipment:equipment-context`, `.../equipment`, `.../equipment={uuid}` |
-| **Spectrum context** | ✓ | `GET /data/tapi-photonic-media:spectrum-context` returns num-slots, slot-width-ghz, nominal-central-frequency-thz |
+| **Spectrum capability** | ✓ | Per-SIP `spectrum-capability-pac` — supportable / available / occupied spectrum-bands in uint64 Hz, from live occupancy |
+| **Spectrum context** | ✗ | `GET /data/tapi-photonic-media:spectrum-context` returns grid parameters, but **none of its leaves exist in T-API 2.6** — see [§ 2.3](#23-data-model-gaps-within-implemented-modules) |
 
 ---
 
@@ -70,7 +74,7 @@ T-API 2.6 defines several modules beyond Common, Topology, and Connectivity. Cov
 |--------|---------|--------|
 | **Path Computation Service** | Request candidate paths (A–Z, constraints, diversity) | ✓ Implemented — `GET /data/tapi-path-computation:path-computation-context`, `.../path-computation-service`, and `POST .../compute-path`. Constraint support is limited to A–Z endpoints and a candidate count; no diversity, inclusion/exclusion or cost constraints. |
 | **Equipment** | Physical / logical equipment inventory | ✓ Implemented — `GET /data/tapi-equipment:equipment-context`, `.../equipment`, `.../equipment={uuid}`. Inventory is derived from the GNPy element list; holder/physical-position modelling is not represented. |
-| **Photonic Media** | Spectrum context, media channels | ◐ Partial — `GET /data/tapi-photonic-media:spectrum-context` returns grid parameters. Media-channel and OTSi resources are not exposed. |
+| **Photonic Media** | SIP spectrum capability, OTSi config, media channels | ◐ Partial — the SIP augment `photonic-media-service-interface-point-spec/spectrum-capability-pac` and the connectivity-service end-point augment `otsia-connectivity-service-end-point-spec/otsi-config/modulation` are implemented. Media-channel (MCG) resources, `mc-spectrum-config-pac` and the rest of `otsi-config` are not. |
 | **Virtual Network Service** | Virtual network (slicing / abstraction) | ✗ No `tapi-virtual-network:*` endpoints. |
 | **OAM (Operations, Admin, Maintenance)** | Maintenance entities, MEP/MIP, tests | ✗ No `tapi-oam:*` endpoints. |
 | **Fault** | Alarms, fault records, severity | ✗ No `tapi-fault:*` endpoints. Fiber failure is injected through the non-standard `/config/` plane instead. |
@@ -94,9 +98,10 @@ So: **Common, Topology, Connectivity, Path Computation and Equipment** are imple
 
 **Connectivity**
 
-- **ConnectivityService**: Minimal set of attributes. Standard T-API may include, for example: `connection`, `connectivity-service-end-point` refinements, `routing-constraint`, `resilience-constraint`, `cost-characteristic`, other QoS/route constraints. Only name, end-point, states, and modulation-format are supported.
+- **ConnectivityService**: Minimal set of attributes. Standard T-API may include, for example: `connection`, `connectivity-service-end-point` refinements, `routing-constraint`, `resilience-constraint`, `cost-characteristic`, other QoS/route constraints. Only name, end-point and states are supported, plus the end-point's `layer-protocol-constraint` carrying modulation.
 - **Connection**: T-API often models a “Connection” (actual path/route) separate from “ConnectivityService”. This twin does not expose a separate Connection resource; path is internal (and exposed only via `/internal/services/{uuid}`).
-- **Spectrum / L0**: ✓ Connectivity-service responses include **frequency-slot** (nominal-central-frequency THz, slot-width GHz) when allocated. **GET tapi-photonic-media:spectrum-context** returns grid parameters (num-slots, slot-width-ghz, nominal-central-frequency-thz). Spectrum assignment remains first-fit at create time; no client-specified slot in POST.
+- **Modulation**: ✓ Carried where T-API 2.6 puts it — `end-point/layer-protocol-constraint/tapi-photonic-media:otsia-connectivity-service-end-point-spec/otsi-config/modulation/standard-modulation-technique`, with `MT_*` identities. `tapi-connectivity.yang` has no modulation leaf of its own.
+- **Spectrum / L0**: ◐ Connectivity-service responses include a **frequency-slot** key when allocated, but that key is **not** in T-API 2.6 — the standard location is the end-point's `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac`. Likewise `tapi-photonic-media:spectrum-context` publishes invented leaves under the ONF prefix. Both are recorded in [PENDING.md](PENDING.md). Spectrum assignment remains first-fit at create time; no client-specified slot in POST.
 
 **Topology**
 
@@ -113,9 +118,9 @@ So: **Common, Topology, Connectivity, Path Computation and Equipment** are imple
 |------|-----|
 | **Administrative / operational state** | States are stored and returned, but there is no defined behavior (e.g. locking a SIP or link does not block connectivity creation or path computation). |
 | **Lifecycle state** | Lifecycle is not driven by a state machine (e.g. PLANNED → INSTALLED transitions); it is just a stored field. |
-| **Modulation format** | Supported at create time only; PATCH does not allow changing modulation-format (documented as intentional). |
+| **Modulation format** | Supported at create time only; PATCH does not allow changing it (documented as intentional). |
 | **QoT in T-API** | No standard T-API “path computation result” or “connectivity with QoT” response; QoT is internal and exposed via `/internal/opm`. |
-| **Versioning / capability** | No RESTCONF `restconf/data/` or `yang-library-version`-style capability discovery; no explicit T-API version in responses. |
+| **Versioning / capability** | ✓ Implemented: data served under a configurable RESTCONF root (default `/restconf`), advertised via `/.well-known/host-meta`, with `yang-library-version`. No explicit T-API version in responses. |
 
 ### 2.5 gNMI-specific gaps
 
@@ -136,9 +141,9 @@ Neither interface implements authentication, authorization or TLS. T-API deploym
 
 | Category | Implemented | Gaps |
 |----------|-------------|------|
-| **T-API modules** | Common, Topology, Connectivity (full CRUD), Path Computation, Equipment, Photonic Media (spectrum context) | Virtual Network, OAM, Fault, Notification, T-API Streaming; media channels |
-| **RESTCONF** | Paths, JSON, `yang-data+json` content type on `/data/`, `ietf-restconf:errors` error bodies, PUT | `content`/`depth`/`filter`/`with-defaults` query parameters, XML, full YANG-aware PATCH/merge semantics |
-| **Data model** | Core topology + connectivity + SIP, frequency-slot on services, link latency-characteristic | Separate Connection resource, routing/resilience/cost constraints, richer topology quality attributes |
+| **T-API modules** | Common, Topology, Connectivity (full CRUD), Path Computation, Equipment, Photonic Media (SIP spectrum capability, OTSi modulation) | Virtual Network, OAM, Fault, Notification, T-API Streaming; media channels |
+| **RESTCONF** | Root resource + `host-meta` discovery + `yang-library-version`, paths, JSON, `yang-data+json` content type, `ietf-restconf:errors` error bodies, PUT, list-encoded bodies | `content`/`depth`/`filter`/`with-defaults` query parameters, XML, full YANG-aware PATCH/merge semantics |
+| **Data model** | Core topology + connectivity + SIP, per-SIP spectrum capability, standard modulation augment, link latency-characteristic | Separate Connection resource, routing/resilience/cost constraints, richer topology quality attributes; `frequency-slot` and `spectrum-context` are still non-standard ([PENDING.md](PENDING.md)) |
 | **Behaviour** | Create/read/update/delete connectivity with QoT-aware admission; path computation; snapshot/restore | State and lifecycle semantics are stored but not enforced; modulation-format is immutable after create; QoT is exposed non-standardly |
 | **gNMI** | Capabilities, Subscribe (ONCE/STREAM/POLL) over context, topology and OPM paths | Get, Set, first-class connectivity paths, non-JSON encodings |
 | **Security** | — | Authentication, authorization, TLS |

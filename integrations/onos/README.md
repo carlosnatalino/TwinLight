@@ -252,7 +252,7 @@ The script prints the allocation and then the live OPM:
     modulation    : DP-QPSK
     centre freq   : 190.725 THz
 ==> Twin optical performance monitoring
-    f07163a5   2148.7 km  GSNR   2.64 dB  OSNR   4.19 dB  Q -0.61 dB  BER 1.76e-01
+    1808f35f   2148.7 km  GSNR  11.43 dB  OSNR  13.07 dB  Q  11.00 dB  BER 1.94e-04
 ```
 
 Now switch to the **TwinLight UI** — the lightpath is on the map and in the
@@ -302,18 +302,29 @@ one table:
 ```
   ONOS FLOW ID         ONOS STATE   PORTS   LIGHTPATH                  SERVICE          KM  GSNR dB        BER
   ----------------------------------------------------------------------------------------------------------
-  48976649027695507    ADDED        32->58  Los_Angeles -> San_Diego   b12fa809      223.8    20.87    2.0e-28
-  48976650132659142    ADDED        2->6    Albany -> Baltimore        eca1f799      830.6    11.43    1.9e-04
-  48976647806749592    ADDED        1->4    Abilene -> Atlanta         761bf68f     2148.7     3.02    1.6e-01
+  48976649027695507    ADDED        32->58  Los_Angeles -> San_Diego   b12fa809      223.8    21.90    1.9e-03
+  48976650132659142    ADDED        2->6    Albany -> Baltimore        eca1f799      830.6    15.62    4.4e-08
+  48976647806749592    ADDED        1->4    Abilene -> Atlanta         761bf68f     2148.7    11.43    1.9e-04
 ```
 
 A flow with no twin service in that table is one the twin refused.
 
 > **Worth being explicit about on stage**, because someone will ask: admission
 > gates on the *pristine GNPy baseline* (11.9 dB here), while `/internal/opm`
-> reports the baseline **after** the transient layer, which is why the live GSNR
-> is much lower than the number the admission decision used. That is TwinLight's
-> existing design, not an artefact of the ONOS path.
+> reports it **after** the transient layer, so the live GSNR sits a few tenths
+> of a dB below the number the admission decision used — PDL drift and EEPN.
+> `rmsa.qot_margin_db`, 1.5 dB by default, is the documented allowance for
+> exactly that, the same role a system margin plays in network design.
+>
+> Gating on a live sample instead would make admission depend on the phase of
+> the PDL drift at the instant the request arrived, so two identical requests
+> seconds apart could decide differently. That is why the baseline is the
+> right thing to gate on.
+>
+> Earlier versions of this demo showed a ~9 dB gap here, with the live GSNR at
+> 2.6 dB and a BER of 0.17 on an admitted lightpath. That was a bug in the EDFA
+> reservoir model, not a design choice — see D1 in
+> [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ### Act 3 — the twin refuses an infeasible request (≈2 min)
 
@@ -403,7 +414,8 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 |--------|---------|
 | `scripts/demo-up.sh` | Build and boot the stack, verify the ODTN apps, push the netcfg, wait for discovery |
 | `scripts/validate.sh` | 16 end-to-end checks across all layers; non-zero exit on any failure |
-| `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range, so every UI has state to show (`--reset` clears first) |
+| `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range *and all three modulation formats*, so every UI has state to show (`--reset` clears first). Pairs are discovered by probing, not hardcoded — see `scripts/find_pairs.py` |
+| `scripts/find_pairs.py` | Probe random endpoint pairs through `/internal/path-info` and report which modulation format each can carry. Used by `seed-demo.sh`; useful on its own when a topology changes |
 | `scripts/lightpath.sh` | `create <A> <Z>` / `list` / `delete <flow-id>` / `clear` — provisioning driven from ONOS |
 | `scripts/correlate.sh` | Join the ONOS Flows view to the twin's service list, one row per flow (`--json` for the raw join) |
 | `scripts/resync.sh` | Force ONOS to re-discover ports (`--check` just compares the two sides) |
