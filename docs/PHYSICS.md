@@ -121,6 +121,29 @@ Getting this routing wrong is a common way for a twin to produce impossible
 telemetry (OSNR degrading with no optical cause). It is explicit here so it can
 be checked.
 
+### Which reference bandwidth an SNR is quoted against
+
+An SNR means nothing without the bandwidth its noise was measured over, and
+this project reports two references. They are not interchangeable and the
+difference is not small — 4.08 dB at 32 GBd.
+
+| Field | Reference | Use |
+|-------|-----------|-----|
+| `gsnr-db` | Signal bandwidth (the baud rate) | What the receiver sees. **This is the one admission compares against `req_gsnr_db`**, and the two must stay on the same reference or the thresholds mean nothing |
+| `osnr-db` | Signal bandwidth | The ASE-only counterpart of `gsnr-db`, on the same footing |
+| `osnr-01nm-db` | 0.1 nm (12.5 GHz at 1550 nm) | What the literature and an OSA quote. Derived, for comparison with published figures |
+
+The conversion is `10·log10(baud_rate / 12.5 GHz)` — a constant in dB, so it
+commutes with the transient layer's additive perturbations and can be applied
+once at the end (`modulation.py:osnr_to_01nm_db`). gnpy draws the same
+distinction between its `osnr_ase` and `osnr_ase_01nm`.
+
+> **If you quote an OSNR from this twin, say which one.** A reader who sees
+> "OSNR 13.4 dB" will almost certainly assume 0.1 nm and conclude the link is
+> 4 dB worse than the model actually says. `gsnr-db` is deliberately *not*
+> offered at 0.1 nm: a 0.1 nm GSNR compared against the required-GSNR table
+> would admit lightpaths that cannot carry traffic.
+
 ### Deterministic pseudo-randomness
 
 Every model that needs a per-element random-looking value derives it from an MD5

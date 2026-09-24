@@ -8,6 +8,7 @@ Supported formats (all DP = dual-polarization):
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -89,10 +90,41 @@ def modulation_from_mt(identity: str) -> ModulationFormat:
         ) from None
 
 
+# ITU-T reference bandwidth for OSNR, 0.1 nm at 1550 nm.
+OSNR_REFERENCE_BANDWIDTH_HZ = 12.5e9
+
+
 def get_params(fmt: str | ModulationFormat) -> ModulationParams:
     """Return ModulationParams for a given format string or enum value."""
     key = ModulationFormat(fmt) if isinstance(fmt, str) else fmt
     return MODULATION_TABLE[key]
+
+
+def osnr_to_01nm_db(
+    osnr_db: float,
+    fmt: str | ModulationFormat,
+) -> float:
+    """Re-reference an OSNR from the signal bandwidth to 0.1 nm.
+
+    OSNR depends on the bandwidth the noise is measured over. This project
+    computes it over the channel's own bandwidth — the SNR the receiver
+    actually sees, and the reference the required-GSNR thresholds in
+    ``MODULATION_TABLE`` are quoted against. Optical-networking literature
+    and OSA traces almost always quote 0.1 nm (12.5 GHz at 1550 nm)
+    instead, which for a 32 GBd channel reads 4.08 dB higher.
+
+    The two differ by a constant, so this is a pure re-labelling of the
+    same measurement — and because it is constant in dB it commutes with
+    the transient layer's additive perturbations, which is why it can be
+    applied at the end rather than threaded through each model.
+
+    gnpy draws the same distinction, between ``osnr_ase`` and
+    ``osnr_ase_01nm`` (``gnpy/core/elements.py``).
+    """
+    baud_rate_hz = get_params(fmt).baud_rate_hz
+    return osnr_db + 10.0 * math.log10(
+        baud_rate_hz / OSNR_REFERENCE_BANDWIDTH_HZ
+    )
 
 
 def slots_required_for_modulation(

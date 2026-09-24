@@ -14,6 +14,34 @@ from twinlight.models.connectivity import OTSIA_CSEP_SPEC
 from twinlight.physics.modulation import MODULATION_TO_MT, ModulationFormat
 
 FIXTURES = Path(__file__).parent / "fixtures"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _no_snapshots_in_the_working_tree():
+    """Fail the run if tests leave snapshot files in the repo.
+
+    ``simulation.snapshot_dir`` defaults to a *relative* ``snapshots/``, so
+    anything constructing a TwinConfig without overriding it writes into
+    whatever directory pytest was started from. That is untidy, but the
+    real hazard is that the twin resumes from ``snapshots/checkpoint.json``
+    on startup — so a file a test left behind becomes state a developer's
+    next run silently inherits.
+
+    Checked as a session fixture rather than left to review: the failure it
+    guards against is invisible until something downstream misbehaves.
+    """
+    snapshots = REPO_ROOT / "snapshots"
+    before = set(snapshots.iterdir()) if snapshots.is_dir() else set()
+
+    yield
+
+    after = set(snapshots.iterdir()) if snapshots.is_dir() else set()
+    created = sorted(p.name for p in after - before)
+    assert not created, (
+        f"tests wrote {created} into {snapshots}. Point "
+        f"simulation.snapshot_dir at tmp_path — see the twin_config fixture."
+    )
 
 
 def tapi_end_point(
@@ -70,6 +98,12 @@ def twin_config(edfa_topology_path: Path, tmp_path: Path) -> TwinConfig:
             topology=edfa_topology_path,
             equipment=eqpt,
         ),
+        # Snapshots go to tmp_path, never the repo. simulation.snapshot_dir
+        # defaults to a *relative* "snapshots/", so a test that posts to
+        # /admin/snapshot without an explicit path would otherwise drop a
+        # file into the working tree on every run — and a stale one there
+        # is what a restarting twin picks up as its checkpoint.
+        simulation={"snapshot_dir": str(tmp_path / "snapshots")},
     )
 
 
@@ -93,7 +127,9 @@ _GNPY_EQUIPMENT = find_example_file("eqpt_config.json")
 
 
 @pytest.fixture
-def gnpy_twin_config(edfa_topology_path: Path) -> TwinConfig:
+def gnpy_twin_config(
+    edfa_topology_path: Path, tmp_path: Path
+) -> TwinConfig:
     """TwinConfig that successfully loads the bundled GNPy equipment file.
 
     Skips the test if the equipment file isn't installed (e.g. CI image
@@ -107,6 +143,8 @@ def gnpy_twin_config(edfa_topology_path: Path) -> TwinConfig:
             topology=edfa_topology_path,
             equipment=_GNPY_EQUIPMENT,
         ),
+        # Keep snapshots out of the working tree — see twin_config.
+        simulation={"snapshot_dir": str(tmp_path / "snapshots")},
     )
 
 

@@ -246,6 +246,7 @@ bare `/data/…` paths and omits these three resources.
       "timestamp": 1234567890.123,
       "measurements": {
         "osnr-db": 30.2,
+        "osnr-01nm-db": 34.3,
         "gsnr-db": 27.4,
         "pre-fec-ber": 2.6e-26,
         "q-factor-db": 19.3,
@@ -267,6 +268,7 @@ one such entry directly, without the `services` wrapper:
   "timestamp": 1234567890.123,
   "measurements": {
     "osnr-db": 30.2,
+    "osnr-01nm-db": 34.3,
     "gsnr-db": 27.4,
     "pre-fec-ber": 2.6e-26,
     "q-factor-db": 19.3,
@@ -275,6 +277,12 @@ one such entry directly, without the `services` wrapper:
   }
 }
 ```
+
+`osnr-db` and `gsnr-db` are referenced to the **signal bandwidth** — the SNR
+the receiver sees, and the reference the admission thresholds are quoted
+against. `osnr-01nm-db` is the same OSNR at the conventional **0.1 nm**, which
+reads 4.08 dB higher at 32 GBd. There is deliberately no 0.1 nm GSNR; see
+[PHYSICS.md](PHYSICS.md#which-reference-bandwidth-an-snr-is-quoted-against).
 
 Every read is evaluated at the current wall-clock time: poll it twice a couple of
 seconds apart and the numbers move, because the transient models are
@@ -334,9 +342,11 @@ the servers accept traffic.
 One snapshot per scrape, in Prometheus text exposition format:
 
 - Per-service OPM: `twinlight_opm_gsnr_db`, `twinlight_opm_osnr_db`,
-  `twinlight_opm_q_factor_db`, `twinlight_opm_pre_fec_ber`,
+  `twinlight_opm_osnr_01nm_db`, `twinlight_opm_q_factor_db`,
+  `twinlight_opm_pre_fec_ber`,
   `twinlight_opm_chromatic_dispersion_ps_per_nm`, `twinlight_opm_pmd_ps`,
   each labelled with `service_uuid`, `service_name` and `modulation`.
+  The two OSNR gauges are one measurement on two reference bandwidths.
 - Per-element `/config` values: `twinlight_fiber_loss_coef_db_per_km`,
   `twinlight_edfa_nf_db`, `twinlight_edfa_gain_target_db`,
   `twinlight_fiber_failed`, `twinlight_service_link_failed`.

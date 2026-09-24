@@ -70,7 +70,10 @@ export interface TopologyContext {
 }
 
 export interface OpmMeasurements {
+  /** OSNR referenced to the signal bandwidth — what the receiver sees. */
   "osnr-db": number;
+  /** The same OSNR referenced to 0.1 nm, as the literature quotes it. */
+  "osnr-01nm-db": number;
   "gsnr-db": number;
   "pre-fec-ber": number;
   "q-factor-db": number;

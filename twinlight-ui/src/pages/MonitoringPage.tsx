@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useConnectionStore } from "@/store/connection";
-import { useMonitoringStore, OPM_METRICS } from "@/store/monitoring";
+import { useMonitoringStore, OPM_METRICS, TILE_METRICS } from "@/store/monitoring";
 import { usePolling } from "@/hooks/usePolling";
 import { useMonitoringHistory, TIME_RANGES, type TimeRange } from "@/hooks/useMonitoringHistory";
 import { createClient } from "@/api/client";
@@ -13,7 +13,7 @@ import EyeDiagram from "@/components/monitoring/EyeDiagram";
 import EmptyState from "@/components/common/EmptyState";
 import { Activity, RefreshCw } from "lucide-react";
 import { exportSeriesAsCsv } from "@/lib/time-series";
-import type { OpmMetric } from "@/store/monitoring";
+import type { TileMetric } from "@/store/monitoring";
 import type { DataPoint } from "@/lib/time-series";
 import type {
   ServiceInfoResponse,
@@ -22,8 +22,12 @@ import type {
 } from "@/api/types";
 import { cn } from "@/lib/cn";
 
-const METRIC_META: Record<OpmMetric, { label: string; unit: string; color: string }> = {
+const METRIC_META: Record<TileMetric, { label: string; unit: string; color: string }> = {
   "osnr-db": { label: "OSNR", unit: "dB", color: "#3b82f6" },
+  // Same measurement as OSNR, referenced to 0.1 nm instead of the signal
+  // bandwidth — what the literature and an OSA quote. Tile only: its trend
+  // is the OSNR trend shifted by a constant.
+  "osnr-01nm-db": { label: "OSNR @0.1nm", unit: "dB", color: "#3b82f6" },
   "gsnr-db": { label: "GSNR", unit: "dB", color: "#8b5cf6" },
   "pre-fec-ber": { label: "Pre-FEC BER", unit: "BER", color: "#ef4444" },
   "q-factor-db": { label: "Q-Factor", unit: "dB", color: "#22c55e" },
@@ -346,8 +350,8 @@ export default function MonitoringPage() {
             <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
               Current Values
             </h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              {OPM_METRICS.map((metric) => {
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+              {TILE_METRICS.map((metric) => {
                 const meta = METRIC_META[metric];
                 const value = activeOpm?.measurements?.[metric];
                 const series = seriesCache[effectiveServiceUuid]?.[metric] ?? [];

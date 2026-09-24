@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { filterByTimeRange, type DataPoint } from "@/lib/time-series";
 import { useMonitoringStore } from "@/store/monitoring";
-import type { OpmMetric } from "@/store/monitoring";
+import type { TileMetric } from "@/store/monitoring";
 
 export const TIME_RANGES = [
   { label: "5 min", ms: 5 * 60 * 1000 },
@@ -17,7 +17,7 @@ export function useMonitoringHistory(serviceUuid: string | null) {
   const seriesCache = useMonitoringStore((s) => s.seriesCache);
 
   const getHistory = useCallback(
-    (metric: OpmMetric, rangeMs: number): DataPoint[] => {
+    (metric: TileMetric, rangeMs: number): DataPoint[] => {
       if (!serviceUuid) return [];
       const all = seriesCache[serviceUuid]?.[metric] ?? [];
       return filterByTimeRange(all, rangeMs);

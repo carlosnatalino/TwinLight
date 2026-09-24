@@ -35,6 +35,14 @@ interface MonitoringState {
   clearHistory: () => void;
 }
 
+/**
+ * Metrics that get a historical trend chart. Six, laid out 2x3.
+ *
+ * `osnr-01nm-db` is deliberately not here: it is the same measurement as
+ * `osnr-db` on a different reference bandwidth, so its trend line would be
+ * an exact copy of the OSNR one shifted by a constant. It appears as a
+ * current-value tile instead — see TILE_METRICS.
+ */
 const OPM_METRICS = [
   "osnr-db",
   "gsnr-db",
@@ -44,9 +52,13 @@ const OPM_METRICS = [
   "pmd-ps",
 ] as const;
 
-export type OpmMetric = (typeof OPM_METRICS)[number];
+/** Metrics shown as current-value tiles: the charted six, plus OSNR@0.1nm. */
+const TILE_METRICS = [...OPM_METRICS, "osnr-01nm-db"] as const;
 
-export { OPM_METRICS };
+export type OpmMetric = (typeof OPM_METRICS)[number];
+export type TileMetric = (typeof TILE_METRICS)[number];
+
+export { OPM_METRICS, TILE_METRICS };
 
 export const useMonitoringStore = create<MonitoringState>()((set) => ({
   currentOpm: {},
@@ -65,7 +77,7 @@ export const useMonitoringStore = create<MonitoringState>()((set) => ({
 
     set((state) => {
       const updates: Record<string, DataPoint[]> = {};
-      for (const metric of OPM_METRICS) {
+      for (const metric of TILE_METRICS) {
         const value = measurements[metric];
         if (value !== undefined && !isNaN(value)) {
           const existing =
@@ -101,7 +113,7 @@ export const useMonitoringStore = create<MonitoringState>()((set) => ({
   hydrateSeriesForService: (serviceUuid: string) => {
     set((state) => {
       const updates: Record<string, DataPoint[]> = {};
-      for (const metric of OPM_METRICS) {
+      for (const metric of TILE_METRICS) {
         const persisted = readSeries(metric, serviceUuid);
         const inMemory = state.seriesCache[serviceUuid]?.[metric] ?? [];
         const merged = mergeSeries(inMemory, persisted, MAX_SERIES_POINTS);

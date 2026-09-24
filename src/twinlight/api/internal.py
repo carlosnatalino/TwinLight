@@ -59,6 +59,7 @@ def _link_failed_measurements() -> dict[str, Any]:
     """
     return {
         "osnr-db": None,
+        "osnr-01nm-db": None,
         "gsnr-db": None,
         "q-factor-db": None,
         "chromatic-dispersion-ps-per-nm": None,
@@ -67,13 +68,19 @@ def _link_failed_measurements() -> dict[str, Any]:
     }
 
 
-def _mock_measurements(service_uuid: str, t: float) -> dict:
+def _mock_measurements(
+    service_uuid: str, t: float, modulation_format: str = "DP-QPSK"
+) -> dict:
     """Return time-varying sinusoidal mock measurements (fallback).
 
     Each service gets a unique path factor so that metric ranges differ
     between services (simulating different path lengths when GNPy is
     unavailable). Phase offsets per (UUID, metric) keep waveforms distinct.
     BER uses a multiplicative form to stay strictly positive.
+
+    The modulation format is needed only to re-reference OSNR to 0.1 nm,
+    so that a UI reading mock data sees the same pair of fields, in the
+    same relationship, as one reading real physics.
     """
     path_factor = _mock_path_factor(service_uuid)
     # Longer path: worse OSNR/GSNR/Q (subtract), higher CD/PMD (multiply)
@@ -97,6 +104,11 @@ def _mock_measurements(service_uuid: str, t: float) -> dict:
         1 + 0.5 * math.sin(2 * math.pi * t / 45.0 + ber_phase)
     )
 
+    from twinlight.physics.modulation import osnr_to_01nm_db
+
+    measurements["osnr-01nm-db"] = osnr_to_01nm_db(
+        measurements["osnr-db"], modulation_format
+    )
     return measurements
 
 
@@ -119,7 +131,9 @@ async def get_all_opm(request: Request) -> dict:
             entry["status"] = "link-failed"
             entry["measurements"] = _link_failed_measurements()
         elif baseline is None:
-            entry["measurements"] = _mock_measurements(svc.uuid, t)
+            entry["measurements"] = _mock_measurements(
+                svc.uuid, t, svc.modulation_format.value
+            )
         else:
             from twinlight.physics.transients.cascade import apply_all_transients
 
@@ -159,7 +173,9 @@ async def get_service_opm(service_uuid: str, request: Request) -> dict:
         response["status"] = "link-failed"
         response["measurements"] = _link_failed_measurements()
     elif baseline is None:
-        response["measurements"] = _mock_measurements(service_uuid, t)
+        response["measurements"] = _mock_measurements(
+            service_uuid, t, svc.modulation_format.value
+        )
     else:
         from twinlight.physics.transients.cascade import apply_all_transients
 

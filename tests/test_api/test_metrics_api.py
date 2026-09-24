@@ -170,6 +170,7 @@ class TestOpmGauges:
         for metric in (
             "twinlight_opm_gsnr_db",
             "twinlight_opm_osnr_db",
+            "twinlight_opm_osnr_01nm_db",
             "twinlight_opm_q_factor_db",
             "twinlight_opm_pre_fec_ber",
             "twinlight_opm_chromatic_dispersion_ps_per_nm",
