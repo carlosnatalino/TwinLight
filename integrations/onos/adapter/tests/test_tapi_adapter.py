@@ -449,6 +449,41 @@ def test_status_exposes_the_join_key(client, twin):
     assert (endpoints["a-end"], endpoints["z-end"]) == ("Abilene", "Atlanta")
 
 
+def test_deleting_an_already_gone_lightpath_reports_success(client, twin):
+    """ONOS retires a flow rule only on 204. After the twin restarts without
+    its checkpoint, every flow ONOS holds refers to a service that no longer
+    exists; relaying the twin's 404 would wedge all of them in PENDING_REMOVE,
+    retried forever and unremovable."""
+
+    def gone(request):
+        return httpx.Response(404, json={"detail": "Service ... not found"})
+
+    client.app.state.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(gone), base_url="http://twin"
+    )
+    r = client.delete(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/"
+        "connectivity-service=vanished"
+    )
+    assert r.status_code == 204
+
+
+def test_delete_still_surfaces_real_failures(client, twin):
+    """A 500 is not 'already gone' — ONOS must keep the rule and retry."""
+
+    def broken(request):
+        return httpx.Response(500, json={"detail": "boom"})
+
+    client.app.state.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(broken), base_url="http://twin"
+    )
+    r = client.delete(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/"
+        "connectivity-service=onos-uuid-1"
+    )
+    assert r.status_code == 500
+
+
 def test_endpoints_are_forgotten_on_delete(client, twin):
     twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
     client.post(

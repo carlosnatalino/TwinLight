@@ -704,9 +704,19 @@ async def delete_connectivity_service(uuid: str, request: Request) -> Response:
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         ) from exc
 
-    if response.status_code in (200, 204):
+    # 404 counts as success: the caller wants the lightpath gone, and it is.
+    # This is not pedantry about REST idempotence — ONOS only retires a flow
+    # rule when the delete returns 204. If the twin has restarted without its
+    # checkpoint while ONOS still holds flows, every one of them refers to a
+    # service that no longer exists, so a 404 here would leave the whole set
+    # wedged in PENDING_REMOVE, retried forever and unremovable by any means
+    # short of purging ONOS's flow store.
+    if response.status_code in (200, 204, 404):
         registry.forget(uuid)
-        log.info("released lightpath %s", uuid[:8])
+        if response.status_code == 404:
+            log.info("lightpath %s was already gone; reporting success", uuid[:8])
+        else:
+            log.info("released lightpath %s", uuid[:8])
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     log.error("could not delete %s: HTTP %s", uuid[:8], response.status_code)

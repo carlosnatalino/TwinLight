@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="docs/assets/twinlight-logo.svg" alt="TwinLight" width="360">
+<picture>
+  <source srcset="docs/assets/twinlight-logo-dark.svg" media="(prefers-color-scheme: dark)">
+  <img src="docs/assets/twinlight-logo.svg" alt="TwinLight" width="360">
+</picture>
 
 **A multi-timescale digital twin of an optical network, behind standard T-API interfaces.**
 
@@ -41,18 +44,32 @@ way a deployed coherent receiver's telemetry moves.
 
 ## Table of contents
 
+- [Table of contents](#table-of-contents)
 - [Feature overview](#feature-overview)
 - [Quick start with Docker Compose](#quick-start-with-docker-compose)
 - [Local installation (development)](#local-installation-development)
 - [Usage](#usage)
+  - [Run the twin](#run-the-twin)
+  - [Create a connectivity service](#create-a-connectivity-service)
+  - [Populate the twin with demo services](#populate-the-twin-with-demo-services)
+  - [Stream live OPM](#stream-live-opm)
+  - [Checkpoint and restore](#checkpoint-and-restore)
 - [Architecture](#architecture)
 - [Physics](#physics)
+  - [QoT baseline](#qot-baseline)
+  - [Time-varying impairments](#time-varying-impairments)
+  - [Modulation formats](#modulation-formats)
 - [Configuration](#configuration)
 - [Example scenarios and GNPy reference data](#example-scenarios-and-gnpy-reference-data)
 - [Development](#development)
 - [Documentation](#documentation)
 - [Citing TwinLight](#citing-twinlight)
 - [References](#references)
+  - [Physical-layer transients](#physical-layer-transients)
+  - [QoT and propagation models](#qot-and-propagation-models)
+  - [Digital twins and optical network emulation](#digital-twins-and-optical-network-emulation)
+  - [Standards and specifications](#standards-and-specifications)
+  - [Software this project builds on](#software-this-project-builds-on)
 - [License and acknowledgements](#license-and-acknowledgements)
 
 ## Feature overview
