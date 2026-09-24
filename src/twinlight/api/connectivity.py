@@ -8,8 +8,10 @@ GET  /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import ValidationError
 
 from twinlight.models.connectivity import (
+    MCG_CSEP_SPEC,
     ConnectivityService,
     UpdateConnectivityServiceRequest,
 )
@@ -25,6 +27,54 @@ router = APIRouter(prefix="/data", tags=["tapi-connectivity"])
 _BASE = "/tapi-connectivity:connectivity-context"
 
 
+def _single_service(body: dict) -> dict:
+    """Unwrap one connectivity-service from a RESTCONF request body.
+
+    ``connectivity-service`` is a YANG *list*, so RFC 7951 §5.4 encodes it
+    as a name/array pair and RFC 8040 Appendix B.2.1 creates a single entry
+    with an array of one. A bare object is the other spelling seen in the
+    wild. Both are accepted; more than one entry is not, because the caller
+    below admits exactly one service.
+    """
+    raw = body.get("tapi-connectivity:connectivity-service", body)
+    if isinstance(raw, list):
+        if len(raw) != 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Expected exactly one connectivity-service, got "
+                    f"{len(raw)}"
+                ),
+            )
+        raw = raw[0]
+    if not isinstance(raw, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="connectivity-service must be an object or a list of one",
+        )
+    return raw
+
+
+def _parse_service(body: dict) -> ConnectivityService:
+    """Unwrap and validate a connectivity-service request body.
+
+    The body is validated by hand rather than through a FastAPI parameter
+    annotation (the envelope key and the list-or-object spelling both have
+    to be resolved first), so pydantic's error has to be mapped to a 422
+    here — otherwise a malformed payload surfaces as a 500.
+    """
+    try:
+        return ConnectivityService.model_validate(_single_service(body))
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="; ".join(
+                f"{'/'.join(str(p) for p in e['loc']) or 'body'}: {e['msg']}"
+                for e in exc.errors()
+            ),
+        ) from exc
+
+
 @router.post(
     f"{_BASE}/connectivity-service",
     status_code=status.HTTP_201_CREATED,
@@ -33,8 +83,7 @@ async def create_service(body: dict, request: Request) -> dict:
     """Create a new connectivity service between two SIPs."""
     ctx = request.app.state.context
 
-    raw = body.get("tapi-connectivity:connectivity-service", body)
-    svc = ConnectivityService.model_validate(raw)
+    svc = _parse_service(body)
 
     # Validate that all referenced SIPs exist
     for ep in svc.end_point:
@@ -76,17 +125,28 @@ async def create_service(body: dict, request: Request) -> dict:
 
 
 def _connectivity_service_payload(ctx, svc) -> dict:
-    """Build connectivity-service dict with optional frequency-slot (T-API spectrum)."""
+    """Serialise a connectivity-service with its assigned spectrum.
+
+    Spectrum is live allocation state rather than something the client sent,
+    so it is merged in here instead of being carried on the model — the same
+    reason the SIP's spectrum capability is assembled per request.
+
+    It goes where T-API v2.6.0 puts it, on the end-point's
+    layer-protocol-constraint alongside the modulation augment;
+    ``tapi-connectivity`` has no ``frequency-slot`` leaf of its own.
+    """
     payload = svc.model_dump(by_alias=True)
-    spectrum = ctx.get_service_spectrum(svc.uuid)
-    if spectrum is not None:
-        payload["frequency-slot"] = spectrum
+    spec = ctx.service_spectrum_spec(svc.uuid)
+    if spec is not None:
+        for end_point in payload.get("end-point", []):
+            for constraint in end_point.get("layer-protocol-constraint", []):
+                constraint[MCG_CSEP_SPEC] = spec
     return payload
 
 
 @router.get(f"{_BASE}/connectivity-service")
 async def get_services(request: Request) -> dict:
-    """Return all connectivity services (with frequency-slot when allocated)."""
+    """Return all connectivity services, with assigned spectrum when held."""
     ctx = request.app.state.context
     return {
         "tapi-connectivity:connectivity-context": {
@@ -99,7 +159,7 @@ async def get_services(request: Request) -> dict:
 
 @router.get(f"{_BASE}/connectivity-service={{uuid}}")
 async def get_service(uuid: str, request: Request) -> dict:
-    """Return a specific connectivity service (with frequency-slot when allocated)."""
+    """Return one connectivity service, with assigned spectrum when held."""
     ctx = request.app.state.context
     svc = ctx.get_service(uuid)
     if svc is None:
@@ -120,8 +180,7 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     so a failed replace never silently tears down the service that was there.
     """
     ctx = request.app.state.context
-    raw = body.get("tapi-connectivity:connectivity-service", body)
-    svc = ConnectivityService.model_validate(raw)
+    svc = _parse_service(body)
     if svc.uuid != uuid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

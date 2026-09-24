@@ -6,6 +6,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from tests.conftest import tapi_end_point
+
 _BASE = "/data/tapi-connectivity:connectivity-context"
 
 
@@ -20,10 +22,9 @@ def _create_service(app: TestClient, sip_a: str, sip_z: str) -> str:
     payload = {
         "tapi-connectivity:connectivity-service": {
             "name": [{"value-name": "service-name", "value": "snap-test"}],
-            "modulation-format": "DP-QPSK",
             "end-point": [
-                {"local-id": "a", "service-interface-point": {"service-interface-point-uuid": sip_a}},
-                {"local-id": "z", "service-interface-point": {"service-interface-point-uuid": sip_z}},
+                tapi_end_point("a", sip_a),
+                tapi_end_point("z", sip_z),
             ],
         }
     }
@@ -124,6 +125,41 @@ class TestSnapshotLatest:
         assert "path" in data
         assert "timestamp" in data
         assert "twin-" in data["path"] or "snapshots" in data["path"]
+
+
+class TestSnapshotDirectoryFollowsConfig:
+    """A path-less snapshot lands in ``simulation.snapshot_dir``.
+
+    It used not to: the endpoint hardcoded a CWD-relative ``snapshots/``,
+    so ``--snapshot-dir`` had no effect here and the endpoint disagreed
+    with the shutdown checkpoint about where snapshots live. In the Compose
+    stack the two happened to coincide only because WORKDIR is /app.
+    """
+
+    def test_written_under_the_configured_directory(
+        self, app: TestClient, twin_config
+    ) -> None:
+        configured = Path(twin_config.simulation.snapshot_dir)
+        resp = app.post("/admin/snapshot", json={})
+        assert resp.status_code == 200
+
+        written = Path(resp.json()["path"]).resolve()
+        assert written.is_file()
+        assert configured.resolve() in written.parents
+
+    def test_nothing_lands_in_the_working_directory(
+        self, app: TestClient
+    ) -> None:
+        """The specific regression: a stray snapshots/ beside the caller."""
+        cwd_snapshots = Path.cwd() / "snapshots"
+        before = (
+            set(cwd_snapshots.iterdir()) if cwd_snapshots.is_dir() else set()
+        )
+        app.post("/admin/snapshot", json={})
+        after = (
+            set(cwd_snapshots.iterdir()) if cwd_snapshots.is_dir() else set()
+        )
+        assert after == before
 
 
 class TestListSnapshots:

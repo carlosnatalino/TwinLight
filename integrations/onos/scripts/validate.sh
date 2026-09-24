@@ -164,9 +164,16 @@ svc_count() {
   curl -sS "${ADAPTER_URL}/adapter/status" \
     | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["onos-created-services"]))'
 }
-rej_count() {
-  curl -sS "${ADAPTER_URL}/adapter/status" \
-    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["recent-rejections"]))'
+# Identity of the most recent rejection, or "none". NOT a count: /adapter/status
+# returns only rejections[-10:], so a count saturates at 10 and then never
+# changes again -- which made the DP-16QAM check below fail spuriously on any
+# stack that had already seen ten refusals.
+rej_latest() {
+  curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)["recent-rejections"]
+print("%s@%s" % (r[-1]["uuid"], r[-1]["at"]) if r else "none")
+'
 }
 
 check "DP-QPSK: ONOS flow rule becomes a lightpath on the twin" \
@@ -183,30 +190,34 @@ check "DP-QPSK: ONOS flow rule becomes a lightpath on the twin" \
     echo \"no new service after 120s (before=\$before now=\$(svc_count))\"; exit 1
   "
 
-check "the lightpath has a T-API frequency-slot and live OPM on the twin" \
+check "the lightpath carries the T-API spectrum augment and live OPM" \
   bash -c "curl -sSf '${ADAPTER_URL}/adapter/status' | python3 -c '
 import json, sys, urllib.request
+sys.path.insert(0, \"${SCRIPT_DIR}\")
+from tapi_fields import spectrum_of
 svcs = json.load(sys.stdin)[\"onos-created-services\"]
 assert svcs, \"no ONOS-created services\"
 uuid, payload = next(iter(svcs.items()))
 svc = payload[\"tapi-connectivity:connectivity-service\"]
-slot = svc.get(\"frequency-slot\")
-assert slot and slot.get(\"nominal-central-frequency\"), \"no spectrum allocated\"
+# T-API 2.6 has no frequency-slot leaf; spectrum is an end-point augment.
+assert \"frequency-slot\" not in svc, \"non-standard frequency-slot key is back\"
+band = spectrum_of(svc)
+assert band, \"no spectrum allocated\"
 opm = json.load(urllib.request.urlopen(\"${TWIN_URL}/internal/opm/\" + uuid))[\"measurements\"]
 assert \"gsnr-db\" in opm and \"pre-fec-ber\" in opm, opm
-print(\"%s at %s THz, GSNR %.2f dB\" % (uuid[:8], slot[\"nominal-central-frequency\"], opm[\"gsnr-db\"]))
+print(\"%s at %.4f THz / %.2f GHz, GSNR %.2f dB\" % (uuid[:8], band[0], band[1], opm[\"gsnr-db\"]))
 '"
 
 check "DP-16QAM: the twin REFUSES the same path on QoT grounds" \
   bash -c "
-    $(declare -f set_modulation rej_count flow_body onos_api)
+    $(declare -f set_modulation rej_latest flow_body onos_api)
     ONOS_URL='${ONOS_URL}'; ONOS_AUTH='${ONOS_AUTH}'; ADAPTER_URL='${ADAPTER_URL}'; DEVICE_ID='${DEVICE_ID}'
     set_modulation DP-16QAM
-    before=\$(rej_count)
+    before=\$(rej_latest)
     onos_api POST '/onos/v1/flows/${DEVICE_ID}?appId=org.onosproject.rest' \"\$(flow_body ${Z_PORT} ${A_PORT})\" >/dev/null
     for i in \$(seq 1 24); do
       sleep 5
-      if [ \"\$(rej_count)\" -gt \"\$before\" ]; then
+      if [ \"\$(rej_latest)\" != \"\$before\" ]; then
         curl -sS '${ADAPTER_URL}/adapter/status' | python3 -c '
 import json, sys
 r = json.load(sys.stdin)[\"recent-rejections\"][-1]

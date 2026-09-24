@@ -23,15 +23,25 @@ amplifier count: 1/T_N = N · 1/T_1.  Peak excursions can reach
 
 Implementation
 --------------
-This module maintains per-EDFA state (EdfaState) tracking the current
-channel count, last event time, and steady-state reservoir values before
-and after the last event.  On each query, the exponential decay is
-evaluated at the current wall-clock time.
+This module maintains per-EDFA state tracking the current channel count,
+the last event time, and the gain excursion that event produced.  On each
+query, the exponential decay is evaluated at the current wall-clock time.
+
+**The steady state is zero deviation.**  Between add/drop events an
+AGC-controlled, gain-flattened EDFA delivers its designed per-channel gain
+regardless of how many channels it carries — and that designed operating
+point is exactly what the QoT backend's baseline already represents
+(``designed_network()`` sets each amplifier's operating point before any
+propagation).  What this model contributes is therefore the *excursion*
+around that baseline, which relaxes back to it with τ_e, and never a
+standing offset.  Modelling the steady state itself as a load-dependent
+penalty would double-count the loading the baseline has already priced in.
 
 Default parameters:
   - tau_ms = 10.0 ms: erbium metastable lifetime (Sun-Saleh-Zyskind 1997)
-  - gain_per_channel_db = 0.3 dB: per-channel GSNR contribution
-    (conservative for single EDFA; cascade amplifies linearly)
+  - gain_per_channel_db = 0.3 dB: peak gain excursion [dB] per channel of
+    load step (conservative for a single EDFA; cascade accumulates
+    linearly in dB, Sun 1997)
   - tau_add_factor = 0.001: τ_e/τ ratio for channel-add events
     (Bononi-Rusch 1998: ~1-10 µs for τ = 10 ms)
   - tau_drop_factor = 0.01: τ_e/τ ratio for channel-drop events
@@ -51,11 +61,15 @@ if TYPE_CHECKING:
 
 @dataclass
 class EdfaEvent:
-    """Record of the last channel-count change on an EDFA."""
+    """Record of the last channel-count change on an EDFA.
+
+    The reservoir relaxes back to zero deviation (the designed operating
+    point), so only the excursion at the event and its decay constant
+    need to be stored — see the module docstring.
+    """
 
     event_time: float          # wall-clock time [s] of the event
-    delta_gsnr_before: float   # GSNR deviation [dB] before the event
-    delta_gsnr_after: float    # GSNR deviation [dB] target (new SS)
+    excursion_db: float        # GSNR deviation [dB] immediately after the step
     tau_eff_s: float           # effective time constant [s]
 
 
@@ -95,19 +109,29 @@ class EdfaStateTracker:
             new_count = max(0, old_count + delta_channels)
             self._channel_count[uid] = new_count
 
+            # The clamp above means a drop below zero channels is not a
+            # load step at all, so nothing is perturbed.
+            effective_delta = new_count - old_count
+            if effective_delta == 0:
+                continue
+
             # Current deviation at event time (evaluate ongoing transient)
+            # so back-to-back events compose instead of discarding whatever
+            # excursion is still in flight.
             current_dev = self._get_deviation(uid, t)
 
-            # New steady-state GSNR deviation: more channels → gain
-            # compression → lower per-channel GSNR (negative deviation).
-            # Bononi-Rusch: gain excursion proportional to load change.
-            # Each channel contributes gain_per_channel_db deviation.
-            new_ss = -new_count * cfg.gain_per_channel_db
+            # Bononi-Rusch: the gain excursion is proportional to the load
+            # *change*. Adding channels depletes the reservoir, so gain
+            # drops and surviving channels lose GSNR (negative excursion);
+            # dropping channels lets gain overshoot (positive excursion).
+            # It then relaxes back to the designed operating point — the
+            # steady state is zero deviation, not a standing penalty.
+            excursion = current_dev - cfg.gain_per_channel_db * effective_delta
 
             # Effective time constant depends on direction
             # (Bononi-Rusch 1998, Eq. 29: τ_e is asymmetric)
             tau_ms = cfg.tau_ms
-            if delta_channels > 0:
+            if effective_delta > 0:
                 # Channel add: fast response (~1-10 µs)
                 tau_eff = (tau_ms / 1000.0) * cfg.tau_add_factor
             else:
@@ -116,8 +140,7 @@ class EdfaStateTracker:
 
             self._last_event[uid] = EdfaEvent(
                 event_time=t,
-                delta_gsnr_before=current_dev,
-                delta_gsnr_after=new_ss,
+                excursion_db=excursion,
                 tau_eff_s=max(tau_eff, 1e-9),
             )
 
@@ -128,12 +151,13 @@ class EdfaStateTracker:
             return 0.0
         elapsed = t - ev.event_time
         if elapsed < 0:
-            return ev.delta_gsnr_before
-        # Bononi-Rusch Eq. 19: exponential step response
-        decay = math.exp(-elapsed / ev.tau_eff_s)
-        return ev.delta_gsnr_after + (
-            ev.delta_gsnr_before - ev.delta_gsnr_after
-        ) * decay
+            # Before the recorded event the amplifier is at its designed
+            # operating point as far as this tracker can tell — only the
+            # most recent event is retained.
+            return 0.0
+        # Bononi-Rusch Eq. 19: exponential step response, relaxing to the
+        # zero-deviation steady state (see the module docstring).
+        return ev.excursion_db * math.exp(-elapsed / ev.tau_eff_s)
 
     def get_total_delta_gsnr_db(
         self,
@@ -150,7 +174,10 @@ class EdfaStateTracker:
             t: Query wall-clock time [s]; defaults to now.
 
         Returns:
-            Total GSNR deviation [dB] (typically negative during transients).
+            Total GSNR deviation [dB] — negative while an add transient is
+            in flight, positive during a drop, and zero once the cascade
+            has relaxed to its designed operating point.  Because τ_e is
+            microseconds, that is the value any wall-clock-rate poll sees.
         """
         if t is None:
             t = time.time()

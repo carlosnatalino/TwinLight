@@ -31,26 +31,79 @@ from tapi_adapter import app
 TWIN_SIP_A = "21359ce4-e8f1-5acf-8b91-40965af0c942"
 TWIN_SIP_Z = "ad0d2a78-4f16-50be-bbfd-165e6b4f3871"
 
+# The twin's grid: 768 slots of 6.25 GHz with slot 384 centred on 193.1 THz.
+# Slot index is a slot *centre*, so the band edges sit half a slot outside
+# the first and last centres -- 4800 GHz wide, not symmetric about 193.1.
+BAND_LOWER_HZ = 190_696_875_000_000
+BAND_UPPER_HZ = 195_496_875_000_000
+BAND_LOWER_MHZ = 190_696_875
+BAND_UPPER_MHZ = 195_496_875
+
+
+def _band(lower_hz: int, upper_hz: int) -> dict:
+    """A T-API v2.6.0 spectrum-band: uint64 Hz plus the real grid type."""
+    return {
+        "lower-frequency": lower_hz,
+        "upper-frequency": upper_hz,
+        "frequency-constraint": {
+            "grid-type": "GRID_TYPE_FLEX",
+            "adjustment-granularity": "ADJUSTMENT_GRANULARITY_G_6_25GHZ",
+        },
+    }
+
+
+def _sip(uuid: str, node: str, occupied: list[tuple[int, int]] | None = None) -> dict:
+    """A twin SIP carrying the 2.6 photonic augment the adapter translates."""
+    occupied = occupied or []
+    return {
+        "uuid": uuid,
+        "name": [{"value-name": "node-name", "value": node}],
+        "layer-protocol-name": "PHOTONIC_MEDIA",
+        "tapi-photonic-media:photonic-media-service-interface-point-spec": {
+            "spectrum-capability-pac": {
+                "supportable-spectrum": [_band(BAND_LOWER_HZ, BAND_UPPER_HZ)],
+                "available-spectrum": [_band(BAND_LOWER_HZ, BAND_UPPER_HZ)],
+                "occupied-spectrum": [_band(lo, hi) for lo, hi in occupied],
+            }
+        },
+    }
+
+
 SIPS = [
-    {
-        "uuid": TWIN_SIP_Z,
-        "name": [{"value-name": "node-name", "value": "trx Atlanta"}],
-        "layer-protocol-name": "PHOTONIC_MEDIA",
-    },
-    {
-        "uuid": TWIN_SIP_A,
-        "name": [{"value-name": "node-name", "value": "trx Abilene"}],
-        "layer-protocol-name": "PHOTONIC_MEDIA",
-    },
+    _sip(TWIN_SIP_Z, "trx Atlanta"),
+    _sip(TWIN_SIP_A, "trx Abilene"),
 ]
 
-SPECTRUM = {
-    "tapi-photonic-media:spectrum-context": {
-        "num-slots": 768,
-        "slot-width-ghz": 6.25,
-        "nominal-central-frequency-thz": 193.1,
+# The block the twin reports back on an admitted service: 190.725 THz centre,
+# 56.25 GHz wide, as an end-point augment with edges in Hz. There is no
+# frequency-slot leaf in T-API 2.6.
+ADMITTED_CENTRE_THZ = 190.725
+ADMITTED_WIDTH_GHZ = 56.25
+
+
+def _admitted_end_point() -> dict:
+    half = ADMITTED_WIDTH_GHZ * 1e9 / 2
+    centre = ADMITTED_CENTRE_THZ * 1e12
+    return {
+        "local-id": "1",
+        "layer-protocol-constraint": [
+            {
+                "local-id": "otsi",
+                "tapi-photonic-media:mcg-connectivity-service-end-point-spec": {
+                    "number-of-mc": 1,
+                    "mc-spectrum-config-pac": [
+                        {
+                            "local-id": "1",
+                            "spectrum": {
+                                "lower-frequency": int(centre - half),
+                                "upper-frequency": int(centre + half),
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
     }
-}
 
 
 class TwinStub:
@@ -62,6 +115,8 @@ class TwinStub:
         self.create_status = 201
         self.create_body: dict = {}
         self.services: list[dict] = []
+        # Mutable so a test can change what spectrum the twin reports.
+        self.sips: list[dict] = list(SIPS)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -69,10 +124,9 @@ class TwinStub:
             return httpx.Response(200, json={"status": "ok"})
         if path.endswith("/service-interface-point"):
             return httpx.Response(
-                200, json={"tapi-common:context": {"service-interface-point": SIPS}}
+                200,
+                json={"tapi-common:context": {"service-interface-point": self.sips}},
             )
-        if path.endswith("spectrum-context"):
-            return httpx.Response(200, json=SPECTRUM)
         if path.endswith("/connectivity-service") and request.method == "POST":
             self.posted.append(json.loads(request.content))
             return httpx.Response(self.create_status, json=self.create_body)
@@ -171,15 +225,107 @@ def test_sips_carry_everything_parse_tapi_ports_touches(client):
         assert constraint["adjustment-granularity"] in ("G_50GHZ", "G_25GHZ")
 
 
+def test_occupied_spectrum_is_relayed_not_invented(client, twin):
+    """The mc-pool reflects the twin's real occupancy.
+
+    Before, the adapter synthesised a full C-band marked entirely available
+    on every SIP -- harmless for discovery, but a fiction. It now translates
+    the twin's spectrum-capability-pac, so a SIP with a lightpath up reports
+    the band that lightpath holds.
+    """
+    taken_lo = 190_696_875_000_000
+    taken_hi = taken_lo + 56_250_000_000  # 9 slots x 6.25 GHz
+    twin.sips = [
+        _sip(TWIN_SIP_Z, "trx Atlanta", occupied=[(taken_lo, taken_hi)]),
+        _sip(TWIN_SIP_A, "trx Abilene"),
+    ]
+
+    pools = {
+        s["uuid"]: s[
+            "tapi-photonic-media:media-channel-service-interface-point-spec"
+        ]["mc-pool"]
+        for s in context(client)
+    }
+    atlanta = pools[TWIN_SIP_Z + "-2"]
+    assert atlanta["occupied-spectrum"] == [
+        {
+            "lower-frequency": taken_lo // 1_000_000,
+            "upper-frequency": taken_hi // 1_000_000,
+            "frequency-constraint": {
+                "grid-type": "DWDM",
+                "adjustment-granularity": "G_50GHZ",
+            },
+        }
+    ]
+    assert pools[TWIN_SIP_A + "-1"]["occupied-spectrum"] == []
+
+
+def test_per_sip_resource_reads_spectrum_live(client, twin):
+    """TapiDeviceLambdaQuery must not be served a cached available-spectrum.
+
+    The catalogue caches SIPs so ONOS port indices stay stable, but that
+    cache must not carry occupancy: ONOS picks a lambda out of this block,
+    and a stale one would pick a wavelength already in use.
+    """
+    # Prime the catalogue with an idle SIP, then make the twin report a busy one.
+    context(client)
+    taken_lo = 190_696_875_000_000
+    taken_hi = taken_lo + 56_250_000_000
+    twin.sips = [
+        _sip(TWIN_SIP_Z, "trx Atlanta", occupied=[(taken_lo, taken_hi)]),
+        _sip(TWIN_SIP_A, "trx Abilene"),
+    ]
+
+    r = client.get(
+        f"/restconf/data/tapi-common:context/service-interface-point={TWIN_SIP_Z}-2"
+    )
+    assert r.status_code == 200
+    pool = r.json()[
+        "tapi-photonic-media:media-channel-service-interface-point-spec"
+    ]["mc-pool"]
+    assert pool["occupied-spectrum"], "served a stale, fully-available mc-pool"
+
+
+def test_fully_occupied_sip_still_offers_a_band(client, twin):
+    """ONOS divides by the band width, so an empty list would break it.
+
+    A SIP with no free spectrum falls back to supportable-spectrum rather
+    than advertising nothing.
+    """
+    twin.sips = [
+        {
+            **_sip(TWIN_SIP_Z, "trx Atlanta"),
+            "tapi-photonic-media:photonic-media-service-interface-point-spec": {
+                "spectrum-capability-pac": {
+                    "supportable-spectrum": [
+                        _band(BAND_LOWER_HZ, BAND_UPPER_HZ)
+                    ],
+                    "available-spectrum": [],
+                    "occupied-spectrum": [
+                        _band(BAND_LOWER_HZ, BAND_UPPER_HZ)
+                    ],
+                }
+            },
+        },
+        _sip(TWIN_SIP_A, "trx Abilene"),
+    ]
+    pool = context(client)[1][
+        "tapi-photonic-media:media-channel-service-interface-point-spec"
+    ]["mc-pool"]
+    assert pool["available-spectrum"], "ONOS would divide by zero on an empty list"
+
+
 def test_spectrum_window_is_in_megahertz_around_the_twins_centre(client):
     """ONOS compares against BASE_FREQUENCY = 193100000, i.e. MHz."""
     pool = context(client)[0][
         "tapi-photonic-media:media-channel-service-interface-point-spec"
     ]["mc-pool"]
     spectrum = pool["available-spectrum"][0]
-    # 768 slots * 6.25 GHz = 4800 GHz centred on 193.1 THz.
-    assert spectrum["lower-frequency"] == 190_700_000
-    assert spectrum["upper-frequency"] == 195_500_000
+    # Translated from the twin's Hz, not recomputed: these are the twin's own
+    # band edges divided by 1e6. 768 slots x 6.25 GHz = 4800 GHz wide.
+    assert spectrum["lower-frequency"] == BAND_LOWER_MHZ
+    assert spectrum["upper-frequency"] == BAND_UPPER_MHZ
+    assert spectrum["upper-frequency"] - spectrum["lower-frequency"] == 4_800_000
 
 
 def test_onos_first_och_signal_is_computable(client):
@@ -247,7 +393,7 @@ def test_list_body_is_translated_to_the_twins_object_form(client, twin):
     twin.create_body = {
         "tapi-connectivity:connectivity-service": {
             "uuid": "onos-uuid-1",
-            "frequency-slot": {"nominal-central-frequency": 190.725},
+            "end-point": [_admitted_end_point()],
         }
     }
     r = client.post(
@@ -260,7 +406,10 @@ def test_list_body_is_translated_to_the_twins_object_form(client, twin):
     assert isinstance(sent, dict), "twin expects a single object, not a list"
     # ONOS's UUID is reused so its later DELETE resolves without a lookup.
     assert sent["uuid"] == "onos-uuid-1"
-    assert sent["modulation-format"] == "DP-QPSK"
+    # Modulation goes in the T-API 2.6 place -- an augment on the end-point,
+    # since tapi-connectivity has no modulation leaf.
+    assert "modulation-format" not in sent
+    assert tapi_adapter._modulation_of(sent) == "DP-QPSK"
     # Index suffixes must be stripped or the twin cannot resolve the SIPs.
     got = [e["service-interface-point"]["service-interface-point-uuid"] for e in sent["end-point"]]
     assert got == [TWIN_SIP_A, TWIN_SIP_Z]
@@ -440,9 +589,68 @@ def test_modulation_switch_changes_what_the_twin_is_asked_for(client, twin, fmt)
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
     )
     sent = twin.posted[-1]["tapi-connectivity:connectivity-service"]
-    assert sent["modulation-format"] == fmt
+    assert tapi_adapter._modulation_of(sent) == fmt
 
 
 def test_unknown_modulation_is_rejected(client):
     r = client.post("/adapter/modulation", json={"modulation-format": "DP-256QAM"})
     assert r.status_code == 400
+
+
+def test_spectrum_is_read_from_the_end_point_augment(client, twin):
+    """The adapter reads assigned spectrum where T-API 2.6 puts it.
+
+    It only logs this, but a reader that silently returns None would make
+    every admission look spectrum-less in the demo output.
+    """
+    service = {
+        "uuid": "u",
+        "end-point": [_admitted_end_point()],
+    }
+    centre, width = tapi_adapter._spectrum_of(service)
+    assert centre == pytest.approx(ADMITTED_CENTRE_THZ)
+    assert width == pytest.approx(ADMITTED_WIDTH_GHZ)
+
+    # A service with no allocation reports nothing rather than zeroes.
+    assert tapi_adapter._spectrum_of({"end-point": [{"local-id": "1"}]}) is None
+    assert tapi_adapter._spectrum_of({}) is None
+
+
+def test_modulation_augment_has_the_tapi_2_6_shape(client, twin):
+    """The augment the twin is sent must match tapi-photonic-media.yang.
+
+    ONOS cannot express a modulation at all, so this is adapter policy --
+    but the shape it sends has to be the standard one, or the twin refuses
+    it and every ONOS flow rule fails.
+    """
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "u"}}
+    client.post("/adapter/modulation", json={"modulation-format": "DP-16QAM"})
+    client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    sent = twin.posted[-1]["tapi-connectivity:connectivity-service"]
+    for end_point in sent["end-point"]:
+        constraint = end_point["layer-protocol-constraint"][0]
+        assert constraint["layer-protocol-name"] == "PHOTONIC_MEDIA"
+        spec = constraint[tapi_adapter.OTSIA_CSEP_SPEC]
+        modulation = spec["otsi-config"][0]["modulation"]
+        # ONF spells 16QAM as MT_DP-QAM16.
+        assert modulation["standard-modulation-technique"] == "MT_DP-QAM16"
+
+
+def test_list_or_object_both_reach_the_twin(client, twin):
+    """The twin now accepts RFC 7951's array-of-one, so B3 is not adapter work.
+
+    The adapter still unwraps, because it has to read the end-points to
+    strip SIP index suffixes -- but it no longer does so to work around a
+    twin limitation.
+    """
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "u"}}
+    body = onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2")
+    assert isinstance(body["tapi-connectivity:connectivity-service"], list)
+    r = client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=body,
+    )
+    assert r.status_code == 201

@@ -22,8 +22,21 @@ _DEFAULT_SNAPSHOT_DIR = Path("snapshots")
 
 
 def _snapshot_dir(request: Request) -> Path:
-    """Directory for snapshots; ensure it exists."""
-    out = _DEFAULT_SNAPSHOT_DIR
+    """Directory for snapshots; ensure it exists.
+
+    Honours ``simulation.snapshot_dir``. It used to ignore the config and
+    always write to a CWD-relative ``snapshots/``, which made
+    ``--snapshot-dir`` silently ineffective for these endpoints and put
+    them at odds with the shutdown checkpoint, which *does* follow the
+    config — two features writing to "the snapshot directory" and
+    disagreeing about where that is.
+    """
+    config = getattr(request.app.state, "config", None)
+    out = Path(
+        getattr(config.simulation, "snapshot_dir", _DEFAULT_SNAPSHOT_DIR)
+        if config is not None
+        else _DEFAULT_SNAPSHOT_DIR
+    )
     out.mkdir(parents=True, exist_ok=True)
     return out
 

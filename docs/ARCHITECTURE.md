@@ -51,9 +51,16 @@ point, that trade is worth making.
 ### 2. T-API surfaces stay standard
 
 Routers under `api/common.py`, `api/topology.py`, `api/connectivity.py`,
-`api/path_computation.py`, `api/equipment.py` and `api/photonic_media.py`
-implement **only** T-API v2.6.0: standard paths, standard hyphenated JSON keys,
-RESTCONF error bodies, `application/yang-data+json` responses.
+`api/path_computation.py` and `api/equipment.py` implement **only** T-API
+v2.6.0: standard paths, standard hyphenated JSON keys, RESTCONF error bodies,
+`application/yang-data+json` responses.
+
+There is deliberately no photonic-media router. T-API puts the photonic layer
+in *augments* — on the service-interface-point and on the connectivity-service
+end-point — not in a module-level resource of its own, so it is served by the
+routers that own those objects. A `tapi-photonic-media:` top-level resource
+would have to invent its own leaves, which is exactly what the old
+`spectrum-context` endpoint did.
 
 Everything the standard does not cover lives on a separate prefix and in a
 separate module:
@@ -82,10 +89,9 @@ src/twinlight/
   models/                Pydantic models of the T-API wire format
     common.py              Context, ServiceInterfacePoint, NameAndValue, states
     topology.py            Topology, Node, Link, NodeEdgePoint
-    connectivity.py        ConnectivityService, endpoints, frequency-slot
+    connectivity.py        ConnectivityService, endpoints, photonic augments
     equipment.py           Equipment context objects
     path_computation.py    Path-computation service objects
-    photonic_media.py      Spectrum context objects
 
   state/
     context.py             TapiContext — root state owner (see below)
@@ -166,7 +172,7 @@ src/twinlight_client/    Companion client library and CLI
 4. The first candidate that satisfies both spectrum and QoT is admitted. The
    baseline is cached in `_baseline_cache` keyed by service UUID, the EDFA
    tracker is told a channel was added, and the T-API object is returned with
-   its `frequency-slot`.
+   the assigned spectrum on its end-points.
 5. If no candidate passes, the request is refused with a RESTCONF error body
    explaining which constraint failed.
 

@@ -46,7 +46,12 @@ _OPM_LABELS = ("service_uuid", "service_name", "modulation")
 _OPM_SPEC: dict[str, tuple[str, str]] = {
     # measurement-key  →  (prometheus metric name suffix, help text)
     "gsnr-db":        ("opm_gsnr_db", "Generalized SNR (signal / (ASE + NLI)) [dB]"),
-    "osnr-db":        ("opm_osnr_db", "Optical SNR (ASE only) [dB]"),
+    # Two references for the same OSNR: the signal bandwidth, which is what
+    # the receiver sees and what the admission thresholds are quoted against,
+    # and 0.1 nm, which is what the literature and an OSA quote. They differ
+    # by a constant 10*log10(baud_rate / 12.5 GHz).
+    "osnr-db":        ("opm_osnr_db", "Optical SNR (ASE only), signal-bandwidth reference [dB]"),
+    "osnr-01nm-db":   ("opm_osnr_01nm_db", "Optical SNR (ASE only), 0.1 nm reference [dB]"),
     "q-factor-db":    ("opm_q_factor_db", "Q-factor derived from GSNR [dB]"),
     "pre-fec-ber":    ("opm_pre_fec_ber", "Pre-FEC bit-error-ratio"),
     "chromatic-dispersion-ps-per-nm": (

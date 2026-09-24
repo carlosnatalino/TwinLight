@@ -1,31 +1,44 @@
 #!/usr/bin/env bash
 # Drive lightpath provisioning *from ONOS* and read the physics back from the twin.
 #
-#   lightpath.sh create <CityA> <CityZ>   push an ONOS flow rule on the OLS device;
+#   lightpath.sh create <CityA> <CityZ> [format]
+#                                         push an ONOS flow rule on the OLS device;
 #                                         the ols driver turns it into a T-API
-#                                         connectivity-service on the twin
+#                                         connectivity-service on the twin.
+#                                         format is DP-QPSK (default), DP-16QAM
+#                                         or DP-64QAM
 #   lightpath.sh list                     ONOS flows + twin services side by side
 #   lightpath.sh delete <flow-id>         remove the flow; the driver DELETEs the service
 #   lightpath.sh clear                    remove every flow this script created
 #
 # The ONOS→twin direction is the whole point: nothing here talks to the twin's
 # connectivity API directly. Provisioning is entirely ONOS's decision; the twin
-# is free to refuse it, and does.
+# is free to refuse it, and does. The modulation format is the one thing ONOS
+# cannot express -- T-API 2.1 has no field for it -- so it is set on the
+# adapter, as policy, before the flow rule is pushed.
 
 . "$(dirname "$0")/lib.sh"
 
 APP_ID="${APP_ID:-org.onosproject.rest}"
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 cmd_create() {
-  [ $# -eq 2 ] || usage
+  [ $# -ge 2 ] && [ $# -le 3 ] || usage
   require_stack
 
-  local a_city="$1" z_city="$2" a_port z_port
+  local a_city="$1" z_city="$2" modulation="${3:-}" a_port z_port
   a_port="$(port_for_node "${a_city}")" || die "unknown transceiver: ${a_city}"
   z_port="$(port_for_node "${z_city}")" || die "unknown transceiver: ${z_city}"
   [ "${a_port}" != "${z_port}" ] || die "source and destination are the same port"
+
+  if [ -n "${modulation}" ]; then
+    curl -sSf -X POST -H 'Content-Type: application/json' \
+      -d "{\"modulation-format\":\"${modulation}\"}" \
+      "${ADAPTER_URL}/adapter/modulation" >/dev/null \
+      || die "adapter rejected modulation format: ${modulation}"
+    ok "adapter will request ${modulation}"
+  fi
 
   say "ONOS flow rule: port ${a_port} (${a_city}) -> port ${z_port} (${z_city}) on ${DEVICE_ID}"
 
@@ -56,7 +69,10 @@ EOF
 
   printf '%s' "${after}" | python3 -c "
 import json, sys
+sys.path.insert(0, '${SCRIPT_DIR}')
+from tapi_fields import modulation_of, spectrum_of
 after = json.load(sys.stdin)
+
 before = json.loads(sys.argv[1])
 new = set(after['onos-created-services']) - set(before['onos-created-services'])
 rej_before = {(r['uuid'], r['at']) for r in before['recent-rejections']}
@@ -65,12 +81,13 @@ new_rej = [r for r in after['recent-rejections'] if (r['uuid'], r['at']) not in 
 if new:
     for uuid in new:
         svc = after['onos-created-services'][uuid]['tapi-connectivity:connectivity-service']
-        slot = svc.get('frequency-slot') or {}
+        band = spectrum_of(svc)
         print('  ADMITTED by the twin')
         print('    service uuid  : %s' % svc['uuid'])
-        print('    modulation    : %s' % svc.get('modulation-format'))
-        print('    centre freq   : %s THz' % slot.get('nominal-central-frequency'))
-        print('    slot width    : %s GHz' % slot.get('slot-width'))
+        print('    modulation    : %s' % modulation_of(svc))
+        if band:
+            print('    centre freq   : %.4f THz' % band[0])
+            print('    slot width    : %.2f GHz' % band[1])
 elif new_rej:
     for r in new_rej:
         print('  REFUSED by the twin (%s)' % r['reason'])
@@ -126,14 +143,16 @@ for f in mine:
   say "Connectivity services on the twin (created via ONOS)"
   curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c "
 import json, sys
+sys.path.insert(0, '${SCRIPT_DIR}')
+from tapi_fields import modulation_of, spectrum_of
 svcs = json.load(sys.stdin)['onos-created-services']
 if not svcs:
     print('    (none)')
 for u, payload in svcs.items():
     s = payload['tapi-connectivity:connectivity-service']
-    slot = s.get('frequency-slot') or {}
-    print('    %s  %-9s  %s THz' % (u[:8], s.get('modulation-format'),
-                                    slot.get('nominal-central-frequency')))
+    band = spectrum_of(s)
+    print('    %s  %-9s  %s' % (u[:8], modulation_of(s),
+                                '%.4f THz' % band[0] if band else '--'))
 "
 }
 

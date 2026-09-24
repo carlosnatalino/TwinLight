@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import tapi_end_point
 from twinlight.app import create_app
 from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
 from twinlight.example_data import find_example_file
@@ -37,14 +38,9 @@ def _create_service(client: TestClient) -> str:
     body = {
         "tapi-connectivity:connectivity-service": {
             "name": [{"value-name": "service-name", "value": "prom-svc"}],
-            "modulation-format": "DP-QPSK",
             "end-point": [
-                {"local-id": "a", "service-interface-point": {
-                    "service-interface-point-uuid": sip_a,
-                }},
-                {"local-id": "z", "service-interface-point": {
-                    "service-interface-point-uuid": sip_z,
-                }},
+                tapi_end_point("a", sip_a),
+                tapi_end_point("z", sip_z),
             ],
         }
     }
@@ -174,6 +170,7 @@ class TestOpmGauges:
         for metric in (
             "twinlight_opm_gsnr_db",
             "twinlight_opm_osnr_db",
+            "twinlight_opm_osnr_01nm_db",
             "twinlight_opm_q_factor_db",
             "twinlight_opm_pre_fec_ber",
             "twinlight_opm_chromatic_dispersion_ps_per_nm",

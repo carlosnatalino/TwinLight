@@ -1,11 +1,13 @@
 """ONOS-facing T-API adapter for the TwinLight digital twin.
 
 ONOS's ODTN ``ols`` driver (``org.onosproject.drivers.odtn.tapi.*``) speaks
-**T-API v2.1** over a RESTCONF root, while TwinLight serves **T-API v2.6.0**
-under ``/data/``. This process is the version adapter between the two. It is
-deliberately *not* part of ``src/twinlight``: the reshaping it does is not
-standard T-API, and CLAUDE.md constraint #1 keeps the twin's T-API modules
-pure.
+**T-API v2.1**, while TwinLight serves **T-API v2.6.0**. This process is the
+version adapter between the two. It is deliberately *not* part of
+``src/twinlight``: the reshaping it does is not standard T-API, and CLAUDE.md
+constraint #1 keeps the twin's T-API modules pure.
+
+Both now sit under an RFC 8040 RESTCONF root, so the root itself is no longer
+one of the differences -- see ``TWIN_DATA_ROOT``.
 
 Everything here is driven by what the ONOS driver source actually does, not by
 what the T-API specification says it should do. The four behaviours that matter:
@@ -26,9 +28,12 @@ what the T-API specification says it should do. The four behaviours that matter:
 
 2. The same method dereferences
    ``tapi-photonic-media:media-channel-service-interface-point-spec`` →
-   ``mc-pool`` → ``available-spectrum`` unconditionally. TwinLight's SIPs carry
-   no such block, so it is synthesised here from the twin's real spectrum
-   context.
+   ``mc-pool`` → ``available-spectrum`` unconditionally. That is the T-API
+   **2.1** shape; 2.6 has no ``mc-pool`` at all, and publishes the same
+   information as ``photonic-media-service-interface-point-spec`` →
+   ``spectrum-capability-pac``. The twin publishes the 2.6 form, and
+   :func:`_mc_pool` translates it -- including Hz to MHz and identityrefs to
+   the bare tokens ONOS's string switches match.
 
 3. ``TapiDeviceLambdaQuery`` GETs
    ``/restconf/data/tapi-common:context/service-interface-point=<uuid>`` and
@@ -38,9 +43,12 @@ what the T-API specification says it should do. The four behaviours that matter:
 
 4. ``TapiFlowRuleProgrammable`` POSTs a connectivity-service whose body is a
    **JSON list** under ``tapi-connectivity:connectivity-service`` and carries
-   ``service-layer`` / ``service-type`` but no modulation format. TwinLight
-   expects a single object and a ``modulation-format``. Translated in
-   :func:`create_connectivity_service`.
+   ``service-layer`` / ``service-type`` but no modulation format. The twin
+   accepts either spelling of the body now (RFC 7951 §5.4 makes the array of
+   one correct, so that is no longer an incompatibility), but it still needs
+   a modulation, which T-API 2.1 has nowhere to carry. The adapter supplies
+   one as policy, in the T-API 2.6 place: a ``tapi-photonic-media`` augment
+   on the end-point. Translated in :func:`create_connectivity_service`.
 
 Non-T-API adapter introspection lives under ``/adapter/`` so it can never be
 confused with the RESTCONF surface ONOS polls.
@@ -66,6 +74,12 @@ logging.basicConfig(
 log = logging.getLogger("tapi-adapter")
 
 TWIN_BASE_URL = os.getenv("TWIN_BASE_URL", "http://twin:8080").rstrip("/")
+
+# Where the twin serves its T-API data resources. It now mounts them under an
+# RFC 8040 root (default /restconf) as well as the bare /data/ it has always
+# used, so this adapter asks at the canonical location. Override with
+# TWIN_DATA_ROOT=/data to talk to a twin predating that change.
+TWIN_DATA_ROOT = os.getenv("TWIN_DATA_ROOT", "/restconf/data").rstrip("/")
 
 # Modulation format the adapter requests when ONOS asks for a lightpath. ONOS's
 # TAPI 2.1 connectivity request has nowhere to carry one, so it is adapter
@@ -97,6 +111,82 @@ HTTP_TIMEOUT = float(os.getenv("ADAPTER_HTTP_TIMEOUT", "120"))
 
 # ONOS re-publishes SIP UUIDs as "<real-uuid>-<index>"; this peels the index off.
 _INDEXED_SIP_RE = re.compile(r"^(?P<real>.+)-(?P<index>\d+)$")
+
+# T-API v2.6.0 has no modulation leaf on connectivity-service -- the photonic
+# module augments the end-point's layer-protocol-constraint instead, and that
+# is what the twin now accepts. Duplicated here rather than imported because
+# this adapter is a standalone container that does not install TwinLight.
+# Note ONF spells 16QAM as MT_DP-QAM16, not MT_DP-16QAM.
+OTSIA_CSEP_SPEC = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
+MCG_CSEP_SPEC = "tapi-photonic-media:mcg-connectivity-service-end-point-spec"
+
+# The twin's T-API 2.6 SIP augment, which this adapter translates into the
+# 2.1 mc-pool that ONOS reads. See _mc_pool().
+PHOTONIC_SIP_SPEC = (
+    "tapi-photonic-media:photonic-media-service-interface-point-spec"
+)
+MODULATION_TO_MT = {
+    "DP-QPSK": "MT_DP-QPSK",
+    "DP-16QAM": "MT_DP-QAM16",
+    "DP-64QAM": "MT_DP-QAM64",
+}
+MT_TO_MODULATION = {mt: fmt for fmt, mt in MODULATION_TO_MT.items()}
+
+
+def _modulation_augment(modulation: str) -> dict[str, Any]:
+    """The layer-protocol-constraint entry carrying a modulation format."""
+    return {
+        "local-id": "otsi",
+        "layer-protocol-name": "PHOTONIC_MEDIA",
+        OTSIA_CSEP_SPEC: {
+            "otsi-config": [
+                {
+                    "local-id": "1",
+                    "modulation": {
+                        "standard-modulation-technique": MODULATION_TO_MT[
+                            modulation
+                        ],
+                    },
+                },
+            ],
+        },
+    }
+
+
+def _spectrum_of(service: dict[str, Any]) -> tuple[float, float] | None:
+    """(centre THz, width GHz) of a twin service's assigned spectrum.
+
+    Like the modulation, T-API 2.6 puts this on the end-point rather than on
+    the connectivity-service -- there is no ``frequency-slot`` leaf. Band
+    edges are in Hz; this converts to the units the demo output prints.
+    """
+    for end_point in service.get("end-point") or []:
+        for constraint in end_point.get("layer-protocol-constraint") or []:
+            spec = constraint.get(MCG_CSEP_SPEC) or {}
+            for cfg in spec.get("mc-spectrum-config-pac") or []:
+                band = cfg.get("spectrum") or {}
+                lower, upper = (
+                    band.get("lower-frequency"),
+                    band.get("upper-frequency"),
+                )
+                if lower and upper:
+                    return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
+    return None
+
+
+def _modulation_of(service: dict[str, Any]) -> str | None:
+    """Read a modulation format back off a twin connectivity-service."""
+    for end_point in service.get("end-point") or []:
+        for constraint in end_point.get("layer-protocol-constraint") or []:
+            spec = constraint.get(OTSIA_CSEP_SPEC) or {}
+            for cfg in spec.get("otsi-config") or []:
+                identity = (cfg.get("modulation") or {}).get(
+                    "standard-modulation-technique", ""
+                )
+                fmt = MT_TO_MODULATION.get(identity.split(":")[-1])
+                if fmt is not None:
+                    return fmt
+    return None
 
 
 class TwinUnavailableError(RuntimeError):
@@ -249,28 +339,87 @@ async def _twin_get(request: Request, path: str) -> Any:
     return response.json()
 
 
+async def _list_sips(request: Request) -> list[dict[str, Any]]:
+    payload = await _twin_get(
+        request, f"{TWIN_DATA_ROOT}/tapi-common:context/service-interface-point"
+    )
+    return payload.get("tapi-common:context", {}).get("service-interface-point", [])
+
+
 async def _ensure_catalogue(request: Request) -> None:
     if not catalogue.stale:
         return
-    payload = await _twin_get(request, "/data/tapi-common:context/service-interface-point")
-    sips = payload.get("tapi-common:context", {}).get("service-interface-point", [])
-    catalogue.rebuild(sips)
+    catalogue.rebuild(await _list_sips(request))
 
 
-async def _spectrum_window(request: Request) -> tuple[int, int]:
-    """C-band edges in **MHz**, derived from the twin's own spectrum context.
+async def _fresh_sips(request: Request) -> dict[str, dict[str, Any]]:
+    """Twin SIP UUID -> its current payload, read live from the twin.
 
-    ONOS's ``getOchSignal()`` works in MHz throughout and compares against
-    ``BASE_FREQUENCY = 193100000`` (193.1 THz expressed in MHz).
+    The catalogue caches SIPs so ONOS port *indices* stay stable, which they
+    must -- a SIP that changes index changes port number and breaks every
+    flow rule referring to it. But a SIP's mc-pool now carries live spectrum
+    occupancy, which must not be served from that cache.
     """
-    payload = await _twin_get(request, "/data/tapi-photonic-media:spectrum-context")
-    spectrum = payload["tapi-photonic-media:spectrum-context"]
-    centre_thz = float(spectrum["nominal-central-frequency-thz"])
-    width_ghz = float(spectrum["slot-width-ghz"]) * int(spectrum["num-slots"])
+    return {str(sip["uuid"]): sip for sip in await _list_sips(request)}
 
-    centre_mhz = centre_thz * 1_000_000  # THz -> MHz
-    half_span_mhz = (width_ghz * 1_000) / 2  # GHz -> MHz
-    return int(centre_mhz - half_span_mhz), int(centre_mhz + half_span_mhz)
+
+def _to_mhz(hz: int) -> int:
+    """Hz (T-API v2.6.0) -> MHz (what ONOS's getOchSignal() works in).
+
+    ``spectrum-band`` in tapi-photonic-media.yang types the frequency
+    bounds as uint64 **Hz**. ONOS compares against
+    ``BASE_FREQUENCY = 193100000``, i.e. 193.1 THz expressed in MHz.
+    """
+    return round(hz / 1_000_000)
+
+
+def _mc_pool(sip: dict[str, Any]) -> dict[str, Any]:
+    """Translate the twin's 2.6 spectrum capability into ONOS's 2.1 mc-pool.
+
+    T-API v2.6.0 has no ``mc-pool``: it augments the SIP with
+    ``photonic-media-service-interface-point-spec`` /
+    ``spectrum-capability-pac``. ONOS's ODTN driver reads the v2.1
+    ``media-channel-service-interface-point-spec`` / ``mc-pool``, so the
+    reshaping here is pure version adaptation -- exactly what this process
+    exists for -- plus two value translations ONOS needs:
+
+    * Hz -> MHz (see :func:`_to_mhz`).
+    * identityrefs -> the bare tokens ONOS's string switches match. The twin
+      truthfully advertises ``GRID_TYPE_FLEX`` at
+      ``ADJUSTMENT_GRANULARITY_G_6_25GHZ``, but ONOS's
+      ``TapiDeviceHelper.getChannelSpacing()`` has trailing spaces in its
+      ``G_6_25GHZ``/``G_12_5GHZ``/``G_100GHZ`` case labels, so those fall
+      through to ``CHL_0GHZ`` and then divide by zero in ``getOchSignal()``.
+      Only ``G_50GHZ`` and ``G_25GHZ`` are safe, so the granularity ONOS is
+      shown is forced to GRID_GRANULARITY. The twin is not changed to suit
+      it: a 6.25 GHz port that claimed 50 GHz would mislead every other
+      client.
+    """
+    pac = (sip.get(PHOTONIC_SIP_SPEC) or {}).get("spectrum-capability-pac") or {}
+
+    def rewrite(bands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "upper-frequency": _to_mhz(int(b["upper-frequency"])),
+                "lower-frequency": _to_mhz(int(b["lower-frequency"])),
+                "frequency-constraint": {
+                    "grid-type": "DWDM",
+                    "adjustment-granularity": GRID_GRANULARITY,
+                },
+            }
+            for b in bands
+        ]
+
+    supportable = rewrite(pac.get("supportable-spectrum") or [])
+    available = rewrite(pac.get("available-spectrum") or [])
+    # ONOS prefers available-spectrum and falls back to supportable; a SIP
+    # with every slot taken would otherwise hand it an empty list and a
+    # divide by zero, so fall back rather than advertise nothing.
+    return {
+        "available-spectrum": available or supportable,
+        "supportable-spectrum": supportable,
+        "occupied-spectrum": rewrite(pac.get("occupied-spectrum") or []),
+    }
 
 
 def _to_twin_sip(onos_uuid: str) -> str:
@@ -287,33 +436,27 @@ def _node_name(sip: dict[str, Any]) -> str:
     return ""
 
 
-def _decorate_sip(
-    sip: dict[str, Any], onos_uuid: str, lower_mhz: int, upper_mhz: int
-) -> dict[str, Any]:
+def _decorate_sip(sip: dict[str, Any], onos_uuid: str) -> dict[str, Any]:
     """Return the SIP in the shape the ONOS ODTN ``ols`` driver requires.
 
     ``supported-layer-protocol-qualifier`` and the ``mc-pool`` block are both
     load-bearing: ``checkValidEndpoint()`` rejects the SIP without the former,
     and ``parseTapiPorts()`` throws a NullPointerException without the latter.
+    Both are T-API **2.1** spellings -- 2.6 renamed the qualifier leaf-list to
+    ``supported-cep-layer-protocol-qualifier-instances`` and replaced
+    ``mc-pool`` outright -- so supplying them is version adaptation, not a
+    twin gap.
+
+    The spectrum is the twin's real occupancy now, not a fabricated full
+    C-band; see :func:`_mc_pool`. The 2.6 augment is dropped from what ONOS
+    sees, because its driver would not know what to do with it.
     """
-    spectrum_entry = {
-        "upper-frequency": upper_mhz,
-        "lower-frequency": lower_mhz,
-        "frequency-constraint": {
-            "grid-type": "DWDM",
-            "adjustment-granularity": GRID_GRANULARITY,
-        },
-    }
     decorated = dict(sip)
+    decorated.pop(PHOTONIC_SIP_SPEC, None)
     decorated["uuid"] = onos_uuid
     decorated["supported-layer-protocol-qualifier"] = ["PHOTONIC_LAYER_QUALIFIER_NMC"]
     decorated["tapi-photonic-media:media-channel-service-interface-point-spec"] = {
-        "mc-pool": {
-            # ONOS prefers available-spectrum and falls back to
-            # supportable-spectrum; both are published so either path works.
-            "available-spectrum": [spectrum_entry],
-            "supportable-spectrum": [spectrum_entry],
-        }
+        "mc-pool": _mc_pool(sip)
     }
     return decorated
 
@@ -332,7 +475,7 @@ async def get_context(request: Request) -> JSONResponse:
     """
     try:
         await _ensure_catalogue(request)
-        lower_mhz, upper_mhz = await _spectrum_window(request)
+        live = await _fresh_sips(request)
     except TwinUnavailableError as exc:
         log.error("twin unreachable: %s", exc)
         raise HTTPException(
@@ -340,7 +483,12 @@ async def get_context(request: Request) -> JSONResponse:
         ) from exc
 
     sips = [
-        _decorate_sip(catalogue.twin_sip(onos_uuid) or {}, onos_uuid, lower_mhz, upper_mhz)
+        _decorate_sip(
+            live.get(_to_twin_sip(onos_uuid))
+            or catalogue.twin_sip(onos_uuid)
+            or {},
+            onos_uuid,
+        )
         for onos_uuid in catalogue.onos_uuids()
     ]
     return JSONResponse(
@@ -358,12 +506,17 @@ async def get_sip(onos_uuid: str, request: Request) -> JSONResponse:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"SIP {onos_uuid} not found"
             )
-        lower_mhz, upper_mhz = await _spectrum_window(request)
+        # Re-read this SIP from the twin rather than serving the catalogue's
+        # copy: mc-pool now carries live occupancy, and TapiDeviceLambdaQuery
+        # picks a lambda from it. A cached available-spectrum would hand ONOS
+        # a wavelength the twin has already assigned to something else.
+        live = await _fresh_sips(request)
+        sip = live.get(_to_twin_sip(onos_uuid), sip)
     except TwinUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         ) from exc
-    return JSONResponse(_decorate_sip(sip, onos_uuid, lower_mhz, upper_mhz))
+    return JSONResponse(_decorate_sip(sip, onos_uuid))
 
 
 @app.get("/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/")
@@ -376,7 +529,8 @@ async def get_connectivity_context(request: Request) -> JSONResponse:
     """
     try:
         payload = await _twin_get(
-            request, "/data/tapi-connectivity:connectivity-context/connectivity-service"
+            request,
+            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context/connectivity-service",
         )
     except TwinUnavailableError as exc:
         raise HTTPException(
@@ -442,6 +596,11 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
             {
                 "local-id": str(local_id),
                 "service-interface-point": {"service-interface-point-uuid": twin_sip},
+                # The twin takes modulation as a T-API 2.6 photonic augment
+                # on the end-point, not as a field on the service.
+                "layer-protocol-constraint": [
+                    _modulation_augment(MODULATION_FORMAT)
+                ],
             }
         )
 
@@ -467,7 +626,6 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
                 {"value-name": "onos-port-pair", "value": port_pair},
                 {"value-name": "provisioned-by", "value": "onos-odtn"},
             ],
-            "modulation-format": MODULATION_FORMAT,
             "end-point": twin_endpoints,
         }
     }
@@ -482,7 +640,7 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
 
     try:
         response = await request.app.state.client.post(
-            "/data/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context/connectivity-service",
             json=twin_body,
         )
     except httpx.HTTPError as exc:
@@ -504,13 +662,15 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
             },
         )
         service = payload.get("tapi-connectivity:connectivity-service", {})
-        slot = service.get("frequency-slot", {})
-        log.info(
-            "twin admitted %s at %s THz (slot width %s GHz)",
-            onos_uuid[:8],
-            slot.get("nominal-central-frequency"),
-            slot.get("slot-width"),
-        )
+        spectrum = _spectrum_of(service)
+        if spectrum is None:
+            log.info("twin admitted %s (no spectrum reported)", onos_uuid[:8])
+        else:
+            log.info(
+                "twin admitted %s at %.4f THz (slot width %.2f GHz)",
+                onos_uuid[:8],
+                *spectrum,
+            )
         return JSONResponse(payload, status_code=status.HTTP_201_CREATED)
 
     detail = _error_detail(response)
@@ -536,7 +696,8 @@ async def delete_connectivity_service(uuid: str, request: Request) -> Response:
     """Delete a lightpath. ONOS treats only 204 as success."""
     try:
         response = await request.app.state.client.delete(
-            f"/data/tapi-connectivity:connectivity-context/connectivity-service={uuid}"
+            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context"
+            f"/connectivity-service={uuid}"
         )
     except httpx.HTTPError as exc:
         raise HTTPException(

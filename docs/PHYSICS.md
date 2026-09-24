@@ -121,6 +121,29 @@ Getting this routing wrong is a common way for a twin to produce impossible
 telemetry (OSNR degrading with no optical cause). It is explicit here so it can
 be checked.
 
+### Which reference bandwidth an SNR is quoted against
+
+An SNR means nothing without the bandwidth its noise was measured over, and
+this project reports two references. They are not interchangeable and the
+difference is not small — 4.08 dB at 32 GBd.
+
+| Field | Reference | Use |
+|-------|-----------|-----|
+| `gsnr-db` | Signal bandwidth (the baud rate) | What the receiver sees. **This is the one admission compares against `req_gsnr_db`**, and the two must stay on the same reference or the thresholds mean nothing |
+| `osnr-db` | Signal bandwidth | The ASE-only counterpart of `gsnr-db`, on the same footing |
+| `osnr-01nm-db` | 0.1 nm (12.5 GHz at 1550 nm) | What the literature and an OSA quote. Derived, for comparison with published figures |
+
+The conversion is `10·log10(baud_rate / 12.5 GHz)` — a constant in dB, so it
+commutes with the transient layer's additive perturbations and can be applied
+once at the end (`modulation.py:osnr_to_01nm_db`). gnpy draws the same
+distinction between its `osnr_ase` and `osnr_ase_01nm`.
+
+> **If you quote an OSNR from this twin, say which one.** A reader who sees
+> "OSNR 13.4 dB" will almost certainly assume 0.1 nm and conclude the link is
+> 4 dB worse than the model actually says. `gsnr-db` is deliberately *not*
+> offered at 0.1 nm: a 0.1 nm GSNR compared against the required-GSNR table
+> would admit lightpaths that cannot carry traffic.
+
 ### Deterministic pseudo-randomness
 
 Every model that needs a per-element random-looking value derives it from an MD5
@@ -156,6 +179,24 @@ channel add, ≈100–500 µs for a drop. Cascade behaviour follows Sun 1997: th
 transient rate scales linearly with amplifier count, `1/T_N = N · 1/T_1`, and
 peak excursions can reach ~28 dB p-p without AGC
 [[3]](../README.md#ref-3).
+
+**The steady state is zero deviation**, and this is the load-bearing detail.
+Between events an AGC-controlled, gain-flattened EDFA delivers its designed
+per-channel gain whatever its loading — and that designed operating point is
+precisely what the QoT baseline already represents, since `designed_network()`
+sets every amplifier's operating point before propagation. So `r_ss_old` and
+`r_ss_new` both map to *zero* deviation from the baseline, and what this model
+contributes is the excursion between them:
+
+```
+Δ(t) = Δ_event · exp(−(t − t_event) / τ_e),   Δ_event = −gain_per_channel_db · Δchannels
+```
+
+Adding channels depletes the reservoir, so gain drops and surviving channels
+lose GSNR (negative excursion); dropping channels lets gain overshoot
+(positive). Treating the steady state itself as a load-dependent penalty would
+double-count loading the baseline has already priced in — and, summed over a
+long cascade, would swamp it: 30 amplifiers × 0.3 dB × one channel is 9 dB.
 
 `EdfaStateTracker` is owned by `TapiContext` and updated whenever a service is
 created or deleted — so an add/drop event on one lightpath perturbs every other
@@ -260,6 +301,17 @@ implementation penalty beyond the GSNR already computed.
 Required-GSNR values are the admission thresholds; `rmsa.qot_margin_db` is added
 on top before a service is accepted.
 
+**Admission gates on the pristine baseline, not on a transient-inclusive
+sample**, and `rmsa.qot_margin_db` (1.5 dB by default) is the documented
+allowance for the transient layer — the same role a system margin plays in
+network design. This is deliberate: a sample is a point in time, so gating on
+one would make admission depend on the phase of the PDL drift at the instant
+the request arrived, and two identical requests seconds apart could decide
+differently. The margin has to cover the transient layer's realistic excursion;
+on the bundled CORONET scenario the layer contributes about −0.1 dB (EEPN) and
+±0.3 dB (PDL), comfortably inside it. Widen the margin before enabling a model
+whose excursions could exceed it.
+
 ## 4. Eye and constellation synthesis
 
 `output/eye_diagram.py` and `output/constellation.py` synthesise diagrams
@@ -280,8 +332,10 @@ used for research.
 | Area | What TwinLight does | What the literature does | Severity |
 |------|---------------------|--------------------------|----------|
 | **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop, linear dB cascade | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events |
+| **EDFA excursion visibility** | τ_e is 10–100 µs, so a wall-clock poll essentially always samples the relaxed state and the model reads ~0 dB between events | Same physics — this *is* what AGC does | Low, but state it before someone reports the model as inert: to see the excursion you must sample near an add/drop, which the twin only produces on service create/delete |
+| **EDFA excursion magnitude** | Excursion scales with the absolute load step, `gain_per_channel_db × \|Δchannels\|` | Sun 1997 scales it with the *fraction* of channels added or dropped, so one channel added to a full C-band perturbs far less than one added to an empty one | Low at the loadings the bundled scenarios reach; refine before claiming excursion magnitudes on heavily loaded spans |
 | **EGN kernel** | Self-channel NLI only | Full GN/EGN including XPM/FWM from neighbouring channels | **Moderate** — optimistic by a few dB on densely loaded links; on the bundled CORONET scenario EGN GSNR runs ~2–4 dB above the GNPy backend on the same designed spans. Use the GNPy backend when spectral loading matters |
-| **Phase noise (EEPN)** | Measured contribution is ~0 dB even at 1900 km on the bundled scenarios | Shieh & Ho predict a penalty growing with accumulated dispersion | **Unresolved** — the term is implemented per the reference but does not move GSNR at the shipped default linewidths; treat EEPN results as unvalidated pending review |
+| **Phase noise (EEPN)** | Shieh & Ho Eq. 33–41, contributing ≈ −0.1 dB at 2150 km on CORONET | Same | Low — previously recorded here as *Unresolved* because the term never moved GSNR. Root cause found: the accumulated CD handed to it was 1000× low (gnpy carries CD in s/m and the adapter stored it as ps/nm), so α was 1000× too small. Fixed; EEPN now responds to dispersion as the reference predicts |
 | **PMD drift** | Sinusoidal, 10 % amplitude, 90 s period | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — magnitude and quadrature accumulation are right; the trajectory shape is an approximation |
 | **PDL ensemble** | Deterministic incommensurate drift covers the alignment ensemble over time | Explicit Monte-Carlo over hinge alignments | Low — equivalent in the long run, and reproducible, but a short window is not a fair ensemble sample |
 | **Post-FEC BER** | Not modelled — pre-FEC only | Soft-decision FEC threshold curves | Known gap |

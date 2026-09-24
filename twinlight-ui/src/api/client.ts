@@ -253,9 +253,7 @@ export class TapiApiClient {
   }
 
   getSpectrumContext(): Promise<SpectrumContextResponse> {
-    return this.get<SpectrumContextResponse>(
-      "/data/tapi-photonic-media%3Aspectrum-context"
-    );
+    return this.get<SpectrumContextResponse>("/internal/spectrum-context");
   }
 
   getRoadmToRoadmLinks(): Promise<RoadmToRoadmLinksResponse> {

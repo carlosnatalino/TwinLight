@@ -37,7 +37,7 @@ gnpy:
 | `sim_params` | path | `null` | GNPy simulation parameters; needed only for Raman |
 | `extra_equipment` | list of paths | `[]` | Additional equipment libraries merged into the main one |
 | `extra_config` | list of paths | `[]` | Additional GNPy config files |
-| `no_insert_edfas` | bool | `false` | Set `true` for topologies with bare fiber spans and no pre-placed amplifiers (CORONET is one) so the builder does not treat missing EDFAs as an error |
+| `no_insert_edfas` | bool | `false` | **Currently inert.** Intended for topologies with bare fiber spans and no pre-placed amplifiers, but nothing reads it: GNPy's `designed_network()` inserts amplifiers regardless (1068 of them on CORONET, which sets this `true`). Tracked in [PENDING.md](PENDING.md) |
 
 The topology and equipment files for the shipped examples are provisioned by
 `twinlight-fetch-examples` — see
@@ -66,6 +66,7 @@ server:
   rest_host: "0.0.0.0"
   rest_port: 8080
   grpc_port: 50051
+  restconf_root: "/restconf"
   cors_origins:
     - "http://localhost:5173"
 ```
@@ -73,6 +74,13 @@ server:
 `cors_origins` must contain the origin the web UI is served from. In the Compose
 stack the UI is published on `http://localhost:5173`, which the shipped examples
 already allow.
+
+`restconf_root` is the RFC 8040 §3.1 root resource the T-API modules are served
+under, and the value advertised by `GET /.well-known/host-meta`. It must be
+absolute; a trailing slash is trimmed. The modules stay reachable at the bare
+`/data/…` whatever it is set to, so changing it adds a location rather than
+moving one — set it to `""` to serve only the bare paths and omit the root
+resource and `host-meta` entirely.
 
 ## `simulation` — clock and checkpoints
 
@@ -117,7 +125,7 @@ edfa_reservoir:
 | Field | Default | Meaning and source |
 |-------|---------|--------------------|
 | `tau_ms` | `10.0` | Erbium metastable lifetime [ms] — Sun, Zyskind & Srivastava 1997 |
-| `gain_per_channel_db` | `0.3` | Per-channel GSNR contribution [dB]; the cascade accumulates linearly in dB |
+| `gain_per_channel_db` | `0.3` | Peak gain excursion [dB] per channel of load step, at the moment of an add/drop; the cascade accumulates linearly in dB (Sun 1997). It decays to zero with τ_e — it is **not** a standing per-channel penalty, see [PHYSICS.md § 2.1](PHYSICS.md) |
 | `tau_add_factor` | `0.001` | τ_e/τ for channel-add events — Bononi & Rusch 1998 Eq. 29 (≈1–10 µs) |
 | `tau_drop_factor` | `0.01` | τ_e/τ for channel-drop events — ibid. (≈100–500 µs) |
 | `drift_period_multiplier` | `100.0` | Sinusoidal-fallback drift period multiplier |

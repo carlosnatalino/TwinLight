@@ -1,6 +1,6 @@
 # API reference
 
-TwinLight exposes 38 REST operations plus a gNMI gRPC service. This document is
+TwinLight exposes 40 REST operations plus a gNMI gRPC service. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
 whenever the twin is running.
@@ -8,10 +8,17 @@ whenever the twin is running.
 Endpoints fall into two groups, kept strictly apart (see
 [ARCHITECTURE.md](ARCHITECTURE.md#2-t-api-surfaces-stay-standard)):
 
-- **`/data/…`** — T-API v2.6.0 only. Standard paths, hyphenated JSON keys,
-  RESTCONF errors, `application/yang-data+json` responses.
+- **`/restconf/data/…`** — T-API v2.6.0 only. Standard paths, hyphenated JSON
+  keys, RESTCONF errors, `application/yang-data+json` responses.
 - **`/internal/`, `/admin/`, `/config/`, `/metrics`** — everything the standard
   does not cover.
+
+> **The T-API paths below are written as `/data/…` throughout.** Every one is
+> also served under the RESTCONF root — `/restconf/data/…` by default, set by
+> `server.restconf_root` — which is the canonical location per RFC 8040 §3.1
+> and the one a client discovers from `/.well-known/host-meta`. The bare
+> `/data/…` mount is kept for clients written against earlier releases;
+> retiring it is tracked in [PENDING.md](PENDING.md).
 
 ## T-API v2.6.0 endpoints
 
@@ -81,9 +88,42 @@ that cannot be satisfied is refused rather than admitted with a warning.
 | PATCH | Partial update of `name`, `administrative-state`, `lifecycle-state` only — **not** `modulation-format`, which would invalidate the admission decision |
 | DELETE | Releases spectrum, invalidates the cached baseline, records the channel drop with the EDFA tracker; returns 204 |
 
-Responses for services with a spectrum allocation include the T-API L0
-`frequency-slot` object: `nominal-central-frequency` (THz) and `slot-width`
-(GHz).
+A service with a spectrum allocation carries it on **each end-point**, beside
+the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
+`frequency-slot` leaf:
+
+```json
+"layer-protocol-constraint": [
+  {
+    "local-id": "otsi",
+    "layer-protocol-name": "PHOTONIC_MEDIA",
+    "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
+      "otsi-config": [
+        { "local-id": "1",
+          "modulation": { "standard-modulation-technique": "MT_DP-QPSK" } }
+      ],
+      "number-of-otsi": 1
+    },
+    "tapi-photonic-media:mcg-connectivity-service-end-point-spec": {
+      "number-of-mc": 1,
+      "mc-spectrum-config-pac": [
+        { "local-id": "1",
+          "spectrum": {
+            "lower-frequency": 190696875000000,
+            "upper-frequency": 190753125000000
+          },
+          "edge-frequency-constraint": {
+            "grid-type": "GRID_TYPE_FLEX",
+            "adjustment-granularity": "ADJUSTMENT_GRANULARITY_G_6_25GHZ"
+          } }
+      ]
+    }
+  }
+]
+```
+
+Frequencies are uint64 Hz. A service with no allocation carries no MCG spec at
+all, rather than a zeroed one.
 
 ### Path computation
 
@@ -103,10 +143,42 @@ analysis before creating a service.
 | GET | `/data/tapi-equipment:equipment-context` |
 | GET | `/data/tapi-equipment:equipment-context/equipment` |
 | GET | `/data/tapi-equipment:equipment-context/equipment={uuid}` |
-| GET | `/data/tapi-photonic-media:spectrum-context` |
 
-The spectrum context reports the grid parameters in use: `num-slots`,
-`slot-width-ghz`, `nominal-central-frequency-thz`.
+There is no `tapi-photonic-media` resource of its own. The photonic surface is
+the augments on the SIP and on the connectivity-service end-point, so it is
+served by the Common and Connectivity routers. The grid parameters that used to
+be published as `tapi-photonic-media:spectrum-context` are twin configuration
+rather than T-API and now live at
+[`/internal/spectrum-context`](#internal--observation-and-metadata).
+
+Per-SIP spectrum is the standard surface, carried on every
+`service-interface-point` as a `tapi-photonic-media` augment:
+
+```json
+{
+  "tapi-photonic-media:photonic-media-service-interface-point-spec": {
+    "spectrum-capability-pac": {
+      "supportable-spectrum": [
+        {
+          "lower-frequency": 190696875000000,
+          "upper-frequency": 195496875000000,
+          "frequency-constraint": {
+            "grid-type": "GRID_TYPE_FLEX",
+            "adjustment-granularity": "ADJUSTMENT_GRANULARITY_G_6_25GHZ"
+          }
+        }
+      ],
+      "available-spectrum": [],
+      "occupied-spectrum": []
+    }
+  }
+}
+```
+
+Frequencies are **uint64 Hz**. `occupied-spectrum` lists the blocks held by
+services terminating on *that* SIP — it is a property of the port, not of the
+links the lightpath crosses — and `available-spectrum` is the remainder of the
+supportable band, merged into maximal contiguous runs.
 
 ### Error format
 
@@ -135,6 +207,19 @@ percent-encode those to `%3A` per the WHATWG URL specification, which would
 otherwise miss the route. `PathDecodeMiddleware` decodes them before routing, so
 both spellings work.
 
+### RESTCONF root
+
+| Method | Path | Returns |
+|--------|------|---------|
+| GET | `/.well-known/host-meta` | XRD (RFC 6415) advertising the RESTCONF root |
+| GET | `/restconf` | `ietf-restconf:restconf` with `data`, `operations`, `yang-library-version` |
+| GET | `/restconf/yang-library-version` | `{"ietf-restconf:yang-library-version": "2019-01-04"}` |
+
+RFC 8040 §3.1 has a client discover the root rather than assume it, so
+`host-meta` is XML by specification — a JSON variant would not be found. The
+root path itself is `server.restconf_root`; setting it to `""` serves only the
+bare `/data/…` paths and omits these three resources.
+
 ## Non-standard endpoints
 
 ### `/internal/` — observation and metadata
@@ -146,6 +231,7 @@ both spellings work.
 | GET | `/internal/services/{service_uuid}` | Name, modulation format, path hops, total fiber km |
 | GET | `/internal/links` | Link inventory with per-link state, used by the UI |
 | GET | `/internal/spectrum-grid` | Per-link slot occupancy, used by the UI heat map |
+| GET | `/internal/spectrum-context` | Grid parameters: `num-slots`, `slot-width-ghz`, `nominal-central-frequency-thz` |
 | GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service |
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
@@ -160,6 +246,7 @@ both spellings work.
       "timestamp": 1234567890.123,
       "measurements": {
         "osnr-db": 30.2,
+        "osnr-01nm-db": 34.3,
         "gsnr-db": 27.4,
         "pre-fec-ber": 2.6e-26,
         "q-factor-db": 19.3,
@@ -181,6 +268,7 @@ one such entry directly, without the `services` wrapper:
   "timestamp": 1234567890.123,
   "measurements": {
     "osnr-db": 30.2,
+    "osnr-01nm-db": 34.3,
     "gsnr-db": 27.4,
     "pre-fec-ber": 2.6e-26,
     "q-factor-db": 19.3,
@@ -189,6 +277,12 @@ one such entry directly, without the `services` wrapper:
   }
 }
 ```
+
+`osnr-db` and `gsnr-db` are referenced to the **signal bandwidth** — the SNR
+the receiver sees, and the reference the admission thresholds are quoted
+against. `osnr-01nm-db` is the same OSNR at the conventional **0.1 nm**, which
+reads 4.08 dB higher at 32 GBd. There is deliberately no 0.1 nm GSNR; see
+[PHYSICS.md](PHYSICS.md#which-reference-bandwidth-an-snr-is-quoted-against).
 
 Every read is evaluated at the current wall-clock time: poll it twice a couple of
 seconds apart and the numbers move, because the transient models are
@@ -248,9 +342,11 @@ the servers accept traffic.
 One snapshot per scrape, in Prometheus text exposition format:
 
 - Per-service OPM: `twinlight_opm_gsnr_db`, `twinlight_opm_osnr_db`,
-  `twinlight_opm_q_factor_db`, `twinlight_opm_pre_fec_ber`,
+  `twinlight_opm_osnr_01nm_db`, `twinlight_opm_q_factor_db`,
+  `twinlight_opm_pre_fec_ber`,
   `twinlight_opm_chromatic_dispersion_ps_per_nm`, `twinlight_opm_pmd_ps`,
   each labelled with `service_uuid`, `service_name` and `modulation`.
+  The two OSNR gauges are one measurement on two reference bandwidths.
 - Per-element `/config` values: `twinlight_fiber_loss_coef_db_per_km`,
   `twinlight_edfa_nf_db`, `twinlight_edfa_gain_target_db`,
   `twinlight_fiber_failed`, `twinlight_service_link_failed`.

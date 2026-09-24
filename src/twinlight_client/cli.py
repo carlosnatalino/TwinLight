@@ -56,6 +56,28 @@ def _service_name(svc: dict[str, Any]) -> str:
     return "(unnamed)"
 
 
+def _service_modulation(svc: dict[str, Any]) -> str:
+    """Extract the modulation format from a connectivity-service.
+
+    T-API v2.6.0 carries it as a ``tapi-photonic-media`` augment on the
+    end-point rather than a field on the service, so it takes some digging.
+    """
+    from twinlight.models.connectivity import OTSIA_CSEP_SPEC
+    from twinlight.physics.modulation import MT_TO_MODULATION
+
+    for end_point in svc.get("end-point", []):
+        for constraint in end_point.get("layer-protocol-constraint", []):
+            spec = constraint.get(OTSIA_CSEP_SPEC) or {}
+            for cfg in spec.get("otsi-config", []):
+                identity = cfg.get("modulation", {}).get(
+                    "standard-modulation-technique", ""
+                )
+                fmt = MT_TO_MODULATION.get(identity.split(":")[-1])
+                if fmt is not None:
+                    return fmt.value
+    return "?"
+
+
 def _header_line() -> str:
     """Build the one-time header row, aligned to the value columns."""
     cols = [f"{'#':>{_NUM_W}}", f"{'time':>{_TIME_W}}"]
@@ -90,7 +112,7 @@ def _prompt_for_service(
     for idx, svc in enumerate(services, start=1):
         print(
             f"  [{idx}] {_service_name(svc):<26} "
-            f"{svc.get('modulation-format', '?'):<10} {svc.get('uuid', '')}"
+            f"{_service_modulation(svc):<10} {svc.get('uuid', '')}"
         )
 
     while True:

@@ -24,7 +24,7 @@ import math
 from twinlight.config import TransientsConfig
 from twinlight.physics.ber_conversion import ber_to_q_db, gsnr_to_ber
 from twinlight.physics.gnpy_adapter import OpmBaseline
-from twinlight.physics.modulation import get_params
+from twinlight.physics.modulation import get_params, osnr_to_01nm_db
 
 
 def hash_phase(uid: str, metric: str) -> float:
@@ -72,8 +72,11 @@ def apply_all_transients(
 
     Returns:
         Measurements dict with keys:
-            gsnr-db, osnr-db, pre-fec-ber, q-factor-db,
+            gsnr-db, osnr-db, osnr-01nm-db, pre-fec-ber, q-factor-db,
             chromatic-dispersion-ps-per-nm, pmd-ps
+
+        ``gsnr-db`` and ``osnr-db`` are referenced to the signal bandwidth;
+        ``osnr-01nm-db`` is the same OSNR at the conventional 0.1 nm.
     """
     from twinlight.physics.transients import (
         edfa_reservoir,
@@ -141,6 +144,11 @@ def apply_all_transients(
     return {
         "gsnr-db": gsnr,
         "osnr-db": osnr,
+        # The same measurement re-referenced to 0.1 nm, which is what the
+        # literature and an OSA quote. Derived here rather than tracked
+        # separately so the two can never drift: the offset is constant in
+        # dB, so it commutes with every perturbation applied above.
+        "osnr-01nm-db": osnr_to_01nm_db(osnr, modulation_format),
         "pre-fec-ber": ber,
         "q-factor-db": ber_to_q_db(ber),
         "chromatic-dispersion-ps-per-nm": cd,

@@ -31,6 +31,60 @@ from urllib.error import HTTPError
 
 MODULATION_FORMATS = ("DP-QPSK", "DP-16QAM", "DP-64QAM")
 
+# T-API v2.6.0 has no modulation leaf on connectivity-service; the photonic
+# module augments the end-point instead. Duplicated here rather than imported
+# because this script is deliberately stdlib-only. Note ONF spells 16QAM as
+# MT_DP-QAM16.
+_OTSIA_CSEP_SPEC = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
+_MCG_CSEP_SPEC = "tapi-photonic-media:mcg-connectivity-service-end-point-spec"
+_MODULATION_TO_MT = {
+    "DP-QPSK": "MT_DP-QPSK",
+    "DP-16QAM": "MT_DP-QAM16",
+    "DP-64QAM": "MT_DP-QAM64",
+}
+
+
+def _spectrum_of(service: dict) -> tuple[float, float] | None:
+    """(centre THz, width GHz) of the assigned spectrum, or None.
+
+    Assigned spectrum is an end-point augment too, with band edges in Hz --
+    there is no frequency-slot leaf on connectivity-service.
+    """
+    for end_point in service.get("end-point") or []:
+        for constraint in end_point.get("layer-protocol-constraint") or []:
+            spec = constraint.get(_MCG_CSEP_SPEC) or {}
+            for cfg in spec.get("mc-spectrum-config-pac") or []:
+                band = cfg.get("spectrum") or {}
+                lower = band.get("lower-frequency")
+                upper = band.get("upper-frequency")
+                if lower and upper:
+                    return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
+    return None
+
+
+def _end_point(local_id: str, sip_uuid: str, modulation: str) -> dict:
+    """A connectivity-service end-point carrying the modulation augment."""
+    return {
+        "local-id": local_id,
+        "service-interface-point": {"service-interface-point-uuid": sip_uuid},
+        "layer-protocol-constraint": [
+            {
+                "local-id": "otsi",
+                _OTSIA_CSEP_SPEC: {
+                    "otsi-config": [
+                        {
+                            "local-id": "1",
+                            "modulation": {
+                                "standard-modulation-technique":
+                                    _MODULATION_TO_MT[modulation],
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+
 
 def _create_service(base: str, sips: list, modulation: str, attempts: int) -> bool:
     """Try random endpoint pairs until one service of `modulation` is admitted.
@@ -45,16 +99,9 @@ def _create_service(base: str, sips: list, modulation: str, attempts: int) -> bo
         body = {
             "tapi-connectivity:connectivity-service": {
                 "name": [{"value-name": "service-name", "value": name}],
-                "modulation-format": modulation,
                 "end-point": [
-                    {
-                        "local-id": "a-end",
-                        "service-interface-point": {"service-interface-point-uuid": a["uuid"]},
-                    },
-                    {
-                        "local-id": "z-end",
-                        "service-interface-point": {"service-interface-point-uuid": z["uuid"]},
-                    },
+                    _end_point("a-end", a["uuid"], modulation),
+                    _end_point("z-end", z["uuid"], modulation),
                 ],
             }
         }
@@ -75,14 +122,12 @@ def _create_service(base: str, sips: list, modulation: str, attempts: int) -> bo
             return False
         uuid = svc["uuid"]
         opm = json.load(urllib.request.urlopen(f"{base}/internal/opm/{uuid}"))["measurements"]
-        slot = svc.get("frequency-slot", {})
+        band = _spectrum_of(svc)
         print(f"{modulation:<9} {name}  attempt {attempt}")
         print(f"            uuid   {uuid}")
         print(f"            GSNR   {opm['gsnr-db']:.2f} dB   OSNR {opm['osnr-db']:.2f} dB")
-        print(
-            f"            slot   {slot.get('nominal-central-frequency')} THz / "
-            f"{slot.get('slot-width')} GHz"
-        )
+        if band is not None:
+            print(f"            slot   {band[0]:.4f} THz / {band[1]:.2f} GHz")
         return True
 
     print(f"{modulation:<9} not admissible after {attempts} attempts")

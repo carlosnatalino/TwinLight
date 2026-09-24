@@ -21,7 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ClockMode(str, Enum):
@@ -62,6 +62,33 @@ class ServerConfig(BaseModel):
     rest_port: int = 8080
     grpc_port: int = 50051
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    restconf_root: str = Field(
+        default="/restconf",
+        description=(
+            "RESTCONF root resource (RFC 8040 §3.1). The T-API modules are "
+            "served under {restconf_root}/data/... and advertised at "
+            "/.well-known/host-meta. They stay reachable at the bare "
+            "/data/... as well, for clients written against earlier "
+            "TwinLight releases. Empty string serves only the bare paths."
+        ),
+    )
+
+    @field_validator("restconf_root")
+    @classmethod
+    def _check_restconf_root(cls, value: str) -> str:
+        """A root is "" or an absolute path with no trailing slash.
+
+        RFC 8040 §3.1 lets a server pick any root, so this is validated
+        rather than fixed — but a malformed one would silently produce
+        unroutable paths like ``restconf/data`` or ``/restconf//data``.
+        """
+        if value == "":
+            return value
+        if not value.startswith("/"):
+            raise ValueError(
+                f"restconf_root must start with '/' (got {value!r})"
+            )
+        return value.rstrip("/")
 
 
 # -- Simulation section -----------------------------------------------------

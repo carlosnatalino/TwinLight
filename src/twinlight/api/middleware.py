@@ -32,9 +32,24 @@ class PathDecodeMiddleware(BaseHTTPMiddleware):
 
 
 class RestconfContentTypeMiddleware(BaseHTTPMiddleware):
+    """Stamp the RESTCONF media type on T-API data resources.
+
+    The T-API modules are reachable at the bare ``/data/`` and under the
+    configured RESTCONF root, so both prefixes have to be recognised — a
+    response served from ``{root}/data/`` with ``application/json`` would
+    be a conformance gap in exactly the surface RFC 8040 governs.
+    """
+
+    def __init__(self, app, restconf_root: str = "") -> None:
+        super().__init__(app)
+        prefixes = ["/data/"]
+        if restconf_root:
+            prefixes.append(f"{restconf_root}/data/")
+        self._prefixes = tuple(prefixes)
+
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
         ct = response.headers.get("content-type", "")
-        if request.url.path.startswith("/data/") and "json" in ct:
+        if "json" in ct and request.url.path.startswith(self._prefixes):
             response.headers["Content-Type"] = RESTCONF_MEDIA_TYPE
         return response

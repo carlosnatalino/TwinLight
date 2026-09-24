@@ -484,6 +484,7 @@ files rather than editing it by hand (see
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every YAML field and CLI flag |
 | [docs/PHYSICS.md](docs/PHYSICS.md) | Model equations, citations and known limitations |
 | [docs/TAPI_COMPLIANCE.md](docs/TAPI_COMPLIANCE.md) | What is and is not T-API v2.6.0 compliant |
+| [docs/PENDING.md](docs/PENDING.md) | Known-wrong and deliberately deferred, with the reasoning |
 | [twinlight-ui/README.md](twinlight-ui/README.md) | Web UI structure and development |
 | [integrations/README.md](integrations/README.md) | Third-party systems driven against the twin |
 

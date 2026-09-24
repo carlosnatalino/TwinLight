@@ -1,5 +1,8 @@
 """Tests for the cascade transient composition module."""
 
+import math
+
+import pytest
 
 from twinlight.config import TransientsConfig
 from twinlight.physics.gnpy_adapter import OpmBaseline
@@ -29,17 +32,36 @@ class TestApplyAllTransients:
         )
 
     def test_returns_all_metrics(self):
-        """Output dict should contain all six OPM metrics."""
+        """Output dict should contain every OPM metric, and only those."""
         cfg = TransientsConfig()
         baseline = self._make_baseline()
         result = apply_all_transients(
             baseline, "svc-1", "DP-QPSK", t=100.0, cfg=cfg,
         )
         expected_keys = {
-            "gsnr-db", "osnr-db", "pre-fec-ber",
+            "gsnr-db", "osnr-db", "osnr-01nm-db", "pre-fec-ber",
             "q-factor-db", "chromatic-dispersion-ps-per-nm", "pmd-ps",
         }
         assert set(result.keys()) == expected_keys
+
+    def test_osnr_01nm_tracks_osnr_at_a_fixed_offset(self):
+        """The two OSNR fields are one measurement on two references.
+
+        The offset is 10*log10(baud_rate / 12.5 GHz) — 4.08 dB at 32 GBd —
+        and is constant, so it must survive whatever the transient layer
+        does to the underlying OSNR.
+        """
+        cfg = TransientsConfig()
+        offset = 10 * math.log10(32e9 / 12.5e9)
+
+        for t in (0.0, 37.0, 100.0, 600.0):
+            result = apply_all_transients(
+                self._make_baseline(), "svc-1", "DP-QPSK", t=t, cfg=cfg,
+            )
+            assert result["osnr-01nm-db"] - result["osnr-db"] == pytest.approx(
+                offset
+            )
+            assert result["osnr-01nm-db"] > result["osnr-db"]
 
     def test_eepn_depends_on_cd(self):
         """With phase noise enabled, GSNR should differ for
@@ -74,13 +96,20 @@ class TestApplyAllTransients:
         )
 
         baseline = self._make_baseline()
-        result = apply_all_transients(
+        # At the event: 2 EDFAs × -0.3 dB of gain excursion.
+        peak = apply_all_transients(
+            baseline, "svc-1", "DP-QPSK", t=1e-9,
+            cfg=cfg, edfa_tracker=tracker,
+        )
+        assert abs(peak["gsnr-db"] - (25.0 - 0.6)) < 0.1
+
+        # Once relaxed, the cascade is back at the designed operating
+        # point the baseline already represents — no standing offset.
+        settled = apply_all_transients(
             baseline, "svc-1", "DP-QPSK", t=100.0,
             cfg=cfg, edfa_tracker=tracker,
         )
-        # After settling: 2 EDFAs × -0.3 = -0.6 dB
-        expected_gsnr = 25.0 - 0.6
-        assert abs(result["gsnr-db"] - expected_gsnr) < 0.1
+        assert abs(settled["gsnr-db"] - 25.0) < 0.1
 
     def test_all_models_degrade_gsnr(self):
         """With all models enabled, GSNR should be lower than baseline."""
