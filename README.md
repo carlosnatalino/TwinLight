@@ -223,18 +223,32 @@ curl -X POST http://localhost:8080/data/tapi-connectivity:connectivity-context/c
   -d '{
     "tapi-connectivity:connectivity-service": {
       "name": [{"value-name": "service-name", "value": "demo-link"}],
-      "modulation-format": "DP-16QAM",
       "end-point": [
-        {"local-id": "a-end", "service-interface-point": {"service-interface-point-uuid": "<SIP_A_UUID>"}},
-        {"local-id": "z-end", "service-interface-point": {"service-interface-point-uuid": "<SIP_Z_UUID>"}}
+        {"local-id": "a-end",
+         "service-interface-point": {"service-interface-point-uuid": "<SIP_A_UUID>"},
+         "layer-protocol-constraint": [{
+           "local-id": "otsi",
+           "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
+             "otsi-config": [{"local-id": "1",
+                              "modulation": {"standard-modulation-technique": "MT_DP-QAM16"}}]
+           }
+         }]},
+        {"local-id": "z-end",
+         "service-interface-point": {"service-interface-point-uuid": "<SIP_Z_UUID>"}}
       ]
     }
   }'
 ```
 
+The modulation format is carried where T-API v2.6.0 puts it: a
+`tapi-photonic-media` augment on the end-point, with the ONF identities
+`MT_DP-QPSK`, `MT_DP-QAM16` and `MT_DP-QAM64`. Omit it and the service defaults
+to DP-QPSK. A bare top-level `modulation-format` key is not part of T-API and is
+rejected with a `422` that names the standard location.
+
 The twin computes candidate paths, assigns spectrum first-fit, and admits the
 request only if the propagated GSNR clears the format's required GSNR plus the
-configured system margin. `DP-QPSK`, `DP-16QAM` and `DP-64QAM` are supported.
+configured system margin.
 
 ### Populate the twin with demo services
 
@@ -266,14 +280,15 @@ Then open the **Monitoring** page in the web UI, or watch one over gNMI with
 `twinlight-client`. To clear them again, delete each service by UUID with
 `DELETE /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}`.
 
-> **Why a printed GSNR can sit below the format's threshold.** Admission tests
-> the *static* QoT baseline, while the GSNR printed above is the *live* reading
-> with the transient models applied. On a long path the two differ
-> substantially — a lightpath admitted at a 12.4 dB baseline can read ~5 dB once
-> EDFA gain excursions are included. That is the twin behaving as intended: a
-> deployed lightpath really can drift below its threshold between provisioning
-> and operation. Set `transients.*.enabled: false` (or `POST /config/set`) to
-> see the baseline the admission decision actually used.
+> **Why a printed GSNR differs from the admission figure.** Admission tests the
+> *static* QoT baseline, while the GSNR printed above is the *live* reading with
+> the transient models applied. In steady state the two differ by a few tenths
+> of a dB (PDL drift and equalization-enhanced phase noise), which
+> `rmsa.qot_margin_db` is there to absorb; larger excursions appear briefly
+> around add/drop events on shared amplifiers. Set `transients.*.enabled: false`
+> (or `POST /config/set`) to see the baseline the admission decision used. See
+> [docs/PHYSICS.md § 3](docs/PHYSICS.md#3-from-gsnr-to-ber-and-q) for why
+> admission gates on the baseline.
 
 ### Stream live OPM
 
@@ -484,7 +499,7 @@ files rather than editing it by hand (see
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every YAML field and CLI flag |
 | [docs/PHYSICS.md](docs/PHYSICS.md) | Model equations, citations and known limitations |
 | [docs/TAPI_COMPLIANCE.md](docs/TAPI_COMPLIANCE.md) | What is and is not T-API v2.6.0 compliant |
-| [docs/PENDING.md](docs/PENDING.md) | Known-wrong and deliberately deferred, with the reasoning |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Known issues and planned changes |
 | [twinlight-ui/README.md](twinlight-ui/README.md) | Web UI structure and development |
 | [integrations/README.md](integrations/README.md) | Third-party systems driven against the twin |
 

@@ -17,7 +17,8 @@ So that is where this model puts it. ``ConnectivityService`` keeps a
 the metrics exporter all read it, but the attribute is excluded from
 serialisation and the augment above is the only on-the-wire spelling —
 a bare top-level ``modulation-format`` would be a non-standard field
-inside a ``/data/`` response (CLAUDE.md constraint #1).
+inside a ``/data/`` response (see CONTRIBUTING.md, "T-API surfaces stay
+standard").
 """
 
 from __future__ import annotations
