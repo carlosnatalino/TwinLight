@@ -146,7 +146,7 @@ def create_app(config: TwinConfig) -> FastAPI:
     # (RFC 8040 §3.1, the canonical location) and at the bare /data/ they
     # have always been served from. The bare mount is hidden from OpenAPI
     # so the documented surface shows one path per resource; it exists for
-    # clients written against earlier releases, and docs/PENDING.md tracks
+    # clients written against earlier releases, and docs/ROADMAP.md tracks
     # retiring it.
     #
     # There is no photonic-media router: the twin's photonic surface is the

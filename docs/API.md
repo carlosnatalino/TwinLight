@@ -17,8 +17,9 @@ Endpoints fall into two groups, kept strictly apart (see
 > also served under the RESTCONF root — `/restconf/data/…` by default, set by
 > `server.restconf_root` — which is the canonical location per RFC 8040 §3.1
 > and the one a client discovers from `/.well-known/host-meta`. The bare
-> `/data/…` mount is kept for clients written against earlier releases;
-> retiring it is tracked in [PENDING.md](PENDING.md).
+> `/data/…` mount is kept for clients written against earlier releases and is
+> scheduled for removal — see [ROADMAP.md](ROADMAP.md). New clients should use
+> the RESTCONF root.
 
 ## T-API v2.6.0 endpoints
 
@@ -65,16 +66,39 @@ from fiber length and the speed of light in silica.
 {
   "tapi-connectivity:connectivity-service": {
     "name": [{"value-name": "service-name", "value": "my-link"}],
-    "modulation-format": "DP-QPSK",
     "end-point": [
-      {"local-id": "a-end", "service-interface-point": {"service-interface-point-uuid": "<SIP_A_UUID>"}},
+      {
+        "local-id": "a-end",
+        "service-interface-point": {"service-interface-point-uuid": "<SIP_A_UUID>"},
+        "layer-protocol-constraint": [
+          {
+            "local-id": "otsi",
+            "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
+              "otsi-config": [
+                { "local-id": "1",
+                  "modulation": { "standard-modulation-technique": "MT_DP-QPSK" } }
+              ]
+            }
+          }
+        ]
+      },
       {"local-id": "z-end", "service-interface-point": {"service-interface-point-uuid": "<SIP_Z_UUID>"}}
     ]
   }
 }
 ```
 
-`modulation-format` accepts `DP-QPSK` (default), `DP-16QAM` or `DP-64QAM`.
+The modulation format is the end-point's
+`otsia-connectivity-service-end-point-spec` augment, as T-API v2.6.0 specifies
+— `tapi-connectivity` has no modulation leaf of its own. `standard-modulation-technique`
+accepts `MT_DP-QPSK` (the default when the augment is absent), `MT_DP-QAM16` or
+`MT_DP-QAM64`; the module-prefixed identityref spelling is accepted too
+(RFC 7951 §6.8). A bare top-level `modulation-format` key is rejected with a
+`422` naming the standard location, rather than silently defaulting.
+
+The body may be a single object, as above, or a one-entry JSON array — RFC 7951
+§5.4 encodes a list entry as an array, and that is the form some controllers
+send. An array of more than one entry is a `400`.
 
 Creation runs the full RMSA admission path — route, spectrum first-fit, QoT
 check against the format's required GSNR plus `rmsa.qot_margin_db`. A request
@@ -85,7 +109,7 @@ that cannot be satisfied is refused rather than admitted with a warning.
 | Verb | Behaviour |
 |------|-----------|
 | PUT | Full replacement at the given UUID; the body must be a complete connectivity-service and its UUID must match the path |
-| PATCH | Partial update of `name`, `administrative-state`, `lifecycle-state` only — **not** `modulation-format`, which would invalidate the admission decision |
+| PATCH | Partial update of `name`, `administrative-state`, `lifecycle-state` only — **not** the modulation format, which would invalidate the admission decision |
 | DELETE | Releases spectrum, invalidates the cached baseline, records the channel drop with the EDFA tracker; returns 204 |
 
 A service with a spectrum allocation carries it on **each end-point**, beside
@@ -146,9 +170,9 @@ analysis before creating a service.
 
 There is no `tapi-photonic-media` resource of its own. The photonic surface is
 the augments on the SIP and on the connectivity-service end-point, so it is
-served by the Common and Connectivity routers. The grid parameters that used to
-be published as `tapi-photonic-media:spectrum-context` are twin configuration
-rather than T-API and now live at
+served by the Common and Connectivity routers. The grid parameters (slot count,
+slot width, centre frequency) are twin configuration rather than T-API, so they
+are served at
 [`/internal/spectrum-context`](#internal--observation-and-metadata).
 
 Per-SIP spectrum is the standard surface, carried on every

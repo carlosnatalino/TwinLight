@@ -3,8 +3,9 @@
 ONOS's ODTN ``ols`` driver (``org.onosproject.drivers.odtn.tapi.*``) speaks
 **T-API v2.1**, while TwinLight serves **T-API v2.6.0**. This process is the
 version adapter between the two. It is deliberately *not* part of
-``src/twinlight``: the reshaping it does is not standard T-API, and CLAUDE.md
-constraint #1 keeps the twin's T-API modules pure.
+``src/twinlight``: the reshaping it does is not standard T-API, and the twin's
+T-API modules implement only the standard (CONTRIBUTING.md, "T-API surfaces
+stay standard").
 
 Both now sit under an RFC 8040 RESTCONF root, so the root itself is no longer
 one of the differences -- see ``TWIN_DATA_ROOT``.

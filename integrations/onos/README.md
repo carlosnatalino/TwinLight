@@ -23,33 +23,30 @@ with real GNPy physics — including refusing requests that will not close.
 
 ## Why there is an adapter
 
-ONOS's ODTN driver was written against **T-API v2.1** in 2018 and has not moved
-since; TwinLight serves **T-API v2.6.0**. The adapter is the version bridge. It
-is deliberately outside `src/twinlight`, because the reshaping it performs is
-*not* standard T-API and
-[CLAUDE.md constraint #1](../../CLAUDE.md) keeps the twin's T-API modules pure.
+ONOS's ODTN driver was written against **T-API v2.1** in 2018 and has not been
+updated since; TwinLight serves **T-API v2.6.0**. The adapter bridges the two
+versions. It lives outside `src/twinlight` because the reshaping it performs is
+*not* standard T-API, and the twin's T-API modules implement only the standard
+(see [CONTRIBUTING.md](../../CONTRIBUTING.md#t-api-surfaces-stay-standard)).
 
 Four concrete incompatibilities, all read off the ONOS driver source rather than
 any specification:
 
-| # | What ONOS does | Why TwinLight alone does not satisfy it |
+| # | What ONOS does | What the adapter does |
 |---|---|---|
-| 1 | Derives the ONOS **port number** from the last dash-segment of the SIP UUID, via `PortNumber.portNumber(String)` → `UnsignedLongs.decode()` | TwinLight's SIP UUIDs are `uuid5`, so that segment is hex (`40965af0c942`) and `decode()` throws `NumberFormatException`. Port discovery fails silently and the device shows **zero ports**. The adapter republishes each SIP as `<real-uuid>-<index>` and strips the suffix on the way back. |
-| 2 | Dereferences `tapi-photonic-media:media-channel-service-interface-point-spec` → `mc-pool` → `available-spectrum` with no null check | TwinLight's SIPs carry no `mc-pool`; `docs/TAPI_COMPLIANCE.md` lists Photonic Media as partial. The adapter synthesises it from the twin's real spectrum context. |
-| 3 | `TapiDeviceLambdaQuery` reads `mc-pool` from the **top level** of the per-SIP response | TwinLight wraps that resource in `{"tapi-common:context": {"service-interface-point": [...]}}`. The adapter serves it unwrapped. |
-| 4 | POSTs a connectivity-service as a **JSON list**, with `service-layer`/`service-type` and no modulation format | TwinLight expects a single object and a `modulation-format`. The adapter translates, and reuses ONOS's UUID as the twin's service UUID so the later DELETE lines up. |
+| 1 | Derives the ONOS **port number** from the last dash-segment of the SIP UUID, via `PortNumber.portNumber(String)` → `UnsignedLongs.decode()` | TwinLight's SIP UUIDs are RFC 4122 `uuid5` values, so that segment is hex (`40965af0c942`) and `decode()` throws `NumberFormatException` — port discovery fails silently and the device shows **zero ports**. The adapter republishes each SIP as `<real-uuid>-<index>` and strips the suffix on the way back. |
+| 2 | Dereferences the T-API **2.1** `tapi-photonic-media:media-channel-service-interface-point-spec` → `mc-pool` → `available-spectrum`, with no null check | T-API 2.6 has no `mc-pool`; the twin publishes the same information as `photonic-media-service-interface-point-spec` → `spectrum-capability-pac`. The adapter translates it, including Hz → MHz and identityrefs → the bare tokens ONOS matches. |
+| 3 | `TapiDeviceLambdaQuery` reads `mc-pool` from the **top level** of the per-SIP response | The twin wraps that resource in `{"tapi-common:context": {"service-interface-point": [...]}}`. The adapter serves it unwrapped. |
+| 4 | POSTs a connectivity-service with `service-layer`/`service-type` and no modulation format, which T-API 2.1 has nowhere to carry | The adapter adds a modulation as policy, in the T-API 2.6 location (a `tapi-photonic-media` augment on the end-point), and reuses ONOS's UUID as the twin's service UUID so the later DELETE lines up. |
 
-Everything else — paths, hyphenated keys, RESTCONF error bodies — passes through
-unchanged, because TwinLight was already standards-correct there.
+Everything else — paths, hyphenated keys, list-encoded POST bodies, RESTCONF
+error bodies — passes through unchanged.
 
-Two of those four (#2 and, in part, #3) are genuine T-API gaps in TwinLight that
-would be better fixed in the twin than worked around here; the other two are
-ONOS deviations that must stay in the adapter forever.
-[COMPATIBILITY.md](COMPATIBILITY.md) works through each one and says which is
-which, along with an open modelling question the demo deliberately does not
-hide.
+[COMPATIBILITY.md](COMPATIBILITY.md) works through each incompatibility and
+records, with the specification clause it rests on, whether the fix belongs in
+the twin or in the adapter.
 
-> **Two corrections to the integration advice circulating for ONOS + T-API.**
+> **Two common configuration pitfalls with ONOS and T-API.**
 > The driver is named **`ols`**, not `tapi`; there is no
 > `org.onosproject.drivers.tapi` app — the TAPI behaviours live in the
 > `odtn-driver` bundle that `odtn-service` pulls in. And the netcfg `rest`
@@ -62,8 +59,8 @@ hide.
 
 ## Which direction changes flow
 
-Worth knowing before the talk, because the asymmetry is total and someone will
-try the wrong direction live.
+Changes propagate in one direction only. Know which before planning a
+walkthrough, because the other direction silently does nothing.
 
 | Change | Reaches the other side? |
 |---|---|
@@ -114,11 +111,10 @@ It is also the one operation that can tear down ONOS-created lightpaths, via
 at reconnect. In testing the cache survived and the lightpaths did too, but the
 script checks afterwards and tells you if they did not.
 
-This asymmetry is not a flaw in the demo — it is the honest state of ODTN's
-`ols` driver, and saying so is more interesting than pretending otherwise. The
-demo's thesis is that **ONOS is the orchestrator**: provisioning originates
-there, and the twin is the physics authority that answers. Creating lightpaths
-in the TwinLight UI is an out-of-band change, which in a real network would also
+This asymmetry is a property of ODTN's `ols` driver, not of the twin. The
+integration treats **ONOS as the orchestrator**: provisioning originates there,
+and the twin is the physics authority that answers. Creating lightpaths in the
+TwinLight UI is an out-of-band change, which in a real network would also
 require a controller resync.
 
 ## Prerequisites
@@ -186,14 +182,14 @@ Tear down with `./integrations/onos/scripts/demo-down.sh` (add `--purge` to drop
 
 ---
 
-## The demo, in three acts
+## Walkthrough
 
-Roughly 8 minutes at a conference pace. Have four things on screen: a terminal,
-the ONOS GUI, the TwinLight UI, and Grafana.
+About ten minutes end to end. Keep four windows open: a terminal, the ONOS GUI,
+the TwinLight UI, and Grafana.
 
-### Act 1 — ONOS discovers the twin (≈2 min)
+### Part 1 — ONOS discovers the twin
 
-*The claim: a standard SDN controller sees a digital twin as a real optical
+*What it shows: a standard SDN controller sees a digital twin as a real optical
 domain, with no twin-specific code in the controller.*
 
 ```bash
@@ -203,10 +199,11 @@ domain, with no twin-specific code in the controller.*
 
 `devices` shows one device of type `OLS`. `ports` shows **75 OCh ports**, one per
 CORONET CONUS transceiver, each annotated with the twin's real T-API SIP UUID
-and carrying a DWDM lambda set derived from the twin's own spectrum context.
+and carrying a DWDM lambda set derived from the twin's per-SIP spectrum
+capability.
 
-Point out in the ONOS GUI that this is an ordinary ONOS device — the controller
-does not know or care that the domain beneath it is simulated.
+In the ONOS GUI this is an ordinary ONOS device — the controller does not know
+that the domain beneath it is simulated.
 
 **Finding the ports in the GUI**, which is not where most people first look: the
 **Topology** view shows the OLS as a single node and does not draw ports at all,
@@ -225,16 +222,16 @@ curl -s localhost:8282/adapter/ports | python3 -m json.tool | head -20
 Ports are numbered 1–75 alphabetically by city, so port 1 is `trx Abilene` and
 port 4 is `trx Atlanta`.
 
-### Act 2 — ONOS provisions a lightpath, the twin supplies the physics (≈3 min)
+### Part 2 — ONOS provisions a lightpath, the twin supplies the physics
 
-*The claim: the orchestrator decides, the twin evaluates. Provisioning is a real
-RMSA + QoT admission, not a bookkeeping entry.*
+*What it shows: the orchestrator decides, the twin evaluates. Provisioning is a
+real RMSA + QoT admission, not a bookkeeping entry.*
 
 ```bash
 ./integrations/onos/scripts/lightpath.sh create Abilene Atlanta
 ```
 
-What happens, and it is worth narrating:
+What happens:
 
 1. The script pushes an **ONOS flow rule** on the OLS device (in-port 1 →
    out-port 4). Nothing here touches the twin's API.
@@ -261,10 +258,9 @@ spectrum heat map — and to **Grafana**, where the OPM series has started movin
 Poll it twice: the numbers change, because the four transient models are
 re-evaluated at read time rather than cached.
 
-**The full sequence, if you want to show it live rather than run the script.**
-Have the twin's *Monitoring* page open on the projector before you start — it is
-the only page that auto-refreshes, on the interval set in Settings. The
-*Services* page does not poll, so reload it after provisioning.
+**The same sequence step by step.** Open the twin's *Monitoring* page before
+you start — it is the only page that auto-refreshes, on the interval set in
+Settings. The *Services* page does not poll, so reload it after provisioning.
 
 ```bash
 # 1. establish that the twin has no such lightpath
@@ -278,7 +274,7 @@ curl -s localhost:8080/data/tapi-connectivity:connectivity-context/connectivity-
 ./integrations/onos/scripts/correlate.sh
 ```
 
-Then point at the twin's Services page: a new entry named
+The twin's Services page now shows a new entry named
 `ONOS port 11->40  (Boston -> New_York)`, with a path, a frequency slot and live
 OPM that ONOS never supplied and could not have computed.
 
@@ -310,28 +306,22 @@ one table:
 
 A flow with no twin service in that table is one the twin refused.
 
-> **Worth being explicit about on stage**, because someone will ask: admission
-> gates on the *pristine GNPy baseline* (11.9 dB here), while `/internal/opm`
-> reports it **after** the transient layer, so the live GSNR sits a few tenths
-> of a dB below the number the admission decision used — PDL drift and EEPN.
-> `rmsa.qot_margin_db`, 1.5 dB by default, is the documented allowance for
-> exactly that, the same role a system margin plays in network design.
+> **Why the live GSNR differs from the admission figure.** Admission gates on
+> the *pristine GNPy baseline* (11.9 dB here), while `/internal/opm` reports
+> GSNR **after** the transient layer, so the live value sits a few tenths of a
+> dB below the number the admission decision used — PDL drift and EEPN.
+> `rmsa.qot_margin_db`, 1.5 dB by default, is the allowance for exactly that,
+> the same role a system margin plays in network design.
 >
 > Gating on a live sample instead would make admission depend on the phase of
 > the PDL drift at the instant the request arrived, so two identical requests
-> seconds apart could decide differently. That is why the baseline is the
-> right thing to gate on.
->
-> Earlier versions of this demo showed a ~9 dB gap here, with the live GSNR at
-> 2.6 dB and a BER of 0.17 on an admitted lightpath. That was a bug in the EDFA
-> reservoir model, not a design choice — see D1 in
-> [COMPATIBILITY.md](COMPATIBILITY.md).
+> seconds apart could decide differently. See
+> [docs/PHYSICS.md § 3](../../docs/PHYSICS.md#3-from-gsnr-to-ber-and-q).
 
-### Act 3 — the twin refuses an infeasible request (≈2 min)
+### Part 3 — the twin refuses an infeasible request
 
-*The claim — the interesting one: the twin is not a yes-machine. A digital twin
-in the control loop can reject a request the controller would otherwise have
-provisioned into a failure.*
+*What it shows: a digital twin in the control loop can reject a request the
+controller would otherwise have provisioned into a failure.*
 
 ONOS's T-API 2.1 connectivity request has nowhere to carry a modulation format,
 so it is adapter policy. Raise it to DP-16QAM and ask for the same path:
@@ -361,9 +351,9 @@ knows that.
 > `./integrations/onos/scripts/correlate.sh`: a refused flow has no twin service against it,
 > and the reason is spelled out at `localhost:8282/adapter/status`.
 
-For a sharper version of the same point, try a *marginal* pair instead — this
-one misses by 0.2 dB, which makes it obvious the twin is doing real arithmetic
-rather than applying a distance cutoff:
+A *marginal* pair shows the same thing more precisely — this one misses by
+0.2 dB, so the refusal is clearly a QoT computation rather than a distance
+cutoff:
 
 ```bash
 ./integrations/onos/scripts/lightpath.sh create Albany Baltimore
@@ -378,14 +368,13 @@ curl -s -X POST localhost:8282/adapter/modulation \
      -H 'Content-Type: application/json' -d '{"modulation-format":"DP-QPSK"}'
 ```
 
-> **Expect a delayed encore.** A rule left in `PENDING_ADD` is retried by ONOS,
-> so once modulation is back at DP-QPSK the previously-refused flow may install
-> itself a few seconds later and appear as a new lightpath. That is ONOS's
-> normal flow-reconciliation behaviour and is worth pointing at rather than
-> being surprised by. `./integrations/onos/scripts/lightpath.sh clear` between acts avoids
-> it.
+> **Refused flows may install later.** A rule left in `PENDING_ADD` is retried
+> by ONOS, so once modulation is back at DP-QPSK the previously refused flow may
+> install itself a few seconds later and appear as a new lightpath. That is
+> ONOS's normal flow-reconciliation behaviour.
+> `./integrations/onos/scripts/lightpath.sh clear` between parts avoids it.
 
-### Act 4 (optional) — fiber cut (≈1 min)
+### Part 4 (optional) — fiber cut
 
 ```bash
 ./integrations/onos/scripts/lightpath.sh create Albany Baltimore
@@ -398,14 +387,12 @@ shows the drop immediately.
 
 Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 
-> **Be honest about the boundary here.** ONOS is *not* notified of the fault
-> through a standard interface: T-API v2.6 defines a `tapi-fault` module and
-> TwinLight does not implement it (see
-> [docs/TAPI_COMPLIANCE.md](../../docs/TAPI_COMPLIANCE.md)). ONOS keeps the device
-> up and the flow installed; what changes is the physics the twin reports. That
-> gap — closing the loop from twin-detected impairment back to controller
-> re-optimisation — is the natural next step, and a good thing to say out loud
-> rather than let someone find.
+> **Limitation.** ONOS is *not* notified of the fault through a standard
+> interface: T-API v2.6 defines a `tapi-fault` module and TwinLight does not
+> implement it (see [docs/TAPI_COMPLIANCE.md](../../docs/TAPI_COMPLIANCE.md)).
+> ONOS keeps the device up and the flow installed; what changes is the physics
+> the twin reports. Closing the loop from twin-detected impairment back to
+> controller re-optimisation is future work.
 
 ---
 
@@ -430,8 +417,8 @@ pair.
 
 ## Adapter endpoints
 
-RESTCONF surface, polled by ONOS — do not call these by hand during a demo, as
-ONOS's port cache depends on them being consistent:
+RESTCONF surface, polled by ONOS — avoid calling these by hand while ONOS is
+connected, as ONOS's port cache depends on them being consistent:
 
 - `GET /restconf/data/tapi-common:context`
 - `GET /restconf/data/tapi-common:context/service-interface-point={uuid}`
@@ -491,7 +478,7 @@ A compose service name will not work there: ONOS parses that field as an
 `app activate org.onosproject.odtn-service`.
 
 **Flow rule stays `PENDING_ADD`.** Expected when the twin refused the request —
-that is Act 3, not a fault. Confirm the reason at
+see Part 3; it is not a fault. Confirm the reason at
 `localhost:8282/adapter/status` under `recent-rejections`.
 
 **ONOS OOMs or boots very slowly.** Give Docker Desktop ≥ 6 GB. Under Rosetta,
@@ -503,9 +490,9 @@ options; if you connect by hand you will need them too.
 
 ---
 
-## What this demo does not claim
+## Limitations
 
-Stated plainly so nobody has to discover it during questions:
+What this integration does not do:
 
 - **The adapter is a real component, not a formality.** ONOS is talking T-API
   2.1 to a shim, which talks T-API 2.6 to the twin. Without it, ONOS discovers
@@ -518,6 +505,6 @@ Stated plainly so nobody has to discover it during questions:
   topology context is served at `/data/tapi-common:context/tapi-topology:topology-context`
   but ONOS's `ols` driver does not consume it.
 - **No authentication anywhere.** The twin, the adapter and the ONOS northbound
-  are all unauthenticated. Demo only.
+  are all unauthenticated. Run it on a local or lab network only.
 - **Modulation format is adapter policy**, because T-API 2.1 connectivity
   requests cannot express one. A 2.6-native controller would not need that.

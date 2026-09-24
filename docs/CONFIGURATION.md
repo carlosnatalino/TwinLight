@@ -37,7 +37,7 @@ gnpy:
 | `sim_params` | path | `null` | GNPy simulation parameters; needed only for Raman |
 | `extra_equipment` | list of paths | `[]` | Additional equipment libraries merged into the main one |
 | `extra_config` | list of paths | `[]` | Additional GNPy config files |
-| `no_insert_edfas` | bool | `false` | **Currently inert.** Intended for topologies with bare fiber spans and no pre-placed amplifiers, but nothing reads it: GNPy's `designed_network()` inserts amplifiers regardless (1068 of them on CORONET, which sets this `true`). Tracked in [PENDING.md](PENDING.md) |
+| `no_insert_edfas` | bool | `false` | **Currently inert.** Intended for topologies with bare fiber spans and no pre-placed amplifiers, but nothing reads it: GNPy's `designed_network()` inserts amplifiers regardless (1068 of them on CORONET, which sets this `true`). See [ROADMAP.md](ROADMAP.md) |
 
 The topology and equipment files for the shipped examples are provisioned by
 `twinlight-fetch-examples` — see

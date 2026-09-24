@@ -46,14 +46,20 @@ These are not style preferences; each one prevents a specific class of bug.
 ### T-API surfaces stay standard
 
 Files under `api/common.py`, `api/topology.py`, `api/connectivity.py`,
-`api/path_computation.py`, `api/equipment.py` and `api/photonic_media.py` must
-implement **only** T-API v2.6.0 — standard paths, standard hyphenated JSON keys,
-RESTCONF error bodies.
+`api/path_computation.py` and `api/equipment.py` must implement **only** T-API
+v2.6.0 — standard paths, standard hyphenated JSON keys, RESTCONF error bodies.
 
 Anything the standard does not cover (OPM readings, path metadata, admin
 utilities, diagram synthesis) belongs in a separate module on a separate URL
 prefix: `/internal/`, `/admin/`, `/config/`. Never mix a proprietary field into
 a standard T-API response — a client that trusts the schema will break on it.
+
+"Standard" means *present in the v2.6.0 YANG*, not merely standard-looking.
+Check the module before adding a key: a plausible name under a `tapi-*` prefix
+that the specification does not define is worse than an obviously proprietary
+one, because a client cannot tell the difference. The photonic layer in
+particular lives in **augments** on the service-interface-point and the
+connectivity-service end-point, not in top-level resources.
 
 ### Cite the literature in the code
 
@@ -81,7 +87,7 @@ than leaving it implicit.
 - The codebase is fully type-hinted and `mypy` runs in CI with the Pydantic
   plugin. New code must type-check without `# type: ignore` unless there is a
   comment explaining why.
-- T-API JSON keys are hyphenated (`"modulation-format"`, `"end-point"`).
+- T-API JSON keys are hyphenated (`"end-point"`, `"service-interface-point"`).
   Pydantic models use `alias=` and serialise with `by_alias=True`.
 - Configuration models use `extra="forbid"`, so a misspelled YAML key is a
   startup error rather than a silently ignored setting. Keep it that way.

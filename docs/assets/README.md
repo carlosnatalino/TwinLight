@@ -1,33 +1,32 @@
-# Brand assets
+# Logo assets
 
 | File | What it is |
 |------|------------|
-| `twinlight-logo.svg` | The primary mark + wordmark used in the README. Theme-aware: it switches to lifted colours under `prefers-color-scheme: dark`. |
-| `twinlight-logo-concepts.drawio` | Six logo directions, the construction grid for the chosen mark, lock-ups, and the palette. |
+| `twinlight-logo.svg` | Mark and wordmark, for light backgrounds. The wordmark also switches to its light variant under `prefers-color-scheme: dark`. |
+| `twinlight-logo-dark.svg` | Mark and wordmark, for dark backgrounds. |
 
-## Working on the concepts file
+The README selects between the two with a `<picture>` element. The media query
+inside `twinlight-logo.svg` follows the viewer's operating-system theme rather
+than GitHub's own theme setting, so the explicit dark variant is the more
+reliable choice when embedding the logo elsewhere.
 
-Open `twinlight-logo-concepts.drawio` at <https://app.diagrams.net> (File →
-Open From → Device) or in the *Draw.io Integration* extension for VS Code. It has
-four pages:
+## What the mark means
 
-1. **Concepts overview** — six directions with the reasoning for each, and a
-   recommendation.
-2. **Primary mark — construction** — the chosen mark on a 24×24 grid, with scale
-   tests, clear-space rule and a "do not" list.
-3. **Lock-ups** — horizontal, stacked, dark-background and one-colour variants.
-4. **Palette** — the two-hue system and the rule that keeps it meaningful.
+The left half is the real network and the right half its digital twin. Two
+signals cross the seam in opposite directions: real → twin carries observed
+state, twin → real carries prediction. The twin's interior is drawn in grey,
+with dashed links and a hollow node, to show structure the twin infers rather
+than copies exactly.
 
-## The one rule worth keeping
+## Palette
 
-**Cyan is the real network; violet is the twin.** That mapping holds in the
-logo, in the web UI, and in any figure produced for a paper — which is what
-lets a reader decode a plot before finding the legend. Everything else in the
-identity is negotiable.
+| Role | Colour |
+|------|--------|
+| Real network | `#0284C7` |
+| Digital twin | `#8B5CF6` |
+| Inferred structure | `#64748B` |
 
-## Exporting
-
-From diagrams.net: File → Export as → SVG, with *Transparent Background* on and
-*Include a copy of my diagram* off. For a favicon, export the mark alone (no
-wordmark) at 512 px, and drop the dash pattern below ~20 px — at that size the
-dashes fill in and the two rays stop being distinguishable.
+Each colour meets the WCAG 1.4.11 non-text contrast ratio of 3:1 on both light
+and dark backgrounds, so the mark itself needs no theme variant; only the
+wordmark changes. Blue for the real network and violet for the twin is a
+useful convention to keep in figures made with TwinLight.

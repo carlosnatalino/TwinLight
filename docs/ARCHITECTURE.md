@@ -59,8 +59,8 @@ There is deliberately no photonic-media router. T-API puts the photonic layer
 in *augments* — on the service-interface-point and on the connectivity-service
 end-point — not in a module-level resource of its own, so it is served by the
 routers that own those objects. A `tapi-photonic-media:` top-level resource
-would have to invent its own leaves, which is exactly what the old
-`spectrum-context` endpoint did.
+would have to invent leaves the YANG does not define, so twin-specific grid
+parameters are served from `/internal/spectrum-context` instead.
 
 Everything the standard does not cover lives on a separate prefix and in a
 separate module:

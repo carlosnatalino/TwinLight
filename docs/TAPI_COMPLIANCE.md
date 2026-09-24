@@ -35,7 +35,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 
 | Aspect | Status | Notes |
 |--------|--------|------|
-| **Create service** | ✓ | `POST .../connectivity-context/connectivity-service` with end-point (SIP refs), modulation-format |
+| **Create service** | ✓ | `POST .../connectivity-context/connectivity-service` with end-points (SIP refs) and the photonic modulation augment |
 | **List / get service** | ✓ | `GET .../connectivity-service`, `GET .../connectivity-service={uuid}` |
 | **Replace service** | ✓ | `PUT .../connectivity-service={uuid}` (full replacement; body UUID must match path) |
 | **Update service** | ✓ | `PATCH .../connectivity-service={uuid}` (name, administrative-state, lifecycle-state) |
@@ -45,7 +45,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 
 ### 1.4 Protocol and conventions
 
-- **RESTCONF root**: The T-API modules are served under `server.restconf_root` (default `/restconf`), discoverable via `GET /.well-known/host-meta` (XRD, RFC 6415) as RFC 8040 §3.1 requires. They remain reachable at the bare `/data/...` for clients written against earlier releases; retiring that mount is tracked in [PENDING.md](PENDING.md).
+- **RESTCONF root**: The T-API modules are served under `server.restconf_root` (default `/restconf`), discoverable via `GET /.well-known/host-meta` (XRD, RFC 6415) as RFC 8040 §3.1 requires. They remain reachable at the bare `/data/...` for clients written against earlier releases; that mount is scheduled for removal (see [ROADMAP.md](ROADMAP.md)).
 - **Capability discovery**: `GET {restconf-root}` and `GET {restconf-root}/yang-library-version` answer per RFC 8040 §3.3.
 - **URL path encoding**: Colons in paths handled (PathDecodeMiddleware for `%3A` → `:`).
 - **RESTCONF-style paths**: Resource paths follow the `.../connectivity-service={uuid}` pattern.
@@ -74,7 +74,7 @@ T-API 2.6 defines several modules beyond Common, Topology, and Connectivity. Cov
 |--------|---------|--------|
 | **Path Computation Service** | Request candidate paths (A–Z, constraints, diversity) | ✓ Implemented — `GET /data/tapi-path-computation:path-computation-context`, `.../path-computation-service`, and `POST .../compute-path`. Constraint support is limited to A–Z endpoints and a candidate count; no diversity, inclusion/exclusion or cost constraints. |
 | **Equipment** | Physical / logical equipment inventory | ✓ Implemented — `GET /data/tapi-equipment:equipment-context`, `.../equipment`, `.../equipment={uuid}`. Inventory is derived from the GNPy element list; holder/physical-position modelling is not represented. |
-| **Photonic Media** | SIP spectrum capability, OTSi config, media channels | ◐ Partial — the SIP augment `photonic-media-service-interface-point-spec/spectrum-capability-pac` and the connectivity-service end-point augment `otsia-connectivity-service-end-point-spec/otsi-config/modulation` are implemented. Media-channel (MCG) resources, `mc-spectrum-config-pac` and the rest of `otsi-config` are not. |
+| **Photonic Media** | SIP spectrum capability, OTSi config, media channels | ◐ Partial — the SIP augment `photonic-media-service-interface-point-spec/spectrum-capability-pac` and the connectivity-service end-point augments `otsia-connectivity-service-end-point-spec/otsi-config/modulation` and `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac` are implemented. Standalone media-channel resources and the rest of `otsi-config` are not. |
 | **Virtual Network Service** | Virtual network (slicing / abstraction) | ✗ No `tapi-virtual-network:*` endpoints. |
 | **OAM (Operations, Admin, Maintenance)** | Maintenance entities, MEP/MIP, tests | ✗ No `tapi-oam:*` endpoints. |
 | **Fault** | Alarms, fault records, severity | ✗ No `tapi-fault:*` endpoints. Fiber failure is injected through the non-standard `/config/` plane instead. |
@@ -105,12 +105,12 @@ So: **Common, Topology, Connectivity, Path Computation and Equipment** are imple
 
 **Topology**
 
-- **Link / NEP**: No latency, loss, or other performance/quality attributes in the TAPI topology model (e.g. `risk-characteristic`, `transfer-integrity`, `latency-characteristic`). GNPy-derived data is used internally but not exposed as standard T-API topology attributes.
+- **Link / NEP**: Links carry a `latency-characteristic`; no other performance or quality attributes are exposed (e.g. `risk-characteristic`, `transfer-integrity`, loss). GNPy-derived data such as span loss is used internally but not exposed as standard T-API topology attributes.
 - **Supporting entities**: No `tapi-topology:link` augmentations for “supporting link” or detailed photonic media extensions in the topology resource tree.
 
 **Common / SIP**
 
-- **SIP**: Model is minimal (name, layer, direction, states). No extra attributes required by profiles (e.g. technology-specific SIP extensions) are exposed.
+- **SIP**: Model is minimal (name, layer, direction, states) plus the photonic `spectrum-capability-pac` augment. No other technology-specific SIP extensions are exposed.
 
 ### 2.4 Behavioral / semantic gaps
 
@@ -144,7 +144,7 @@ Neither interface implements authentication, authorization or TLS. T-API deploym
 | **T-API modules** | Common, Topology, Connectivity (full CRUD), Path Computation, Equipment, Photonic Media (SIP spectrum capability, OTSi modulation) | Virtual Network, OAM, Fault, Notification, T-API Streaming; media channels |
 | **RESTCONF** | Root resource + `host-meta` discovery + `yang-library-version`, paths, JSON, `yang-data+json` content type, `ietf-restconf:errors` error bodies, PUT, list-encoded bodies | `content`/`depth`/`filter`/`with-defaults` query parameters, XML, full YANG-aware PATCH/merge semantics |
 | **Data model** | Core topology + connectivity + SIP, per-SIP spectrum capability, standard modulation and assigned-spectrum augments, link latency-characteristic | Separate Connection resource, routing/resilience/cost constraints, richer topology quality attributes |
-| **Behaviour** | Create/read/update/delete connectivity with QoT-aware admission; path computation; snapshot/restore | State and lifecycle semantics are stored but not enforced; modulation-format is immutable after create; QoT is exposed non-standardly |
+| **Behaviour** | Create/read/update/delete connectivity with QoT-aware admission; path computation; snapshot/restore | State and lifecycle semantics are stored but not enforced; the modulation format is immutable after create; QoT is exposed non-standardly |
 | **gNMI** | Capabilities, Subscribe (ONCE/STREAM/POLL) over context, topology and OPM paths | Get, Set, first-class connectivity paths, non-JSON encodings |
 | **Security** | — | Authentication, authorization, TLS |
 

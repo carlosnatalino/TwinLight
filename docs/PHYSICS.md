@@ -69,8 +69,8 @@ Standard SSMF parameters are used as defaults: |β₂| = 21.3 ps²/km,
 γ = 1.3 W⁻¹km⁻¹.
 
 The kernel's structure derives from the Cython QoT kernel in
-[optical-networking-gym][ong] [[18]](../README.md#ref-18), reused here with the
-original author's permission — the same person maintains both projects.
+[optical-networking-gym][ong] [[18]](../README.md#ref-18), a project by the same
+author.
 
 **Scope limit:** the current kernel models **self-channel NLI only**. Cross-channel
 XPM/FWM contributions from neighbouring services are not included, so on a
@@ -236,8 +236,8 @@ implementation choices give this its behaviour:
    following D'Amico OFC 2023 [[15]](../README.md#ref-15) and Miotto OFC 2025
    [[16]](../README.md#ref-16).
 
-This replaces the IMDD-era closed-form PDL penalty that earlier versions used,
-which is not valid for coherent systems.
+The hinge model is used rather than the closed-form PDL penalty from the IM/DD
+literature, which is not valid for coherent systems.
 
 ### 2.3 Phase noise (EEPN)
 
@@ -332,10 +332,10 @@ used for research.
 | Area | What TwinLight does | What the literature does | Severity |
 |------|---------------------|--------------------------|----------|
 | **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop, linear dB cascade | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events |
-| **EDFA excursion visibility** | τ_e is 10–100 µs, so a wall-clock poll essentially always samples the relaxed state and the model reads ~0 dB between events | Same physics — this *is* what AGC does | Low, but state it before someone reports the model as inert: to see the excursion you must sample near an add/drop, which the twin only produces on service create/delete |
+| **EDFA excursion visibility** | τ_e is 10–100 µs, so a wall-clock poll essentially always samples the relaxed state and the model reads ~0 dB between events | Same physics — this *is* what AGC does | Low, but easy to mistake for an inactive model: to see the excursion you must sample near an add/drop, which the twin only produces on service create/delete |
 | **EDFA excursion magnitude** | Excursion scales with the absolute load step, `gain_per_channel_db × \|Δchannels\|` | Sun 1997 scales it with the *fraction* of channels added or dropped, so one channel added to a full C-band perturbs far less than one added to an empty one | Low at the loadings the bundled scenarios reach; refine before claiming excursion magnitudes on heavily loaded spans |
 | **EGN kernel** | Self-channel NLI only | Full GN/EGN including XPM/FWM from neighbouring channels | **Moderate** — optimistic by a few dB on densely loaded links; on the bundled CORONET scenario EGN GSNR runs ~2–4 dB above the GNPy backend on the same designed spans. Use the GNPy backend when spectral loading matters |
-| **Phase noise (EEPN)** | Shieh & Ho Eq. 33–41, contributing ≈ −0.1 dB at 2150 km on CORONET | Same | Low — previously recorded here as *Unresolved* because the term never moved GSNR. Root cause found: the accumulated CD handed to it was 1000× low (gnpy carries CD in s/m and the adapter stored it as ps/nm), so α was 1000× too small. Fixed; EEPN now responds to dispersion as the reference predicts |
+| **Phase noise (EEPN)** | Shieh & Ho Eq. 33–41, contributing ≈ −0.1 dB at 2150 km on CORONET | Same | None — implemented per the reference; the penalty scales with accumulated dispersion as Shieh & Ho predict |
 | **PMD drift** | Sinusoidal, 10 % amplitude, 90 s period | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — magnitude and quadrature accumulation are right; the trajectory shape is an approximation |
 | **PDL ensemble** | Deterministic incommensurate drift covers the alignment ensemble over time | Explicit Monte-Carlo over hinge alignments | Low — equivalent in the long run, and reproducible, but a short window is not a fair ensemble sample |
 | **Post-FEC BER** | Not modelled — pre-FEC only | Soft-decision FEC threshold curves | Known gap |
