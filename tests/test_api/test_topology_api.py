@@ -89,7 +89,9 @@ class TestGetLink:
         topo_uuid, _ = self._get_ids(app)
         data = app.get(f"{PREFIX}/topology={topo_uuid}").json()
         links = data["tapi-topology:topology"][0]["link"]
-        # At least one link with fiber has latency-characteristic (total-size in ns)
+        # Fiber spans in the example topology are 80 km; delay must be
+        # ~392 µs (ns), not the 392 ns that treating km-as-m would produce.
+        expected_80km_ns = int(80_000.0 * 1e9 / (299_792_458 / 1.47))
         with_latency = [
             link for link in links if link.get("latency-characteristic")
         ]
@@ -98,7 +100,7 @@ class TestGetLink:
             lc = link["latency-characteristic"][0]
             assert lc.get("traffic-property-name") == "propagation-delay"
             assert isinstance(lc.get("total-size"), int)
-            assert lc["total-size"] >= 0
+            assert lc["total-size"] == expected_80km_ns
 
     def test_404_for_unknown(self, app: TestClient) -> None:
         data = app.get(PREFIX).json()
