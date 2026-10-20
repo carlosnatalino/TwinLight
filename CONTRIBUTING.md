@@ -16,6 +16,8 @@ cd TwinLight
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -e ".[dev]"
+# gnpy-api runs in-process in the gnpy-api backend's tests, which skip without it
+uv pip install "gnpy-api @ git+https://github.com/carlosnatalino/oopt-gnpy-api.git@feat/twinlight-network-api"
 
 twinlight-fetch-examples          # GNPy reference topologies for the examples
 npm --prefix twinlight-ui ci      # web UI dependencies
@@ -36,8 +38,9 @@ npm --prefix twinlight-ui test -- run   # web UI tests
 npm --prefix twinlight-ui run build     # web UI build
 ```
 
-CI additionally builds both Docker images and smoke-tests the twin image, so a
-change that breaks `docker compose up --build` will be caught there.
+CI additionally builds both Docker images, smoke-tests the twin image, and
+brings up the twin with the gnpy-api service, so a change that breaks
+`docker compose up --build` will be caught there.
 
 ## Project conventions
 

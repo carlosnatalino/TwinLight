@@ -143,6 +143,9 @@ async def async_main() -> None:
         # After the servers have drained, so the state written is not being
         # mutated by an in-flight request.
         write_checkpoint(app, config)
+        # Last: the checkpoint no longer needs the backend, and a gnpy-api
+        # session left open would hold its network in the service's memory.
+        app.state.context.close()
         log.info("Shutdown complete")
 
     task_supervisor = asyncio.create_task(supervisor())

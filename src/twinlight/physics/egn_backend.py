@@ -39,15 +39,15 @@ from twinlight.physics.analytical_metrics import (
     latency_ms,
     pmd_ps,
 )
+from twinlight.physics.backend import (
+    ParamValidationError as _ParamValidationError,
+)
 from twinlight.physics.egn_kernel import (
     PathQoT,
     SpanInputs,
     accumulate_path_noise,
     db_per_km_to_neper_per_m,
     nf_db_to_linear,
-)
-from twinlight.physics.element_params import (
-    ParamValidationError as _ParamValidationError,
 )
 from twinlight.physics.gnpy_adapter import OpmBaseline
 from twinlight.physics.modulation import get_params
@@ -70,12 +70,13 @@ def _load_topology_with_amplifiers(config: TwinConfig) -> GnpyTopology:
     anything physical.
 
     GNPy solves exactly this in ``designed_network()``, which splits long
-    fibers into sub-spans and inserts EDFAs. gnpy is a hard dependency of
-    this project regardless of the selected backend, so we reuse that
-    result rather than reimplementing span splitting: the designed network
-    is serialised back to GNPy JSON — the same schema this loader already
-    reads — so the EGN converter consumes it unchanged and both backends
-    end up with identical amplifier placement.
+    fibers into sub-spans and inserts EDFAs. We reuse that result rather
+    than reimplementing span splitting — from a gnpy-api service when
+    ``physics.gnpy_api_url`` is set, else from the gnpy library in-process:
+    the designed network is serialised back to GNPy JSON — the same schema
+    this loader already reads — so the EGN converter consumes it unchanged
+    and both backends end up with identical amplifier placement. Without
+    either, the topology is used as written.
 
     Design needs an equipment library. Without one (``gnpy.equipment``
     unset) the topology is used exactly as written, which stays correct
@@ -92,7 +93,7 @@ def _load_topology_with_amplifiers(config: TwinConfig) -> GnpyTopology:
 
     try:
         designed = _designed_topology_json(
-            config.gnpy.topology, config.gnpy.equipment
+            config.gnpy.topology, config.gnpy.equipment, config.physics.gnpy_api_url,
         )
     except Exception:
         # A design failure must never take the backend down: the raw
@@ -112,8 +113,23 @@ def _load_topology_with_amplifiers(config: TwinConfig) -> GnpyTopology:
     return topo
 
 
-def _designed_topology_json(topology_path: Path, equipment_path: Path) -> dict:
-    """Return the GNPy-designed network, serialised back to GNPy JSON."""
+def _designed_topology_json(
+    topology_path: Path, equipment_path: Path, gnpy_api_url: str | None = None,
+) -> dict:
+    """Return the GNPy-designed network, serialised back to GNPy JSON.
+
+    Designed by the gnpy-api service at ``gnpy_api_url`` when given, else by
+    the gnpy library in-process.
+    """
+    if gnpy_api_url:
+        from twinlight.physics.gnpy_api_client import designed_topology
+
+        return designed_topology(
+            gnpy_api_url,
+            json.loads(topology_path.read_text()),
+            json.loads(equipment_path.read_text()),
+        )
+
     from gnpy.tools.json_io import load_equipment, network_from_json, network_to_json
     from gnpy.tools.worker_utils import designed_network
 
@@ -418,6 +434,13 @@ class EgnBackend:
             self._failed_fibers.add(fiber_uid)
         else:
             self._failed_fibers.discard(fiber_uid)
+
+    def compute_path(self, src_uid: str, dst_uid: str) -> list[str] | None:
+        """No GNPy path engine: TapiContext routes with its NetworkX search."""
+        return None
+
+    def close(self) -> None:
+        """Nothing to release: the spans live in this process."""
 
     # -- Internals -------------------------------------------------------
 

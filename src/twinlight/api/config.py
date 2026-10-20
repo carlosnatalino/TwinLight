@@ -25,10 +25,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 
+from twinlight.physics.backend import ParamValidationError
 from twinlight.physics.backend import element_kind_name as _kind_name
-from twinlight.physics.element_params import (
-    ParamValidationError,
-)
 from twinlight.state.twin_overrides import (
     TWIN_ALLOWED,
     TwinOverrideError,

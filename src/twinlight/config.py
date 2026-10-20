@@ -369,14 +369,28 @@ class PhysicsConfig(BaseModel):
     ``egn``: the closed-form GN/EGN kernel in ``physics/egn_kernel.py``.
     Self-contained — no extra install, and no equipment file required.
 
+    ``gnpy_api_url`` moves GNPy out of the twin's process: the ``gnpy``
+    backend then runs in a gnpy-api service at that URL, and the ``egn``
+    backend asks it for GNPy's amplifier design. Unset, GNPy runs
+    in-process and the ``gnpy`` extra must be installed.
+
     Selection is a startup choice: once the process is running, all
     baselines come from the same backend, and a snapshot taken under one
-    backend cannot be restored under the other.
+    backend cannot be restored under the other. Where GNPy runs is not
+    part of that choice: both give the same baselines, so a snapshot
+    moves freely between them.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     backend: Literal["gnpy", "egn"] = "gnpy"
+    gnpy_api_url: str | None = Field(
+        default=None,
+        description=(
+            "Base URL of a gnpy-api service (e.g. http://gnpy-api:8080) that "
+            "runs GNPy for the twin. Unset: GNPy runs in-process."
+        ),
+    )
 
 
 # -- Root config ------------------------------------------------------------

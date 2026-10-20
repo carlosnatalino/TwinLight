@@ -123,6 +123,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["gnpy", "egn"],
         help="Propagation engine for QoT baselines (default: gnpy).",
     )
+    physics_group.add_argument(
+        "--gnpy-api-url",
+        type=str,
+        default=None,
+        metavar="URL",
+        help="Run GNPy in the gnpy-api service at URL instead of in-process "
+             "(e.g. http://gnpy-api:8080).",
+    )
 
     # -- Spectrum ---------------------------------------------------------
     spec_group = parser.add_argument_group("Spectrum")
@@ -280,6 +288,8 @@ def _apply_cli_overrides(
     physics = data.setdefault("physics", {})
     if args.physics_backend is not None:
         physics["backend"] = args.physics_backend
+    if args.gnpy_api_url is not None:
+        physics["gnpy_api_url"] = args.gnpy_api_url
 
     # Spectrum
     spec = data.setdefault("spectrum", {})

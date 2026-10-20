@@ -1,8 +1,10 @@
 # Multi-stage build for the TwinLight optical network digital twin.
 #
-# The image bundles the FastAPI backend + gRPC server + the configured
-# physical-layer backend (GNPy by default; EGN selectable via
-# --physics-backend egn at run time, no extra install needed).
+# The image bundles the FastAPI backend + gRPC server and the EGN
+# physical-layer backend. GNPy itself is not installed: it runs in a gnpy-api
+# service that the twin reaches with --gnpy-api-url, as docker-compose.yml
+# wires it up. Run standalone without that flag, the twin falls back to mock
+# OPM data, or use --physics-backend egn.
 #
 # Runtime dependencies only: the [dev] extra (pytest, ruff, mypy and their
 # trees) is never installed, the compiler toolchain stays in the builder
@@ -13,14 +15,11 @@
 # twinlight-ui/, related-projects/, git history, snapshots, docs and tests
 # so the context stays small.
 #
-# Both stages pin --platform=linux/amd64 because one of gnpy's hard
-# transitive deps (oopt-gnpy-libyang) only publishes manylinux wheels
-# for x86_64; on aarch64 pip falls back to an sdist that needs
-# libyang2 + cmake + ninja to compile. Running the image under
-# Rosetta/qemu on an Apple Silicon host is the cheaper trade.
+# No platform pin: without gnpy there is no oopt-gnpy-libyang either, the one
+# dependency that only publishes x86_64 wheels, so the image builds natively
+# on Apple Silicon too. The gnpy-api service still runs as linux/amd64.
 
-ARG TARGET_PLATFORM=linux/amd64
-FROM --platform=${TARGET_PLATFORM} python:3.12-slim AS builder
+FROM python:3.12-slim AS builder
 
 # uv resolves and installs the dependency tree an order of magnitude
 # faster than pip, and is the tool contributors use locally too
@@ -50,10 +49,18 @@ RUN uv venv /opt/venv --python 3.12 \
 
 # The GNPy reference topologies used by examples/*.yaml are owned by
 # oopt-gnpy and are not redistributed in this repository, so examples/
-# arrives here without them. Copy them out of the gnpy distribution
-# installed above, so the shipped scenarios run with no host bind-mount.
+# arrives here without them. gnpy is not installed above, so unpack its
+# distribution without dependencies (pure Python, no libyang) just long
+# enough to copy them out, so the shipped scenarios run with no host
+# bind-mount. Keep GNPY_VERSION at the gnpy the gnpy-api service pins, so
+# the files match the GNPy that loads them.
+ARG GNPY_VERSION=2.14.1
 COPY examples ./examples
-RUN /opt/venv/bin/twinlight-fetch-examples --dest /build/examples/gnpy-data
+RUN uv pip install --python /opt/venv/bin/python --no-deps --target /tmp/gnpy \
+        "gnpy==${GNPY_VERSION}" \
+    && PYTHONPATH=/tmp/gnpy /opt/venv/bin/twinlight-fetch-examples \
+        --dest /build/examples/gnpy-data \
+    && rm -rf /tmp/gnpy
 
 # Byte-code caches and the packaging metadata of the build are dead weight
 # in the runtime image.
@@ -62,7 +69,7 @@ RUN find /opt/venv -name '__pycache__' -type d -prune -exec rm -rf {} + \
 
 
 # ---------------------------------------------------------------------
-FROM --platform=${TARGET_PLATFORM} python:3.12-slim
+FROM python:3.12-slim
 
 # Non-root user — the twin is a long-running server, no need for root.
 # /app and the snapshot directory are created here, while still root, and
@@ -93,6 +100,7 @@ EXPOSE 8080 50051
 # equipment files were provisioned into examples/gnpy-data/ during the
 # build, so the first-run demo needs no host bind-mounts. Override with:
 #   docker run … twinlight --config /path/to/your.yaml --rest-host 0.0.0.0
+# and add --gnpy-api-url http://<gnpy-api>:8080 for GNPy physics.
 #
 # --snapshot-dir is passed explicitly because a snapshot_dir set in a YAML file
 # is resolved relative to *that file's* directory: the config lives in

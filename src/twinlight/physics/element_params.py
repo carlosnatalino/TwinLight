@@ -29,9 +29,8 @@ from typing import Any
 import numpy as np
 from gnpy.core.elements import Edfa, Fiber, Roadm
 
-
-class ParamValidationError(ValueError):
-    """Raised when a config mutation fails validation."""
+# Defined gnpy-free in physics/backend.py; re-exported for existing importers.
+from twinlight.physics.backend import ParamValidationError
 
 
 @dataclass(frozen=True)

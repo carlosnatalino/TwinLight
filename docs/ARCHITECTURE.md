@@ -112,7 +112,9 @@ src/twinlight/
 
   physics/
     backend.py             PhysicalBackend Protocol (structural, not inherited)
-    gnpy_backend.py        GNPy split-step implementation
+    gnpy_backend.py        GNPy split-step implementation, GNPy in this process
+    gnpy_api_backend.py    The same, with GNPy run by a gnpy-api service
+    gnpy_api_client.py     HTTP client for gnpy-api sessions
     egn_backend.py         Closed-form GN/EGN implementation
     egn_kernel.py          The GN-model kernel itself (Carena 2012/2014)
     gnpy_adapter.py        build_gnpy_network(), compute_path_baseline(), OpmBaseline

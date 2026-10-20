@@ -32,7 +32,7 @@ twinlight-ui (React SPA)          port 5173
       ▼ REST
 FastAPI app (src/twinlight)       port 8080  ← owns ALL state
       ▼
-PhysicalBackend Protocol → GnpyBackend | EgnBackend
+PhysicalBackend Protocol → GnpyBackend | GnpyApiBackend | EgnBackend
       + NetworkX routing graph + transient layer
 gNMI gRPC server                  port 50051 ← stateless adapter
 ```
@@ -72,6 +72,11 @@ These are the ones that are expensive to discover by breaking them.
    (`uv venv --python 3.12`, `uv pip install -e ".[dev]"`).
 
 5. **GNPy comes from PyPI.** Prefer its public API over reimplementing physics.
+   It is the optional `gnpy` extra: in-process it backs `GnpyBackend`; the
+   Docker stack instead runs it in a gnpy-api service that `GnpyApiBackend`
+   calls (`physics.gnpy_api_url`). Nothing outside those backends,
+   `element_params.py` and `example_data.py` may import gnpy at module level —
+   `test_the_twin_runs_without_gnpy_installed` checks the import path.
    Documentation: <https://gnpy.readthedocs.io/>. The EGN backend has no runtime
    dependency on `optical-networking-gym` — the GN-model kernel is implemented
    directly in `physics/egn_kernel.py`, with attribution.

@@ -48,16 +48,31 @@ The topology and equipment files for the shipped examples are provisioned by
 ```yaml
 physics:
   backend: gnpy      # gnpy | egn
+  gnpy_api_url: null # e.g. http://gnpy-api:8080 — run GNPy in a gnpy-api service
 ```
 
 | Backend | Method | Requires |
 |---------|--------|----------|
-| `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | `gnpy.equipment` |
+| `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | `gnpy.equipment`, and either the `gnpy` extra or `gnpy_api_url` |
 | `egn` | Closed-form GN/EGN kernel (`physics/egn_kernel.py`) | nothing beyond the topology |
 
 This is a **startup choice**: all baselines in a process come from one backend,
 and a snapshot taken under one backend is refused by the other, because the GSNR
 values would not be comparable.
+
+`gnpy_api_url` decides where GNPy runs, not which physics applies. Unset, GNPy
+runs inside the twin's process, which needs the `gnpy` extra installed. Set, the
+twin opens a session on a [gnpy-api](https://github.com/carlosnatalino/oopt-gnpy-api/tree/feat/twinlight-network-api)
+service at that URL and sends it every path computation, propagation, parameter
+change and redesign (`physics/gnpy_api_backend.py`); the `egn` backend asks the
+same service for GNPy's amplifier design. Both give the same baselines, so a
+snapshot moves freely between them. The Docker Compose stack sets this flag.
+
+If the service restarts and loses the session, the twin opens a new one and
+replays every parameter change, fiber failure and redesign it had applied, in
+order. One difference from in-process GNPy: a gnpy-api redesign recomputes span
+losses, so a changed `loss_coef` or `att_in` reaches the amplifier gains, while
+in-process `designed_network()` keeps the span losses of the first design.
 
 ## `server` — listening sockets
 
@@ -293,6 +308,7 @@ corresponding YAML field.
 | `--clock-mode`, `--time-scale`, `--auto-snapshot-interval`, `--snapshot-dir` | `simulation.*` |
 | `--k-shortest-paths`, `--qot-margin-db`, `--guardband-slots` | `rmsa.*` |
 | `--physics-backend {gnpy,egn}` | `physics.backend` |
+| `--gnpy-api-url URL` | `physics.gnpy_api_url` |
 | `--num-slots`, `--slot-width-ghz`, `--center-frequency-thz` | `spectrum.*` |
 | `-v` / `-vv`, `--log-level`, `--log-format` | `logging.*` |
 | `--restore` | restore the shutdown checkpoint |

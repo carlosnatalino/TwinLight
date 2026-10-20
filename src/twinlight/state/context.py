@@ -5,7 +5,8 @@ this state only through FastAPI's internal endpoints.
 
 Path computation: when GNPy is loaded we use gnpy.topology.request
 compute_constrained_path (weighted shortest path by fiber length; see
-https://gnpy.readthedocs.io/). Otherwise we use NetworkX k-shortest paths
+https://gnpy.readthedocs.io/), run by the backend in-process or in a
+gnpy-api service. Otherwise we use NetworkX k-shortest paths
 (see algorithms/routing.py). GNPy is also used for propagation (QoT).
 Spectrum allocation: GNPy has no spectrum/slot APIs; we implement
 per-link slot state and first-fit assignment (state/spectrum_state.py,
@@ -620,33 +621,14 @@ class TapiContext:
         return self._sip_to_gnpy_uid.get(sip_uuid)
 
     def _get_path_via_gnpy(self, src_uid: str, dst_uid: str) -> list[str] | None:
-        """Use GNPy's compute_constrained_path for weighted shortest path.
+        """GNPy's weighted shortest path (by fiber length), from the backend.
 
-        Returns list of element UIDs or None if GNPy path computation is
-        unavailable or finds no path. Uses fiber length as weight
+        Returns list of element UIDs, or None when the backend has no GNPy
+        path engine (EGN) or finds no path. GNPy runs in-process or in a
+        gnpy-api service, depending on the backend
         (see https://gnpy.readthedocs.io/).
         """
-        if self._gnpy_network is None:
-            return None
-        try:
-            from gnpy.topology.request import PathRequest, compute_constrained_path
-
-            req = PathRequest(
-                source=src_uid,
-                destination=dst_uid,
-                nodes_list=[dst_uid],
-                loose_list=["STRICT"],
-            )
-            path_elements = compute_constrained_path(self._gnpy_network, req)
-            if path_elements and getattr(req, "blocking_reason", None) is None:
-                return [el.uid for el in path_elements]
-        except Exception:
-            logger.debug(
-                "GNPy path computation failed for %s -> %s; falling back to "
-                "the NetworkX k-shortest search",
-                src_uid, dst_uid, exc_info=True,
-            )
-        return None
+        return self._backend.compute_path(src_uid, dst_uid)
 
     def get_service_path(
         self, sip_a_uuid: str, sip_z_uuid: str
@@ -748,6 +730,10 @@ class TapiContext:
                 baseline.gsnr_db,
             )
             return baseline
+
+    def close(self) -> None:
+        """Release the backend's resources, e.g. its gnpy-api session."""
+        self._backend.close()
 
     def invalidate_baseline(self, service_uuid: str) -> None:
         """Remove a cached baseline so it is recomputed on next OPM request."""

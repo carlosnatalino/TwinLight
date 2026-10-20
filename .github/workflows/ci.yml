@@ -40,6 +40,14 @@ jobs:
           uv venv --python 3.12
           uv pip install -e ".[dev]"
 
+      # The gnpy-api backend's tests run the service in-process and are
+      # skipped without it. Same branch as the gnpy-api service in
+      # docker-compose.yml.
+      - name: Install gnpy-api
+        run: |
+          uv pip install \
+            "gnpy-api @ git+https://github.com/carlosnatalino/oopt-gnpy-api.git@feat/twinlight-network-api"
+
       - name: Ruff (lint)
         if: ${{ !cancelled() }}
         run: uv run ruff check .
@@ -150,4 +158,25 @@ jobs:
           echo "::error::twin did not become healthy within 60s"
           docker logs twinlight-ci
           docker rm -f twinlight-ci >/dev/null
+          exit 1
+
+      # The compose stack runs GNPy in the gnpy-api service, built from its
+      # git branch. /config/get answers 503 until the twin has loaded its
+      # network through that service, so a 200 proves the two are wired up.
+      - name: Smoke-test the compose stack (twin + gnpy-api)
+        run: |
+          docker tag twinlight:ci twinlight:latest
+          docker compose build gnpy-api
+          docker compose up -d --no-build twin
+          for i in $(seq 1 180); do
+            if curl -fsS http://localhost:8080/config/get >/dev/null 2>&1; then
+              echo "twin loaded its network through gnpy-api after ${i}s"
+              docker compose down
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::twin did not load its network through gnpy-api within 180s"
+          docker compose logs twin gnpy-api
+          docker compose down
           exit 1

@@ -59,7 +59,9 @@ class GnpyBackend:
             logger.info("GNPy network loaded: %d elements", len(self.uid_map))
         except ImportError:
             logger.warning(
-                "gnpy package not found — OPM will use sinusoidal mock data"
+                "gnpy package not found — OPM will use sinusoidal mock data. "
+                "Install the 'gnpy' extra, or run GNPy in a gnpy-api service "
+                "with --gnpy-api-url."
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -146,6 +148,35 @@ class GnpyBackend:
         directly on ``self.network``, so this hook is a no-op here —
         kept so the Protocol surface stays uniform across backends."""
 
+    def compute_path(self, src_uid: str, dst_uid: str) -> list[str] | None:
+        """Use GNPy's compute_constrained_path for weighted shortest path.
+
+        Returns list of element UIDs or None if GNPy path computation is
+        unavailable or finds no path. Uses fiber length as weight
+        (see https://gnpy.readthedocs.io/).
+        """
+        if self.network is None:
+            return None
+        try:
+            from gnpy.topology.request import PathRequest, compute_constrained_path
+
+            req = PathRequest(
+                source=src_uid,
+                destination=dst_uid,
+                nodes_list=[dst_uid],
+                loose_list=["STRICT"],
+            )
+            path_elements = compute_constrained_path(self.network, req)
+            if path_elements and getattr(req, "blocking_reason", None) is None:
+                return [el.uid for el in path_elements]
+        except Exception:
+            logger.debug(
+                "GNPy path computation failed for %s -> %s; falling back to "
+                "the NetworkX k-shortest search",
+                src_uid, dst_uid, exc_info=True,
+            )
+        return None
+
     # -- Re-design (opt-in equalisation after parameter changes) ---------
 
     def redesign(self) -> None:
@@ -163,3 +194,6 @@ class GnpyBackend:
         )
         self.network = network
         self.uid_map = build_uid_map(network)
+
+    def close(self) -> None:
+        """Nothing to release: the network lives in this process."""

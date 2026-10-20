@@ -53,6 +53,17 @@ Split-step propagation through the designed network using the `gnpy` library
   element state and the cached network must not drift.
 - `si.pmd` and `si.latency` are per-channel arrays, not scalars.
 
+GNPy can run in the twin's process or in a gnpy-api service
+(`physics.gnpy_api_url`, see [CONFIGURATION.md](CONFIGURATION.md#physics--propagation-backend)).
+The service runs the same design and the same element-by-element propagation
+over the same comb, and the baselines are identical. Only the fiber-length
+total can differ in the last bits, because the service adds span lengths with
+compensated summation. One behaviour does differ: a gnpy-api redesign
+recomputes span losses, so a changed `loss_coef` or `att_in` reaches the
+amplifier gains. In-process `designed_network()` reuses the span losses GNPy
+cached at the first design (`gnpy.core.network.span_loss`), so there a redesign
+after a loss change leaves the gains as they were.
+
 ### EGN backend
 
 A closed-form Gaussian-Noise model implemented directly in

@@ -1,10 +1,11 @@
 """Physical-layer backend Protocol.
 
-The twin can compute QoT baselines via more than one propagation engine
-— today GNPy is the only implementation; M4 adds an EGN backend from
-``optical-networking-gym``. Both engines plug in through this Protocol
-so ``TapiContext`` stays backend-agnostic and the transient layer
-(`physics/transients/*`) is reused unchanged.
+The twin can compute QoT baselines via more than one propagation engine:
+GNPy, run either in-process (``GnpyBackend``) or by a gnpy-api service
+(``GnpyApiBackend``), and the closed-form EGN kernel (``EgnBackend``). All
+of them plug in through this Protocol so ``TapiContext`` stays
+backend-agnostic and the transient layer (`physics/transients/*`) is
+reused unchanged.
 
 Backends own:
 * their propagation engine + the network/uid-map state it needs,
@@ -21,12 +22,36 @@ implementations don't have to inherit from it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     import networkx as nx
 
     from twinlight.physics.gnpy_adapter import OpmBaseline
+
+
+class ParamValidationError(ValueError):
+    """Raised when a config mutation fails validation.
+
+    Defined here rather than in ``physics/element_params.py`` (which re-exports
+    it) because that module imports gnpy, and the API layer must be able to
+    catch this error when gnpy is not installed.
+    """
+
+
+@dataclass(frozen=True)
+class ElementStub:
+    """Stand-in for a GNPy element whose object lives outside this process.
+
+    Carries the ``uid``, the element kind in ``type`` (``"Fiber"``, ``"Edfa"``,
+    ...) and, for fibers, ``params.length`` in metres like a GNPy ``Fiber``, so
+    the span-length readers in ``TapiContext`` work unchanged.
+    """
+
+    uid: str
+    type: str
+    params: Any = None
 
 
 class PhysicalBackend(Protocol):
@@ -102,13 +127,26 @@ class PhysicalBackend(Protocol):
         backend can update any failure state it keeps internally.
         GNPy backend has none — graph-edge removal is sufficient. The
         EGN backend tracks a set used by ``compute_baseline`` to
-        short-circuit to ``status="link-failed"``."""
+        short-circuit to ``status="link-failed"``; the gnpy-api backend
+        forwards the failure to the service, which routes around it."""
+
+    def compute_path(self, src_uid: str, dst_uid: str) -> list[str] | None:
+        """Shortest path between two transceivers, as ordered element UIDs.
+
+        ``None`` means the backend has no path engine of its own (or found
+        no path), and ``TapiContext`` falls back to its NetworkX search.
+        """
+
+    def close(self) -> None:
+        """Release whatever the backend holds outside this process.
+        Called once, on graceful shutdown."""
 
 
 def element_kind_name(el: Any) -> str:
     """Return ``"Fiber"`` / ``"Edfa"`` / ``"Roadm"`` / ``"Transceiver"`` for
-    either a real GNPy element object (via ``type(el).__name__``) or an
-    EGN ``_UidStub`` (which carries the kind in its ``.type`` attribute).
+    either a real GNPy element object (via ``type(el).__name__``), an
+    ``ElementStub``, or an EGN ``_UidStub`` (the stubs carry the kind in
+    their ``.type`` attribute).
 
     Several call sites in ``TapiContext`` and the API layer key off the
     element's kind name. The GNPy backend's uid_map holds real GNPy
@@ -118,6 +156,8 @@ def element_kind_name(el: Any) -> str:
     """
     if el is None:
         return ""
+    if isinstance(el, ElementStub):
+        return el.type
     cls_name = type(el).__name__
     if cls_name == "_UidStub":
         return getattr(el, "type", "")
@@ -132,6 +172,10 @@ def build_backend(config: TwinConfig) -> PhysicalBackend:
     ``ImportError`` if the EGN extra was selected without installing it.
     """
     name = config.physics.backend
+    if name == "gnpy" and config.physics.gnpy_api_url:
+        from twinlight.physics.gnpy_api_backend import GnpyApiBackend
+
+        return GnpyApiBackend(config)
     if name == "gnpy":
         from twinlight.physics.gnpy_backend import GnpyBackend
 

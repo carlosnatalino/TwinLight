@@ -124,6 +124,13 @@ That is the whole setup. The GNPy reference topologies are provisioned inside
 the image during the build (see [below](#example-scenarios-and-gnpy-reference-data)),
 so there is no manual download step.
 
+GNPy itself runs in its own container, `gnpy-api`, which the twin calls for every
+path computation and propagation. Compose builds it straight from the
+[oopt-gnpy-api](https://github.com/carlosnatalino/oopt-gnpy-api/tree/feat/twinlight-network-api)
+branch on the first `up`, starts it whenever the twin starts, and keeps it off
+the host's ports. `docker compose build --no-cache gnpy-api` picks up new
+commits on that branch; set `GNPY_API_GIT` to build another repository or ref.
+
 Once the stack reports healthy:
 
 | URL | What you get |
@@ -161,9 +168,10 @@ docker compose down -v       # stop and discard the metric history too
 ```
 
 > **Apple Silicon note.** One of GNPy's transitive dependencies
-> (`oopt-gnpy-libyang`) publishes manylinux wheels for x86-64 only, so the twin
-> image is built for `linux/amd64` and runs under Rosetta/QEMU on arm64 hosts.
-> This is handled automatically; expect a slower first build.
+> (`oopt-gnpy-libyang`) publishes manylinux wheels for x86-64 only, so the
+> `gnpy-api` image is built for `linux/amd64` and runs under Rosetta/QEMU on
+> arm64 hosts. The twin image carries no GNPy and builds natively. This is
+> handled automatically; expect a slower first build.
 
 ## Local installation (development)
 
@@ -224,6 +232,18 @@ twinlight --config examples/twin_config.yaml --physics-backend egn
 
 `--physics-backend {gnpy,egn}` overrides `physics.backend` in the YAML file; CLI
 arguments always win over the configuration file.
+
+GNPy runs inside the twin by default. To run it in a
+[gnpy-api](https://github.com/carlosnatalino/oopt-gnpy-api/tree/feat/twinlight-network-api)
+service instead, as the Compose stack does, point the twin at it; TwinLight then
+installs without the `gnpy` extra (`uv pip install -e .`):
+
+```bash
+# gnpy-api listens on 8080, like the twin; publish it on another host port
+docker compose build gnpy-api && docker run --rm -d -p 8081:8080 gnpy-api:twinlight
+twinlight-fetch-examples --from-url http://localhost:8081   # example data from the service
+twinlight --config examples/coronet_conus_config.yaml --gnpy-api-url http://localhost:8081
+```
 
 ### Create a connectivity service
 
@@ -397,8 +417,9 @@ FastAPI application (src/twinlight) ← port 8080
       │ owns all state: topology, services, spectrum, physics, RMSA
       ▼
 PhysicalBackend (Protocol)
-   ├─ GnpyBackend   ← gnpy split-step propagation (default)
-   └─ EgnBackend    ← closed-form GN/EGN kernel, self-contained
+   ├─ GnpyBackend     ← gnpy split-step propagation (default)
+   ├─ GnpyApiBackend  ← the same, with gnpy run by a gnpy-api service
+   └─ EgnBackend      ← closed-form GN/EGN kernel, self-contained
       +
 NetworkX DiGraph                    ← routing graph
       +
@@ -431,7 +452,7 @@ available, selected by `physics.backend` or `--physics-backend`:
 
 | Backend | Method | Notes |
 |---------|--------|-------|
-| `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | Needs a GNPy equipment library; the reference implementation of the GN/EGN model [[10]](#ref-10) |
+| `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | Needs a GNPy equipment library; the reference implementation of the GN/EGN model [[10]](#ref-10). Runs in-process, or in a gnpy-api service (`physics.gnpy_api_url`) with identical results |
 | `egn` | Closed-form GN/EGN kernel in `physics/egn_kernel.py` | Follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9). Reuses GNPy's amplifier design when an equipment library is configured, so both backends propagate over the same spans; works without one too |
 
 Both produce a backend-agnostic `OpmBaseline` that the transient layer perturbs,
@@ -485,6 +506,7 @@ gnpy:
 
 physics:
   backend: gnpy                # gnpy | egn
+  # gnpy_api_url: http://gnpy-api:8080   # run GNPy in a gnpy-api service
 
 transients:
   edfa_reservoir: { enabled: true,  tau_ms: 10.0 }

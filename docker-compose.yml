@@ -1,6 +1,8 @@
 # TwinLight — one-shot digital twin + observability stack.
 #
-# Boots four services on a shared network:
+# Boots five services on a shared network:
+#   * gnpy-api   — GNPy, run as a service for the twin. Built from the
+#                  oopt-gnpy-api git branch that carries the session API.
 #   * twin       — the digital twin (FastAPI :8080 + gRPC :50051).
 #   * ui         — the React web UI (nginx), pointed at the twin via TWIN_URL.
 #   * prometheus — scrapes twin:8080/metrics every 15s.
@@ -31,16 +33,48 @@
 
 services:
 
-  twin:
+  # GNPy runs here, not in the twin: at startup the twin opens a gnpy-api
+  # session on its topology, and sends that session every path computation,
+  # propagation, parameter change and redesign. Compose starts it whenever
+  # the twin starts, and the twin waits until it is healthy.
+  #
+  # The build context is the git branch itself, so BuildKit clones it on the
+  # first `up`; `docker compose build --no-cache gnpy-api` picks up new commits.
+  # Point GNPY_API_GIT at another repository#ref, or a local checkout, to
+  # build something else.
+  gnpy-api:
     build:
-      context: .
-      dockerfile: Dockerfile
-    image: twinlight:latest
+      context: ${GNPY_API_GIT:-https://github.com/carlosnatalino/oopt-gnpy-api.git#feat/twinlight-network-api}
+      args:
+        # The package derives its version from git metadata (pbr), which
+        # BuildKit drops from a git build context unless asked to keep it.
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+    image: gnpy-api:twinlight
     # gnpy's oopt-gnpy-libyang has no manylinux aarch64 wheel; the
     # image is built for linux/amd64 and runs under Rosetta/qemu on
     # Apple Silicon hosts. Declared here too so compose doesn't warn
     # about the mismatch on every up.
     platform: linux/amd64
+    container_name: twinlight-gnpy-api
+    # Reached by the twin as http://gnpy-api:8080; not published on the host.
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/api/v1.0/status').status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    # If it restarts, its sessions are gone: the twin opens a new one and
+    # replays the parameter changes it had applied.
+    restart: unless-stopped
+
+  twin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: twinlight:latest
     container_name: twinlight
     hostname: twin
     ports:
@@ -65,6 +99,11 @@ services:
       - "0.0.0.0"
       - --snapshot-dir
       - /app/snapshots
+      - --gnpy-api-url
+      - http://gnpy-api:8080
+    depends_on:
+      gnpy-api:
+        condition: service_healthy
     # Give the twin time to write its checkpoint before SIGKILL. Docker's
     # default is 10s, which is tight for a large topology.
     stop_grace_period: 30s
