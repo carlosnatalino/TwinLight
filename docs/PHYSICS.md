@@ -42,9 +42,13 @@ Split-step propagation through the designed network using the `gnpy` library
 
 - Amplifier placement and power design happen once at startup via
   `designed_network(equipment, network)`.
-- Propagation uses an **88-channel C-band comb**. This is not cosmetic: GNPy's
-  EDFA model derives its slot width from `channel_freq[1] - channel_freq[0]`
-  and needs at least two channels to interpolate.
+- Propagation launches an **88-channel comb** on the 50 GHz grid, 190.95–195.30
+  THz, so the worst-channel NLI reflects a fully loaded line. Each EDFA drops
+  the carriers outside its band, and GNPy's default C-band starts at 191.3 THz,
+  so on an amplified path **81 channels** (191.30–195.30 THz) reach the
+  receiver. The reported worst-channel metrics are taken over those 81.
+- Transceivers are called with a role: the first element of the path emits,
+  the last receives.
 - Path elements are deep-copied before propagation, because propagation mutates
   element state and the cached network must not drift.
 - `si.pmd` and `si.latency` are per-channel arrays, not scalars.
