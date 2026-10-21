@@ -66,6 +66,9 @@ services:
       timeout: 3s
       retries: 20
       start_period: 20s
+      # Probe every second while starting: the twin waits for the first
+      # healthy probe, which `interval` alone would delay by 5 s.
+      start_interval: 1s
     # If it restarts, its sessions are gone: the twin opens a new one and
     # replays the parameter changes it had applied.
     restart: unless-stopped
