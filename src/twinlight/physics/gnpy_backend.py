@@ -1,6 +1,6 @@
 """GNPy implementation of ``PhysicalBackend``.
 
-Encapsulates the gnpy 2.x network handle, the UID→element map, and the
+Encapsulates the gnpy 3.x network handle, the UID→element map, and the
 equipment dict that today live directly on ``TapiContext``. Splitting
 them out lets a second backend (EGN, M4) plug in cleanly and lets
 ``TapiContext`` stop importing ``gnpy.*`` directly.
