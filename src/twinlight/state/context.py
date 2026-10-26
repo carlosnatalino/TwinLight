@@ -246,13 +246,6 @@ class TapiContext:
         self._element_terminals: dict[str, tuple[str | None, str | None]] = {}
         self._build_element_terminal_index()
 
-        # -- Soft failures: scheduled gradual parameter drift ---------------
-        # Jobs write through apply_element_overrides, so they share the
-        # /config plane's validation and baseline invalidation.
-        from twinlight.state.soft_failure import SoftFailureManager
-
-        self.soft_failures = SoftFailureManager(self)
-
     # -- Backend pass-throughs ------------------------------------------
     # These three properties existed as direct attributes before the
     # ``PhysicalBackend`` refactor; keeping them as read-only aliases
@@ -853,19 +846,41 @@ class TapiContext:
         # Return a shallow copy so callers don't mutate context state.
         return {uid: dict(attrs) for uid, attrs in self._element_overrides.items()}
 
-    def forget_element_override(self, uid: str, attr: str) -> None:
-        """Drop the record of an override without writing the element.
+    def apply_element_overrides_atomic(
+        self, updates: dict[str, dict[str, Any]],
+    ) -> dict[str, set[str]]:
+        """All-or-nothing variant of ``apply_element_overrides``.
 
-        For callers that have already written the original value back (a
-        reverted soft failure) and want ``/config/get`` to stop reporting
-        the attribute as user-changed.
+        ``apply_element_overrides`` keeps the writes that preceded a failing
+        one. Callers that validated a whole batch up front (the
+        ``/config/parameters`` endpoints) promise their clients that either
+        every value lands or none does, so a write failing despite that
+        validation rolls back: earlier writes are reverted, the override
+        record is restored, and the touched services' baselines are
+        dropped, since some propagations may already have seen new values.
         """
-        attrs = self._element_overrides.get(uid)
-        if attrs is None:
-            return
-        attrs.pop(attr, None)
-        if not attrs:
-            del self._element_overrides[uid]
+        previous: dict[tuple[str, str], Any] = {}
+        for uid, attrs in updates.items():
+            for attr in attrs:
+                if attr == "failed" or uid not in self._backend.uid_map:
+                    continue
+                previous[(uid, attr)] = self._backend.read_attribute(uid, attr)
+        prior_records = self.get_element_overrides()
+        try:
+            return self.apply_element_overrides(updates)
+        except Exception:
+            for (uid, attr), value in previous.items():
+                if value is None:
+                    continue
+                try:
+                    self._backend.write_attribute(uid, attr, value)
+                except Exception:  # keep unwinding the rest
+                    logger.exception("Rollback of %s.%s failed", uid, attr)
+            self._element_overrides = prior_records
+            for uid in updates:
+                for svc_uuid in self.services_for_element(uid):
+                    self.invalidate_baseline(svc_uuid)
+            raise
 
     def get_twin_overrides(self) -> dict[str, Any]:
         return dict(self._twin_overrides)
@@ -1381,10 +1396,7 @@ class TapiContext:
 
         # Clear existing live state. Restore replaces, never merges:
         # un-fail every currently-failed link, drop overrides + caches,
-        # then re-apply whatever the snapshot recorded. Soft-failure jobs
-        # go too — left running they would keep writing over the restored
-        # parameters.
-        self.soft_failures.clear()
+        # then re-apply whatever the snapshot recorded.
         self._services.clear()
         self._service_allocation.clear()
         self._baseline_cache.clear()

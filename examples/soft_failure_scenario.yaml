@@ -5,12 +5,24 @@
 # Run against a twin started with examples/twin_config.yaml:
 #
 #   twinlight-soft-failure run examples/soft_failure_scenario.yaml --dry-run
-#   twinlight-soft-failure run examples/soft_failure_scenario.yaml --watch
+#   twinlight-soft-failure run examples/soft_failure_scenario.yaml --revert-on-interrupt
 #
-# Every entry is one POST /config/soft-failures body (see docs/API.md), with
-# two conveniences: `duration`, `interval` and `start_delay` accept 90s / 10m /
-# 1h30m, and `rate` accepts <units>/s, /min or /h. `defaults` is merged under
-# every entry.
+# The twin itself has no clock: it applies concrete values immediately. The
+# script keeps the timeline and talks to two endpoints:
+#
+#   POST /config/parameters/changes?dry_run=true   once, to plan and validate
+#       every entry (start and end value of each parameter) before anything
+#       moves;
+#   POST /config/parameters  {"set": {...}}         on every tick, with the
+#       current value of every due ramp, all in one call;
+#   POST /config/parameters/changes                 for entries without a
+#       duration or rate — instant steps — when their start_delay is reached.
+#
+# Each entry: a parameter path, where it ends up (`to`, `by` or `by_percent`,
+# optionally with `direction`), and — for a ramp — how fast (`duration` or
+# `rate`) and along which `profile`. `duration`, `interval` and `start_delay`
+# accept 90s / 10m / 1h30m; `rate` accepts <units>/s, /min or /h. `defaults`
+# is merged under every entry.
 #
 # Paths address parameters ns-3 style:
 #   [/Service/<sel>] [/Link/<from>/<to>] /<Kind>/<uid>/<attribute>
@@ -19,7 +31,7 @@
 # =============================================================================
 
 defaults:
-  interval: 2s          # one parameter write (and OPM re-propagation) every 2 s
+  interval: 2s          # one write (and OPM re-propagation) every 2 s per ramp
 
 soft_failures:
   # A contaminated connector on the Site_A → Site_B span: loss rises quickly
@@ -41,3 +53,10 @@ soft_failures:
     profile: accelerating
     start_delay: 1m
     on_complete: reverse
+
+  # An instant step, not a ramp (no duration or rate): five minutes in, a
+  # maintenance action leaves the amplifier's output VOA 1 dB too high.
+  - name: VOA mis-set during maintenance
+    path: /Edfa/Edfa1/out_voa
+    by: 1
+    start_delay: 5m

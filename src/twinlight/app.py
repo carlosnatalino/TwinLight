@@ -6,10 +6,6 @@ and includes all API routers.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-from collections.abc import AsyncIterator
-
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,8 +19,8 @@ from twinlight.api import (
     diagrams,
     equipment,
     internal,
+    parameters,
     path_computation,
-    soft_failure,
     topology,
 )
 from twinlight.api import (
@@ -119,25 +115,12 @@ def _add_restconf_root_resources(app: FastAPI, root: str) -> None:
         return {"ietf-restconf:yang-library-version": _YANG_LIBRARY_VERSION}
 
 
-@contextlib.asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Run the soft-failure engine for as long as the server is up."""
-    runner = asyncio.create_task(app.state.context.soft_failures.run())
-    try:
-        yield
-    finally:
-        runner.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await runner
-
-
 def create_app(config: TwinConfig) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
         title="TwinLight",
         version="0.1.0",
         description="Optical network digital twin with T-API interfaces",
-        lifespan=_lifespan,
     )
 
     # Middleware (order matters: last added = first executed)
@@ -188,7 +171,7 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.include_router(diagrams.router)
     app.include_router(admin.router)
     app.include_router(config_api.router)
-    app.include_router(soft_failure.router)
+    app.include_router(parameters.router)
     app.include_router(metrics_api.router)
 
     if root:

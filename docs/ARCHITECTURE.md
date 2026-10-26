@@ -69,7 +69,7 @@ separate module:
 |--------|--------|----------|
 | `/internal/` | `api/internal.py`, `api/diagrams.py` | OPM readings, service path metadata, path-info estimates, eye/constellation synthesis |
 | `/admin/` | `api/admin.py` | Snapshot and restore |
-| `/config/` | `api/config.py`, `api/soft_failure.py` | Runtime parameter overrides (fiber loss, EDFA NF, link failure); parameter-path resolution and soft-failure jobs |
+| `/config/` | `api/config.py`, `api/parameters.py` | Runtime parameter overrides (fiber loss, EDFA NF, link failure); path-addressed, all-or-nothing parameter batches |
 | `/metrics` | `api/metrics.py` | Prometheus exposition |
 
 A T-API client therefore never encounters a proprietary extension inside a
@@ -99,7 +99,7 @@ src/twinlight/
     spectrum_state.py      Per-link slot occupancy arrays (6.25 GHz flexi-grid)
     twin_overrides.py      Runtime parameter overrides from the /config plane
     parameter_path.py      ns-3-style parameter paths: parse + resolve to (uid, attr)
-    soft_failure.py        SoftFailureManager: scheduled gradual parameter drift
+    parameter_ops.py       Atomic set / to-by-by_percent batches over parameter paths
 
   loader/
     gnpy_topology.py       GNPy JSON → list[GnpyElement]
@@ -136,7 +136,8 @@ src/twinlight_client/    Companion client library and CLI
                            protocol it speaks, not for this project)
   streaming.py             GnmiConsumer — async gNMI Subscribe consumer
   cli.py                   twinlight-client: pick a service, stream its OPM
-  soft_failure.py          twinlight-soft-failure: start/control soft failures
+  soft_failure.py          twinlight-soft-failure: immediate changes, and the
+                           clock and ramp logic for gradual ones
 ```
 
 ## Startup sequence
@@ -154,9 +155,7 @@ src/twinlight_client/    Companion client library and CLI
 5. If `--restore` / `--restore-latest` was given, the snapshot is replayed:
    services are re-created and spectrum occupancy is reinstated. A snapshot
    taken under a different physical-layer backend is rejected.
-6. `main.py` starts uvicorn and the gRPC server with `asyncio.gather`. The app's
-   lifespan starts the soft-failure runner task alongside uvicorn and cancels it
-   on shutdown.
+6. `main.py` starts uvicorn and the gRPC server with `asyncio.gather`.
 
 ## Request lifecycles
 
@@ -199,29 +198,30 @@ The baseline propagation is the expensive step and is cached; the transient
 evaluation is cheap and deliberately *not* cached, which is what makes every
 read reflect the current instant.
 
-### Running a soft failure
+### Changing parameters by path
 
-`POST /config/soft-failures`
+`POST /config/parameters` and `POST /config/parameters/changes`
 
-1. `state/parameter_path.py` parses the path and resolves it against the
+1. `state/parameter_path.py` parses each path and resolves it against the
    backend's `uid_map` and `supported_attributes()` schema, so the same path
    language works under GNPy and EGN. `/Service` scopes use the
    element → service reverse index; `/Link` scopes use an inline-element →
    terminal index built at startup by walking the backend's own graph (GNPy's
    designed network contains booster amplifiers the parsed topology lacks).
-2. `SoftFailureManager.plan` reads each target's start value, computes its end
-   value and duration, and rejects out-of-range ends and targets another active
-   job already drives.
-3. `tick(now)` evaluates each due job's trajectory — a pure function of its
-   elapsed active time — and writes changed values through
-   `apply_element_overrides`, which validates them and invalidates the affected
-   baselines. The next OPM read re-propagates.
-4. `run()`, started by the app lifespan, calls `tick` and sleeps until the next
-   job is due or a control request wakes it. The manager takes an injectable
-   clock, so tests drive `tick` directly with a fake one.
+2. `state/parameter_ops.py` computes every resulting value from the values
+   before the batch and checks them all — range, type, no parameter written
+   twice — collecting every error before refusing. A dry run stops here.
+3. `TapiContext.apply_element_overrides_atomic` writes the batch through
+   `apply_element_overrides`, which records the overrides and invalidates the
+   affected baselines. A write failing despite validation rolls back the earlier
+   ones, so a batch lands entirely or not at all.
 
-Ticks run on the event loop and propagation is synchronous within it, so a write
-can never land in the middle of a propagation.
+The twin keeps no clock for these. A gradual change (a soft failure) is the
+`twinlight-soft-failure` client calling step 3 repeatedly: it plans a scenario
+with one dry run of `/changes`, then sends each tick's values for every due ramp
+in one `POST /config/parameters`. Timing, ramp shapes and recovery therefore
+live entirely in the client, and the twin's state is always just its current
+parameter values — which is also all a snapshot needs to capture.
 
 ## Concurrency
 
@@ -239,7 +239,7 @@ can never land in the middle of a propagation.
 |-------|-----|----------------|
 | `_gnpy_uid_map` | element UID | never (built once at startup) |
 | `_route_cache` | `(src_uid, dst_uid)` | topology mutation (e.g. link failure) |
-| `_baseline_cache` | service UUID | service deletion, `/config` parameter change (including every soft-failure write), link failure |
+| `_baseline_cache` | service UUID | service deletion, `/config` parameter change (including `/config/parameters` batches), link failure |
 
 ## Middleware
 

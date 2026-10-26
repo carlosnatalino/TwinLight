@@ -91,10 +91,11 @@ way a deployed coherent receiver's telemetry moves.
   Grafana dashboard in the Compose stack.
 - **Web UI** — a React SPA for topology, services, spectrum occupancy, path
   computation and live OPM charts.
-- **Soft-failure injection** — gradual, scheduled drift of span loss, amplifier
-  gain/NF/tilt and ROADM targets (linear, accelerating, saturating, sigmoid or
-  stepped), addressed with ns-3-style parameter paths and driven from REST or
-  the `twinlight-soft-failure` CLI.
+- **Path-addressed parameter changes and soft failures** — set or shift span
+  loss, amplifier gain/NF/tilt and ROADM targets in atomic batches addressed
+  with ns-3-style parameter paths; the `twinlight-soft-failure` client drifts
+  them gradually (linear, accelerating, saturating, sigmoid or stepped) on a
+  timeline it keeps itself.
 - **Reproducibility** — snapshot/restore of the full connectivity and spectrum
   state, so an experiment can be re-run from a known checkpoint.
 
@@ -309,22 +310,24 @@ OPM (OSNR, GSNR, pre-FEC BER, Q-factor, chromatic dispersion, PMD) over gNMI.
 ### Rehearse soft failures
 
 A soft failure is a slow degradation rather than a cut: a span's loss creeping
-up, an amplifier's gain sagging. The twin ramps the parameter on a schedule and
-every affected service's OPM follows it:
+up, an amplifier's gain sagging. The twin applies parameter changes immediately
+and keeps no clock; the `twinlight-soft-failure` client keeps the timeline and
+sends the values as they evolve, and every affected service's OPM follows:
 
 ```bash
-twinlight-soft-failure params '/Fiber/*/*'                     # what is addressable
-twinlight-soft-failure start '/Fiber/Span1/loss_coef' --by 0.05 --duration 10m \
-    --profile saturating --watch                               # one ramp, followed
-twinlight-soft-failure run examples/soft_failure_scenario.yaml # several, from a file
-twinlight-soft-failure delete sf-1 --revert                    # undo
+twinlight-soft-failure params '/Fiber/*/*'                       # what is addressable
+twinlight-soft-failure set '/Fiber/*/loss_coef=0.22'             # change now
+twinlight-soft-failure ramp '/Fiber/Span1/loss_coef' --by 0.05 --duration 10m \
+    --profile saturating --revert-on-interrupt                   # one gradual drift
+twinlight-soft-failure run examples/soft_failure_scenario.yaml   # ramps and steps
 ```
 
 Parameters are addressed ns-3 style —
 `[/Service/<sel>] [/Link/<from>/<to>] /<Kind>/<uid>/<attribute>` with globs,
-`|` alternatives, quoted literals and regexes. The path language, the ramp
-options and the underlying `/config/soft-failures` endpoints are documented in
-[docs/API.md](docs/API.md#config--soft-failures).
+`|` alternatives, quoted literals and regexes. The path language and the two
+endpoints the client drives — `POST /config/parameters` and
+`POST /config/parameters/changes` — are documented in
+[docs/API.md](docs/API.md#config--parameters-by-path).
 
 ### Checkpoint and restore
 

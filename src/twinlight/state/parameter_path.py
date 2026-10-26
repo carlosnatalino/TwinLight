@@ -35,8 +35,8 @@ other backslash is literal, so regex escapes (``~"^fiber \\(Brest"``) work
 as written.
 
 The attribute segment is a single attribute name, or ``*`` to list every
-attribute (accepted by the resolver, rejected by the soft-failure engine,
-which needs one number per element). When the kind is a wildcard, only
+attribute (accepted by the resolver for listing, rejected when writing,
+which needs one number per parameter). When the kind is a wildcard, only
 elements whose kind exposes the attribute match, so ``/*/*/loss_coef`` is
 every fiber. Naming a kind explicitly with an attribute it does not expose
 is an error rather than an empty match, because that is always a typo.
