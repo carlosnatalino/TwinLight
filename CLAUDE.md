@@ -104,7 +104,7 @@ pytest --cov                            # coverage floor: 60%
 npm --prefix twinlight-ui test -- run
 ```
 
-## GNPy API notes (2.14.x)
+## GNPy API notes (3.0.x)
 
 Details that are easy to get wrong and cost a debugging cycle:
 
@@ -114,9 +114,17 @@ Details that are easy to get wrong and cost a debugging cycle:
   not the old `build_network(pref_ch_db=…)`.
 - `network_from_json(topo_data: dict, equipment)` takes a parsed dict, not a
   `Path`.
-- EDFA propagation needs ≥ 2 channels — `interpol_params` derives slot width
-  from `channel_freq[1] - channel_freq[0]`. The twin uses an 88-channel C-band
-  comb.
+- `Transceiver.__call__(si, role)` requires a `TransceiverRole`
+  (`gnpy.core.parameters`): `EMITTER` for the path's first element, `RECEIVER`
+  for its last. Without it every propagation raises `TypeError`, and
+  `GnpyBackend` quietly falls back to mock OPM.
+- `create_input_spectral_information(f_min, f_max, …)` treats both bounds as
+  channel centres, inclusive. gnpy 2 put the first channel one slot above
+  `f_min`, so the same arguments now launch one extra channel without any
+  error. The twin's comb is 88 channels, 190.95–195.30 THz, and
+  `TestPropagationComb` pins it.
+- EDFAs drop carriers outside their band (the default C-band is 191.3–196.0
+  THz), so 81 of the 88 channels reach the receiver.
 - `si.pmd` and `si.latency` are per-channel arrays, not scalars.
 - Deep-copy path elements before propagating; propagation mutates element state.
 

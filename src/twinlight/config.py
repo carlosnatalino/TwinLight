@@ -289,7 +289,7 @@ class LoggingConfig(BaseModel):
 class PhysicsConfig(BaseModel):
     """Selects which propagation engine computes QoT baselines.
 
-    ``gnpy`` (default): split-step propagation via the gnpy 2.x library;
+    ``gnpy`` (default): split-step propagation via the gnpy 3.x library;
     needs ``gnpy.equipment`` to be configured.
     ``egn``: the closed-form GN/EGN kernel in ``physics/egn_kernel.py``.
     Self-contained — no extra install, and no equipment file required.

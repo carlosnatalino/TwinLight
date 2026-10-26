@@ -1,6 +1,6 @@
 """GNPy physics adapter: load network, design amplifiers, propagate paths.
 
-This module provides a thin wrapper around gnpy 2.x for computing the
+This module provides a thin wrapper around gnpy 3.x for computing the
 static QoT baseline (GSNR, OSNR, CD, PMD) of a connectivity service.
 
 Key design notes:
@@ -8,8 +8,10 @@ Key design notes:
     Fiber, Edfa, Roadm).  The UID is accessed via ``element.uid``.
   - ``designed_network()`` must be called after ``network_from_json()`` to
     set ROADM equalization targets and EDFA operating points.
-  - Propagation requires at least 2 spectral channels (EDFA interpol_params
-    needs channel spacing).  We therefore use a full C-band comb.
+  - Propagation uses a full C-band comb, so the worst-channel NLI reflects a
+    fully loaded line.
+  - A Transceiver is called with its ``TransceiverRole``: the path's first
+    element emits, its last receives.
   - Each propagation deep-copies only the path elements, not the whole
     network, to avoid mutating cached element state.
 """
@@ -32,10 +34,17 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-# C-band reference comb for propagation
+# C-band reference comb for propagation: 88 channels on the 50 GHz grid,
+# 190.95-195.30 THz. gnpy 3 treats f_min and f_max as the first and last
+# channel centres; gnpy 2 put the first channel one slot above f_min, so the
+# same comb then needed f_min = _F_CENTER_HZ - 44 * _SPACING_HZ.
+# The first EDFA on a path drops carriers outside its band (gnpy's default
+# C-band starts at 191.3 THz), so 81 of the 88 reach the receiver.
 _F_CENTER_HZ = 193.1e12   # ITU-T centre frequency [Hz]
 _NB_CHANNELS = 88         # full C-band @ 50 GHz spacing
 _SPACING_HZ = 50e9
+_F_MIN_HZ = _F_CENTER_HZ - (_NB_CHANNELS // 2 - 1) * _SPACING_HZ
+_F_MAX_HZ = _F_CENTER_HZ + (_NB_CHANNELS // 2) * _SPACING_HZ
 
 
 @dataclass
@@ -129,12 +138,11 @@ def compute_path_baseline(
         KeyError: If a UID in path_uids is not in uid_map.
         RuntimeError: If propagation fails.
     """
-    from gnpy.core.elements import Roadm
+    from gnpy.core.elements import Roadm, Transceiver
     from gnpy.core.info import create_input_spectral_information
+    from gnpy.core.parameters import TransceiverRole
 
     params = get_params(modulation_format)
-    f_min = _F_CENTER_HZ - (_NB_CHANNELS // 2) * _SPACING_HZ
-    f_max = _F_CENTER_HZ + (_NB_CHANNELS // 2) * _SPACING_HZ
     tx_power_w = 10 ** (params.tx_power_dbm / 10.0) * 1e-3  # dBm → W
 
     # Deep-copy only the path elements (not the whole network) to avoid
@@ -145,8 +153,8 @@ def compute_path_baseline(
 
     # Create a full C-band spectral information object.
     si = create_input_spectral_information(
-        f_min=f_min,
-        f_max=f_max,
+        f_min=_F_MIN_HZ,
+        f_max=_F_MAX_HZ,
         roll_off=0.15,
         baud_rate=params.baud_rate_hz,
         spacing=_SPACING_HZ,
@@ -155,12 +163,16 @@ def compute_path_baseline(
         delta_pdb=0.0,
     )
 
-    # Propagate element by element.  ROADMs need their degree context.
+    # Propagate element by element.  ROADMs need their degree context;
+    # Transceivers their role, as in gnpy.topology.request.propagate.
     for i, (uid, el) in enumerate(path_items):
         if isinstance(el, Roadm):
             prev_uid = path_items[i - 1][0] if i > 0 else None
             next_uid = path_items[i + 1][0] if i < len(path_items) - 1 else None
             si = el(si, degree=next_uid, from_degree=prev_uid)
+        elif isinstance(el, Transceiver):
+            role = TransceiverRole.EMITTER if i == 0 else TransceiverRole.RECEIVER
+            si = el(si, role=role)
         else:
             si = el(si)
 

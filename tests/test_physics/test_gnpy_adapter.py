@@ -53,3 +53,26 @@ class TestBaselineUnits:
         assert 0.01 < baseline.pmd_ps < 10.0
         # 80 km of fiber at ~2e8 m/s is ~0.4 ms.
         assert 0.1 < baseline.latency_ms < 10.0
+
+
+class TestPropagationComb:
+    def test_comb_is_88_channels_from_190_95_to_195_30_thz(self) -> None:
+        """The launched comb must not move when gnpy changes what f_min means.
+
+        Regression: gnpy 3 made f_min/f_max the first and last channel
+        centres, where gnpy 2 put the first channel one slot above f_min.
+        Passing the old bounds then launched 89 channels from 190.90 THz —
+        no error, just a different spectrum under every baseline.
+        """
+        from gnpy.core.info import create_input_spectral_information
+
+        from twinlight.physics import gnpy_adapter as ga
+
+        si = create_input_spectral_information(
+            f_min=ga._F_MIN_HZ, f_max=ga._F_MAX_HZ, roll_off=0.15,
+            baud_rate=32e9, spacing=ga._SPACING_HZ, tx_osnr=100.0,
+            tx_power=1e-3,
+        )
+        assert si.number_of_channels == ga._NB_CHANNELS == 88
+        assert si.frequency[0] == pytest.approx(190.95e12)
+        assert si.frequency[-1] == pytest.approx(195.30e12)
