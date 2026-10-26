@@ -91,6 +91,10 @@ way a deployed coherent receiver's telemetry moves.
   Grafana dashboard in the Compose stack.
 - **Web UI** — a React SPA for topology, services, spectrum occupancy, path
   computation and live OPM charts.
+- **Soft-failure injection** — gradual, scheduled drift of span loss, amplifier
+  gain/NF/tilt and ROADM targets (linear, accelerating, saturating, sigmoid or
+  stepped), addressed with ns-3-style parameter paths and driven from REST or
+  the `twinlight-soft-failure` CLI.
 - **Reproducibility** — snapshot/restore of the full connectivity and spectrum
   state, so an experiment can be re-run from a known checkpoint.
 
@@ -301,6 +305,26 @@ twinlight-client --rest-url http://host:8080 --gnmi-target host:50051
 
 It lists the active services, lets you pick one, and streams its transient-aware
 OPM (OSNR, GSNR, pre-FEC BER, Q-factor, chromatic dispersion, PMD) over gNMI.
+
+### Rehearse soft failures
+
+A soft failure is a slow degradation rather than a cut: a span's loss creeping
+up, an amplifier's gain sagging. The twin ramps the parameter on a schedule and
+every affected service's OPM follows it:
+
+```bash
+twinlight-soft-failure params '/Fiber/*/*'                     # what is addressable
+twinlight-soft-failure start '/Fiber/Span1/loss_coef' --by 0.05 --duration 10m \
+    --profile saturating --watch                               # one ramp, followed
+twinlight-soft-failure run examples/soft_failure_scenario.yaml # several, from a file
+twinlight-soft-failure delete sf-1 --revert                    # undo
+```
+
+Parameters are addressed ns-3 style —
+`[/Service/<sel>] [/Link/<from>/<to>] /<Kind>/<uid>/<attribute>` with globs,
+`|` alternatives, quoted literals and regexes. The path language, the ramp
+options and the underlying `/config/soft-failures` endpoints are documented in
+[docs/API.md](docs/API.md#config--soft-failures).
 
 ### Checkpoint and restore
 

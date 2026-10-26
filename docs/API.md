@@ -1,6 +1,6 @@
 # API reference
 
-TwinLight exposes 40 REST operations plus a gNMI gRPC service. This document is
+TwinLight exposes 48 REST operations plus a gNMI gRPC service. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
 whenever the twin is running.
@@ -339,6 +339,125 @@ This is the fault-injection and sensitivity-analysis plane: raise a span's loss
 coefficient or fail a fiber, and every affected service's cached baseline is
 invalidated so the next OPM read reflects the change. It is what makes
 before/after experiments possible without restarting the twin.
+
+### `/config/` — soft failures
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/config/parameters?path=…` | Expand a [parameter path](#parameter-paths) into the parameters it addresses, with current values and bounds. Default `/*/*/*` lists everything mutable |
+| GET | `/config/soft-failures` | All soft-failure jobs and their progress |
+| POST | `/config/soft-failures` | Start one; `?dry_run=true` validates and returns the plan without starting it |
+| GET | `/config/soft-failures/{id}` | One job: state, progress, per-target start/end/current values, affected services |
+| POST | `/config/soft-failures/{id}/pause` | Freeze the ramp; the job's clock stops |
+| POST | `/config/soft-failures/{id}/resume` | Continue from where it paused |
+| POST | `/config/soft-failures/{id}/stop` | End the job; parameters keep the values they reached |
+| DELETE | `/config/soft-failures/{id}?revert=…` | Remove the job; with `revert=true`, write every target's start value back first |
+
+A *hard* failure is a step: `failed: true` on a fiber. A *soft* failure is a
+slow degradation that leaves the lightpath up while its margin erodes — a span
+whose loss creeps up as a connector contaminates, an amplifier whose gain sags as
+its pump ages. A soft-failure job ramps one attribute on one or more elements
+from its current value towards a target, on a schedule, so that degradation
+detection and localisation can be rehearsed against the twin.
+
+Every write goes through the same validated path as `POST /config/set`, so the
+allow-list bounds apply, `/config/get` reports the values as overrides, and the
+affected services' baselines are invalidated after each write. The next OPM
+read, gNMI sample or Prometheus scrape therefore reflects the ramp.
+
+The twin runs the jobs in a background task; a client only starts and inspects
+them. The `twinlight-soft-failure` command wraps these endpoints, with
+`h`/`m`/`s` durations, per-minute and per-hour rates, and YAML scenario files —
+see [examples/soft_failure_scenario.yaml](../examples/soft_failure_scenario.yaml).
+
+#### Parameter paths
+
+Parameters are addressed by a path modelled on the
+[ns-3 attribute paths](https://www.nsnam.org/docs/manual/html/attributes.html)
+(`/NodeList/*/DeviceList/0/…`), walking the optical hierarchy instead of an
+object tree:
+
+```
+[/Service/<sel>] [/Link/<from-sel>/<to-sel>] /<Kind>/<uid-sel>/<attribute>
+```
+
+| Segment | Meaning |
+|---------|---------|
+| `<Kind>` | Element kind: `Fiber`, `Edfa`, `Roadm`, or `*` |
+| `<uid-sel>` | Element UID selector |
+| `<attribute>` | One attribute from `allowed_attributes` in `GET /config/get`, or `*` (listing only) |
+| `/Service/<sel>` | Optional scope: only elements on the *allocated* path of a matching service, matched by UUID or `service-name` |
+| `/Link/<from>/<to>` | Optional scope: only inline fibers and amplifiers between a matching pair of ROADMs/transceivers, **in that direction** |
+
+Scopes intersect and may come in either order. A selector is one or more terms
+joined by `|`. Each term is a glob (`*`, `east*`, `roadm ?orlaix`), a quoted
+literal (`"fiber (A → B)-_(1/4)"`, required when a UID contains `/`, `|` or glob
+characters), or a regex (`~"^fiber \(Brest"`; unanchored, like awk's `~`).
+Inside quotes, `\"` and `\\` escape a quote and a backslash; any other
+backslash is literal, so regex escapes are written as usual.
+
+| Path | Addresses |
+|------|-----------|
+| `/Fiber/*/loss_coef` | Every span's loss coefficient |
+| `/*/*/loss_coef` | The same: with a wildcard kind, only kinds that have the attribute match |
+| `/Edfa/east*\|west*/gain_target` | Gain of the amplifiers whose UIDs start with `east` or `west` |
+| `/Link/roadm Brest/roadm Morlaix/Edfa/*/nf0` | Noise figure of every amplifier on the Brest → Morlaix link, boosters included |
+| `/Service/my-service/Fiber/*/loss_coef` | Every span carrying the service named `my-service` |
+
+Naming a kind explicitly with an attribute it does not have (`/Edfa/*/loss_coef`)
+is rejected rather than treated as an empty match. Every parameter in a
+`GET /config/parameters` response carries a fully qualified `path` naming just
+that parameter.
+
+#### Request body
+
+Exactly one of `to` / `by` / `by_percent`, and exactly one of `duration_s` /
+`rate`, are required.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `path` | — | Parameter path; must name a single attribute |
+| `to` | — | Absolute end value for every target |
+| `by` | — | Additive change from each target's own start value (signed) |
+| `by_percent` | — | Relative change from each target's start value, in % (signed) |
+| `direction` | — | `increase` / `decrease`: treat `by`/`by_percent` as a magnitude in that direction |
+| `duration_s` | — | Ramp duration |
+| `rate` | — | Average speed in attribute units per second; each target's duration is \|end − start\| / rate |
+| `profile` | `linear` | `linear`, `accelerating` (exponential, slow then fast), `saturating` (fast then levelling off), `sigmoid`, or `step` |
+| `shape` | `5.0` | Steepness of `accelerating`, `saturating` and `sigmoid` |
+| `steps` | `5` | Number of equal increments of `step` |
+| `interval_s` | `1.0` | Seconds between writes (minimum 0.05). Each write re-propagates the affected services on their next read |
+| `start_delay_s` | `0` | Wait before the ramp starts; the job reports `scheduled` meanwhile |
+| `on_complete` | `hold` | `hold` the end value, `revert` to the start value, or `reverse` back along the same trajectory over the same duration |
+| `out_of_bounds` | `reject` | `reject` a job whose end value leaves the attribute's allowed range, or `clamp` it to the bound |
+| `name` | — | Free-form label |
+
+```json
+POST /config/soft-failures
+{
+  "name": "pump ageing",
+  "path": "/Edfa/Edfa1/gain_target",
+  "by": 3, "direction": "decrease",
+  "rate": 0.0083,
+  "profile": "accelerating",
+  "on_complete": "reverse"
+}
+```
+
+The profiles are scenario shapes, not physical models of a particular
+degradation mechanism; each is monotone and reaches the end value exactly, so the
+bounds check on the end value also bounds every intermediate write.
+
+Jobs are `planned` (dry run), `scheduled`, `running`, `paused`, `completed`,
+`stopped` or `failed`, and stay listed after they finish until deleted. Two active jobs cannot drive the same attribute of the
+same element (`409`). A job whose write fails — for example, a concurrent
+`/config/set` pushes the parameter where the next step would be out of range —
+moves to `failed` with an `error`, leaving other jobs running. When a job returns
+a parameter to its start value (`revert`, `reverse`, or `DELETE ?revert=true`),
+the override record it created is removed too, so `/config/get` reads as before.
+
+Jobs live in memory: snapshots record the parameter values a job has reached, but
+not the job itself, and a restore cancels every job.
 
 ### `/admin/` — checkpoints
 

@@ -239,6 +239,19 @@ class TapiContext:
         self._fiber_to_link_refs: dict[str, list[tuple[str, str]]] = {}
         if self._backend.available:
             self._build_fiber_to_link_index()
+        # Inline element UID (Fiber/Edfa) → (upstream, downstream) terminal
+        # UID (Roadm/Transceiver). Built once, before any link can fail, so
+        # removing a failed fiber's edges never hides it from the index.
+        # Backs the /Link scope of parameter paths.
+        self._element_terminals: dict[str, tuple[str | None, str | None]] = {}
+        self._build_element_terminal_index()
+
+        # -- Soft failures: scheduled gradual parameter drift ---------------
+        # Jobs write through apply_element_overrides, so they share the
+        # /config plane's validation and baseline invalidation.
+        from twinlight.state.soft_failure import SoftFailureManager
+
+        self.soft_failures = SoftFailureManager(self)
 
     # -- Backend pass-throughs ------------------------------------------
     # These three properties existed as direct attributes before the
@@ -840,6 +853,20 @@ class TapiContext:
         # Return a shallow copy so callers don't mutate context state.
         return {uid: dict(attrs) for uid, attrs in self._element_overrides.items()}
 
+    def forget_element_override(self, uid: str, attr: str) -> None:
+        """Drop the record of an override without writing the element.
+
+        For callers that have already written the original value back (a
+        reverted soft failure) and want ``/config/get`` to stop reporting
+        the attribute as user-changed.
+        """
+        attrs = self._element_overrides.get(uid)
+        if attrs is None:
+            return
+        attrs.pop(attr, None)
+        if not attrs:
+            del self._element_overrides[uid]
+
     def get_twin_overrides(self) -> dict[str, Any]:
         return dict(self._twin_overrides)
 
@@ -914,6 +941,55 @@ class TapiContext:
                     refs.append(ref)
             if refs:
                 self._fiber_to_link_refs[uid] = refs
+
+    def _build_element_terminal_index(self) -> None:
+        """Populate ``_element_terminals`` for every inline Fiber and Edfa.
+
+        Walks the backend's own graph when it has one: GNPy's designed
+        network contains booster amplifiers and fiber sub-spans that the
+        parsed topology graph does not. The EGN backend has no graph, so it
+        falls back to the parsed topology.
+        """
+        net = getattr(self._backend, "network", None)
+        uid_map = self._backend.uid_map
+        graph = net if net is not None else self._topo_graph.graph
+
+        def uid_of(node: Any) -> str:
+            return str(node.uid) if net is not None else str(node)
+
+        def kind_of(node: Any) -> str:
+            return _kind_name(node if net is not None else uid_map.get(node))
+
+        def walk(start: Any, step: Any) -> str | None:
+            cur, seen = start, {start}
+            while True:
+                neighbours = list(step(cur))
+                if len(neighbours) != 1:
+                    return None
+                cur = neighbours[0]
+                if cur in seen:
+                    return None
+                seen.add(cur)
+                kind = kind_of(cur)
+                if kind in ("Roadm", "Transceiver"):
+                    return uid_of(cur)
+                if kind not in ("Edfa", "Fiber"):
+                    return None
+
+        for node in graph.nodes:
+            if kind_of(node) in ("Fiber", "Edfa"):
+                self._element_terminals[uid_of(node)] = (
+                    walk(node, graph.predecessors),
+                    walk(node, graph.successors),
+                )
+
+    def element_terminals(self, uid: str) -> tuple[str | None, str | None]:
+        """(upstream, downstream) ROADM/transceiver UIDs of an inline element.
+
+        ``(None, None)`` for terminals themselves and for elements the walk
+        could not place.
+        """
+        return self._element_terminals.get(uid, (None, None))
 
     def set_link_failed(self, fiber_uid: str, failed: bool) -> set[str]:
         """Fail or restore a fiber link, mutating routing graph + TAPI state.
@@ -1305,7 +1381,10 @@ class TapiContext:
 
         # Clear existing live state. Restore replaces, never merges:
         # un-fail every currently-failed link, drop overrides + caches,
-        # then re-apply whatever the snapshot recorded.
+        # then re-apply whatever the snapshot recorded. Soft-failure jobs
+        # go too — left running they would keep writing over the restored
+        # parameters.
+        self.soft_failures.clear()
         self._services.clear()
         self._service_allocation.clear()
         self._baseline_cache.clear()

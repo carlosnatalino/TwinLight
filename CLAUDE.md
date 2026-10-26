@@ -35,8 +35,8 @@ gNMI gRPC server                  port 50051 ← stateless adapter
 ```
 
 Packages: `src/twinlight` (backend), `src/twinlight_client` (client library and
-CLI), `twinlight-ui/` (React SPA). Console scripts: `twinlight`,
-`twinlight-client`, `twinlight-fetch-examples`.
+CLIs), `twinlight-ui/` (React SPA). Console scripts: `twinlight`,
+`twinlight-client`, `twinlight-soft-failure`, `twinlight-fetch-examples`.
 
 ## Hard constraints
 
@@ -136,7 +136,9 @@ Details that are easy to get wrong and cost a debugging cycle:
 invalidate the right cache — `invalidate_baseline(uuid)` on service deletion,
 and the broader sweep on `/config/` parameter changes and link failure.
 Forgetting this produces stale OPM that looks plausible, which is the worst
-possible failure mode for a twin.
+possible failure mode for a twin. Anything that changes element parameters at
+runtime — the soft-failure engine included — must write through
+`apply_element_overrides` so it inherits that invalidation.
 
 ## SIP ↔ GNPy UID mapping
 

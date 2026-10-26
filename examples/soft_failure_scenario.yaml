@@ -1,0 +1,43 @@
+# =============================================================================
+# TwinLight — soft-failure scenario for the two-site example network
+# (Site_A → Span1 → Edfa1 → Site_B, from examples/twin_config.yaml)
+# =============================================================================
+# Run against a twin started with examples/twin_config.yaml:
+#
+#   twinlight-soft-failure run examples/soft_failure_scenario.yaml --dry-run
+#   twinlight-soft-failure run examples/soft_failure_scenario.yaml --watch
+#
+# Every entry is one POST /config/soft-failures body (see docs/API.md), with
+# two conveniences: `duration`, `interval` and `start_delay` accept 90s / 10m /
+# 1h30m, and `rate` accepts <units>/s, /min or /h. `defaults` is merged under
+# every entry.
+#
+# Paths address parameters ns-3 style:
+#   [/Service/<sel>] [/Link/<from>/<to>] /<Kind>/<uid>/<attribute>
+# List what a path resolves to with:
+#   twinlight-soft-failure params '<path>'
+# =============================================================================
+
+defaults:
+  interval: 2s          # one parameter write (and OPM re-propagation) every 2 s
+
+soft_failures:
+  # A contaminated connector on the Site_A → Site_B span: loss rises quickly
+  # at first, then settles 0.05 dB/km above where it started.
+  - name: dirty connector Site_A→Site_B
+    path: /Link/Site_A/Site_B/Fiber/*/loss_coef
+    by: 0.05
+    duration: 10m
+    profile: saturating
+
+  # Pump-laser ageing in the line amplifier: gain falls 3 dB at an average
+  # 0.5 dB/min, accelerating towards the end, and (as if the pump were
+  # swapped) recovers along the same path.
+  - name: pump ageing Edfa1
+    path: /Edfa/Edfa1/gain_target
+    by: 3
+    direction: decrease
+    rate: 0.5/min
+    profile: accelerating
+    start_delay: 1m
+    on_complete: reverse

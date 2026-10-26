@@ -91,7 +91,9 @@ spans. See [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir).
 | Multi-band (C+L and beyond) | C-band only; the spectrum grid is parameterised but the physics is not |
 | Cross-channel NLI in the EGN kernel | Self-channel NLI only; use the GNPy backend when spectral loading matters |
 | Eye and constellation rendering in the web UI | The backend synthesises the data (`/internal/services/{uuid}/eye-diagram`, `/constellation`); the UI components are placeholders |
-| Event-driven simulation clock | The transient layer is evaluated at wall-clock time |
+| Event-driven simulation clock | The transient layer is evaluated at wall-clock time, and soft-failure ramps run in wall-clock seconds; `simulation.clock_mode` and `time_scale` are not yet wired to either |
+| Soft failures in snapshots | A snapshot records the parameter values a soft-failure job has reached, not the job; a restore cancels running jobs |
+| Soft failures in the web UI | REST and the `twinlight-soft-failure` CLI only |
 | T-API notification, OAM, fault and virtual-network modules | Not implemented; see [TAPI_COMPLIANCE.md](TAPI_COMPLIANCE.md) |
 | gNMI `Get` and `Set` | Return `UNIMPLEMENTED`; `Subscribe` is supported |
 | Authentication and TLS | None on any interface; see [SECURITY.md](../SECURITY.md) |
