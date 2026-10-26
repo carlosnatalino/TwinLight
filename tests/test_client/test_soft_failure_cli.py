@@ -299,12 +299,15 @@ class TestExampleScenario:
         """
         t = FakeTime()
         rec = Recorder(example_app)
+        # The designed gain, not the topology file's 17 dB: the reversed
+        # ramp must end where the amplifier actually started.
+        start_gain = _attr(example_app, "Edfa1", "gain_target")
         args = _build_parser().parse_args(["run", str(EXAMPLE)])
         assert run_command(args, example_app, clock=t.clock, sleep=t.sleep) == 0
         # pump ageing: 3 dB at 0.5 dB/min = 6 min, plus 6 min back, after 1 min.
         assert t.now == pytest.approx(13 * 60)
         assert _attr(example_app, "Span1", "loss_coef") == pytest.approx(0.25)
-        assert _attr(example_app, "Edfa1", "gain_target") == pytest.approx(17.0)
+        assert _attr(example_app, "Edfa1", "gain_target") == pytest.approx(start_gain)
         assert _attr(example_app, "Edfa1", "out_voa") == pytest.approx(1.0)
         assert rec.count("POST", "/config/parameters/changes") == 2  # plan + step
         assert rec.count("POST", "/config/parameters") > 0

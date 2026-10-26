@@ -74,6 +74,7 @@ _FIBER_ATTRS: tuple[tuple[str, str, str], ...] = (
 )
 _EDFA_ATTRS: tuple[tuple[str, str, str], ...] = (
     ("nf0",         "edfa_nf_db", "EDFA noise figure [dB]"),
+    ("nf_offset",   "edfa_nf_offset_db", "EDFA noise-figure offset on the GNPy model [dB]"),
     ("gain_target", "edfa_gain_target_db", "EDFA operational gain target [dB]"),
     ("tilt_target", "edfa_tilt_target_db", "EDFA per-lambda tilt target [dB]"),
     ("out_voa",     "edfa_out_voa_db", "EDFA output VOA setting [dB]"),

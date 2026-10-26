@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from tests.test_api.test_config_api import _create_service_via_api
 from twinlight.app import create_app
-from twinlight.config import GnpyConfig, PhysicsConfig, TwinConfig
+from twinlight.config import GnpyConfig, PhysicsConfig, TransientsConfig, TwinConfig
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 FWD_FIBER = "fiber (Brest → Morlaix)-F"
@@ -139,6 +139,71 @@ class TestChanges:
         assert r.status_code == code, r.text
         assert "ietf-restconf:errors" in r.json()
         assert _attr(gnpy_app, FWD_FIBER, "loss_coef") == pytest.approx(0.2)
+
+
+class TestMonitoringFollowsChanges:
+    """A write is visible in OPM on the very next read, and only where it should be.
+
+    Transients are off so OPM equals the baseline and a delta is exact.
+    """
+
+    WEST_AMP = "west edfa in Morlaix to Brest"
+
+    @pytest.fixture
+    def quiet_app(self, gnpy_twin_config: TwinConfig) -> TestClient:
+        off = {"enabled": False}
+        cfg = gnpy_twin_config.model_copy(update={"transients": TransientsConfig(
+            edfa_reservoir=off, polarization=off, phase_noise=off, environmental=off,
+        )})
+        return TestClient(create_app(cfg))
+
+    @staticmethod
+    def _gsnr(client: TestClient, svc: str) -> float:
+        return float(client.get(f"/internal/opm/{svc}").json()["measurements"]["gsnr-db"])
+
+    def test_nf_offset_on_a_traversed_amp(self, quiet_app: TestClient) -> None:
+        svc = _create_service_via_api(quiet_app)
+        before = self._gsnr(quiet_app, svc)
+        r = quiet_app.post(SET, json={"set": {f'/Edfa/"{EAST_AMP}"/nf_offset': 6.0}})
+        assert r.json()["invalidated_services"] == [svc]
+        assert self._gsnr(quiet_app, svc) < before - 1.0
+        quiet_app.post(CHANGES, json=[
+            {"path": f'/Edfa/"{EAST_AMP}"/nf_offset', "by": 6, "direction": "decrease"},
+        ])
+        assert self._gsnr(quiet_app, svc) == pytest.approx(before, abs=1e-9)
+
+    def test_amp_off_the_path_changes_nothing(self, quiet_app: TestClient) -> None:
+        svc = _create_service_via_api(quiet_app)
+        before = self._gsnr(quiet_app, svc)
+        r = quiet_app.post(SET, json={"set": {
+            f'/Edfa/"{self.WEST_AMP}"/nf_offset': 6.0,
+            f'/Edfa/"{self.WEST_AMP}"/gain_target': 20.0,
+        }})
+        assert r.status_code == 200, r.text
+        assert r.json()["invalidated_services"] == []
+        assert self._gsnr(quiet_app, svc) == before
+
+    def test_listed_values_written_back_change_nothing(
+        self, quiet_app: TestClient,
+    ) -> None:
+        """The listing reports what the physics uses, for every parameter.
+
+        A parameter read from a different field than propagation uses (as
+        EDFA gain_target once was) fails here: writing its listed value back
+        would move the service.
+        """
+        svc = _create_service_via_api(quiet_app)
+        before = self._gsnr(quiet_app, svc)
+        listed = quiet_app.get(SET, params={"path": f"/Service/{svc}/*/*/*"}).json()
+        values = {p["path"]: p["value"] for p in listed["parameters"]
+                  if p["value"] is not None}
+        assert {p.split("/")[-1] for p in values} >= {
+            "gain_target", "tilt_target", "out_voa", "nf_offset", "loss_coef",
+        }
+        r = quiet_app.post(SET, json={"set": values})
+        assert r.status_code == 200, r.text
+        assert r.json()["invalidated_services"] == [svc]
+        assert self._gsnr(quiet_app, svc) == pytest.approx(before, abs=1e-9)
 
 
 class TestEgnBackend:

@@ -113,10 +113,13 @@ class TestPlanChanges:
     def test_unset_attribute_skipped_for_relative_change(
         self, gnpy_context: TapiContext,
     ) -> None:
-        # nf0 is unset on equipment-library amps that model NF with
-        # nf_min/nf_max; "by 1 dB" of nothing is undefined.
+        # GNPy allows an amplifier with no tilt at all; "by 1 dB" of
+        # nothing is undefined.
+        gnpy_context._backend.uid_map[EAST_AMP].tilt_target = None
         with pytest.raises(ParameterOpError, match="no parameter it matches"):
-            plan_changes(gnpy_context, [_change(path=f'/Edfa/"{EAST_AMP}"/nf0', by=1)])
+            plan_changes(
+                gnpy_context, [_change(path=f'/Edfa/"{EAST_AMP}"/tilt_target', by=1)],
+            )
 
     def test_two_changes_on_one_parameter_refused(
         self, gnpy_context: TapiContext,

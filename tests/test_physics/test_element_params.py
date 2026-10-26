@@ -158,13 +158,35 @@ class TestEdfa:
             edfa.operational.out_voa = original
             edfa.out_voa = original
 
-    def test_nf0_writes_through_to_params(self, edfa: Edfa) -> None:
-        original = edfa.params.nf0
+    def test_gain_target_reads_the_designed_gain(self, edfa: Edfa) -> None:
+        # Propagation uses effective_gain; operational.gain_target is the
+        # topology-file input, which design may have changed (or left None,
+        # on a booster). Reading the input would misreport the live amp.
+        assert read_attr(edfa, "gain_target") == pytest.approx(edfa.effective_gain)
+
+    def test_nf0_is_not_a_gnpy_knob(self, edfa: Edfa) -> None:
+        # GNPy never reads params.nf0 while propagating (it uses nf_model),
+        # so exposing it would accept writes that change nothing.
+        assert "nf0" not in specs_for(edfa)
+
+    def test_nf_offset_is_added_to_the_loaded_ripple(self, edfa: Edfa) -> None:
+        loaded = np.array(edfa.params.nf_ripple, dtype=float)
+        assert read_attr(edfa, "nf_offset") == 0.0
         try:
-            write_attr(edfa, "nf0", 6.5)
-            assert edfa.params.nf0 == pytest.approx(6.5)
+            write_attr(edfa, "nf_offset", 2.0)
+            write_attr(edfa, "nf_offset", 1.5)
+            # Each write replaces the offset rather than stacking on it.
+            assert read_attr(edfa, "nf_offset") == pytest.approx(1.5)
+            np.testing.assert_allclose(edfa.params.nf_ripple, loaded + 1.5)
         finally:
-            edfa.params.nf0 = original
+            write_attr(edfa, "nf_offset", 0.0)
+        np.testing.assert_array_equal(edfa.params.nf_ripple, loaded)
+
+    def test_nf_offset_bounds(self, edfa: Edfa) -> None:
+        with pytest.raises(ParamValidationError, match="above maximum"):
+            write_attr(edfa, "nf_offset", 10.5)
+        with pytest.raises(ParamValidationError, match="below minimum"):
+            write_attr(edfa, "nf_offset", -3.5)
 
     def test_gain_target_rejects_string(self, edfa: Edfa) -> None:
         with pytest.raises(ParamValidationError, match="expected float"):

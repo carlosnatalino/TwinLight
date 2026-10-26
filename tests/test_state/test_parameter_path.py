@@ -111,7 +111,7 @@ class TestResolve:
     ) -> None:
         refs = resolve(parse(f'/Edfa/"{EAST_AMP}"/*'), gnpy_context)
         assert {r.attribute for r in refs} == {
-            "gain_target", "tilt_target", "out_voa", "nf0",
+            "gain_target", "tilt_target", "out_voa", "nf_offset",
         }
 
     def test_link_scope_is_directional(self, gnpy_context: TapiContext) -> None:

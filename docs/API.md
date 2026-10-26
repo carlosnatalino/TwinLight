@@ -423,7 +423,7 @@ backslash is literal, so regex escapes are written as usual.
 | `/Fiber/*/loss_coef` | Every span's loss coefficient |
 | `/*/*/loss_coef` | The same: with a wildcard kind, only kinds that have the attribute match |
 | `/Edfa/east*\|west*/gain_target` | Gain of the amplifiers whose UIDs start with `east` or `west` |
-| `/Link/roadm Brest/roadm Morlaix/Edfa/*/nf0` | Noise figure of every amplifier on the Brest → Morlaix link, boosters included |
+| `/Link/roadm Brest/roadm Morlaix/Edfa/*/nf_offset` | Noise-figure offset of every amplifier on the Brest → Morlaix link, boosters included |
 | `/Service/my-service/Fiber/*/loss_coef` | Every span carrying the service named `my-service` |
 
 Naming a kind explicitly with an attribute it does not have (`/Edfa/*/loss_coef`)
@@ -483,7 +483,8 @@ One snapshot per scrape, in Prometheus text exposition format:
   each labelled with `service_uuid`, `service_name` and `modulation`.
   The two OSNR gauges are one measurement on two reference bandwidths.
 - Per-element `/config` values: `twinlight_fiber_loss_coef_db_per_km`,
-  `twinlight_edfa_nf_db`, `twinlight_edfa_gain_target_db`,
+  `twinlight_edfa_nf_db` (EGN), `twinlight_edfa_nf_offset_db` (GNPy),
+  `twinlight_edfa_gain_target_db`,
   `twinlight_fiber_failed`, `twinlight_service_link_failed`.
 - Twin state: `twinlight_services_total`, `twinlight_failed_links_total`,
   `twinlight_rmsa_qot_margin_db`, `twinlight_transient_enabled`.
