@@ -46,7 +46,10 @@ dependencies = [
     "grpcio>=1.67",
     "grpcio-tools>=1.67",
     "protobuf>=5.28",
-    "gnpy>=2.14",
+    # Capped below 3: gnpy 3.0 made Transceiver.__call__ require a `role`, which
+    # gnpy_adapter.compute_path_baseline does not pass, so every propagation fails
+    # and the twin falls back to mock OPM data.
+    "gnpy>=2.14.2,<3",
     "matplotlib>=3.7",
     "prometheus-client>=0.21"
 ]
