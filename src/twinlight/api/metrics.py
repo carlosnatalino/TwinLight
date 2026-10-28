@@ -3,7 +3,7 @@
 Emits one snapshot per scrape so the values always reflect live state.
 Two families of metrics:
 
-* **OPM** — per-service GSNR / OSNR / Q / BER / CD / PMD, computed the
+* **OPM** — per-service GSNR / OSNR / Q / BER / GMI / CD / PMD, computed the
   same way ``/internal/opm`` does (baseline via the active backend +
   the transient layer). One label set per service so Prometheus can
   graph each lightpath independently.
@@ -54,6 +54,20 @@ _OPM_SPEC: dict[str, tuple[str, str]] = {
     "osnr-01nm-db":   ("opm_osnr_01nm_db", "Optical SNR (ASE only), 0.1 nm reference [dB]"),
     "q-factor-db":    ("opm_q_factor_db", "Q-factor derived from GSNR [dB]"),
     "pre-fec-ber":    ("opm_pre_fec_ber", "Pre-FEC bit-error-ratio"),
+    # Two post-FEC estimates from different models — see docs/PHYSICS.md § 3.
+    "post-fec-ber-threshold": (
+        "opm_post_fec_ber_threshold",
+        "Post-FEC bit-error-ratio, threshold model (fec.threshold)",
+    ),
+    "post-fec-ber-hd": (
+        "opm_post_fec_ber_hd",
+        "Post-FEC bit-error-ratio, bounded-distance hard-decision code (fec.hard_decision)",
+    ),
+    "gmi-bits-per-symbol": (
+        "opm_gmi_bits_per_symbol",
+        "Generalized mutual information per polarization [bit/2D symbol]",
+    ),
+    "ngmi":           ("opm_ngmi", "Normalized GMI (GMI / bits per symbol)"),
     "chromatic-dispersion-ps-per-nm": (
         "opm_chromatic_dispersion_ps_per_nm",
         "Accumulated chromatic dispersion over the path [ps/nm]",
@@ -240,6 +254,7 @@ async def _populate_opm_gauges(
             measurements = apply_all_transients(
                 baseline, svc.uuid, modulation, t,
                 cfg.transients, edfa_tracker=ctx.edfa_tracker,
+                fec_cfg=cfg.fec,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(

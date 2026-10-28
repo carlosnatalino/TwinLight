@@ -39,6 +39,11 @@ _METRICS: list[tuple[str, str, str]] = [
     ("gsnr-db", "GSNR(dB)", "f"),
     ("q-factor-db", "Q(dB)", "f"),
     ("pre-fec-ber", "preFEC-BER", "e"),
+    ("post-fec-ber-threshold", "postFEC-thr", "e"),
+    ("post-fec-ber-hd", "postFEC-HD", "e"),
+    # GMI itself is left out to keep the row narrow: for one service it is
+    # NGMI times the format's bits per symbol.
+    ("ngmi", "NGMI", "f"),
     ("chromatic-dispersion-ps-per-nm", "CD(ps/nm)", "f"),
     ("pmd-ps", "PMD(ps)", "f"),
 ]
@@ -89,8 +94,9 @@ def _value_line(count: int, when: str, measurements: dict[str, Any]) -> str:
     """Build a values-only row, aligned under _header_line()."""
     cols = [f"{f'#{count:03d}':>{_NUM_W}}", f"{when:>{_TIME_W}}"]
     for key, _, kind in _METRICS:
-        if key in measurements:
-            value = measurements[key]
+        value = measurements.get(key)
+        # None is how a link-failed sample reports what it cannot measure.
+        if value is not None:
             cell = f"{value:.2e}" if kind == "e" else f"{value:.3f}"
         else:
             cell = "-"

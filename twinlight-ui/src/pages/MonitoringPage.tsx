@@ -1,7 +1,12 @@
 import { useState, useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useConnectionStore } from "@/store/connection";
-import { useMonitoringStore, OPM_METRICS, TILE_METRICS } from "@/store/monitoring";
+import {
+  useMonitoringStore,
+  OPM_METRICS,
+  SIGNAL_TILE_METRICS,
+  CODING_TILE_METRICS,
+} from "@/store/monitoring";
 import { usePolling } from "@/hooks/usePolling";
 import { useMonitoringHistory, TIME_RANGES, type TimeRange } from "@/hooks/useMonitoringHistory";
 import { createClient } from "@/api/client";
@@ -22,7 +27,10 @@ import type {
 } from "@/api/types";
 import { cn } from "@/lib/cn";
 
-const METRIC_META: Record<TileMetric, { label: string; unit: string; color: string }> = {
+const METRIC_META: Record<
+  TileMetric,
+  { label: string; unit: string; color: string; format?: (v: number) => string }
+> = {
   "osnr-db": { label: "OSNR", unit: "dB", color: "#3b82f6" },
   // Same measurement as OSNR, referenced to 0.1 nm instead of the signal
   // bandwidth — what the literature and an OSA quote. Tile only: its trend
@@ -33,7 +41,18 @@ const METRIC_META: Record<TileMetric, { label: string; unit: string; color: stri
   "q-factor-db": { label: "Q-Factor", unit: "dB", color: "#22c55e" },
   "chromatic-dispersion-ps-per-nm": { label: "Chromatic Dispersion", unit: "ps/nm", color: "#f59e0b" },
   "pmd-ps": { label: "PMD", unit: "ps", color: "#06b6d4" },
+  // Two post-FEC estimates from different models, side by side on purpose.
+  "post-fec-ber-threshold": { label: "Post-FEC BER (threshold)", unit: "BER", color: "#ef4444" },
+  "post-fec-ber-hd": { label: "Post-FEC BER (HD code)", unit: "BER", color: "#f97316" },
+  "gmi-bits-per-symbol": { label: "GMI", unit: "bit/sym", color: "#8b5cf6" },
+  // NGMI thresholds of real codes differ in the second and third decimal.
+  ngmi: { label: "NGMI", unit: "", color: "#8b5cf6", format: (v) => v.toFixed(3) },
 };
+
+const TILE_GROUPS: { title: string; metrics: readonly TileMetric[]; gridClass: string }[] = [
+  { title: "Current Values", metrics: SIGNAL_TILE_METRICS, gridClass: "lg:grid-cols-7" },
+  { title: "Post-FEC BER & GMI", metrics: CODING_TILE_METRICS, gridClass: "lg:grid-cols-4" },
+];
 
 function computeStats(points: DataPoint[]): { min: number; max: number; avg: number } | null {
   if (points.length === 0) return null;
@@ -346,31 +365,34 @@ export default function MonitoringPage() {
           {serviceInfo && <ServiceInfoPanel info={serviceInfo} />}
 
           {/* ── Current values ───────────────────────────────────────────────── */}
-          <div>
-            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-              Current Values
-            </h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
-              {TILE_METRICS.map((metric) => {
-                const meta = METRIC_META[metric];
-                const value = activeOpm?.measurements?.[metric];
-                const series = seriesCache[effectiveServiceUuid]?.[metric] ?? [];
-                const sparkline = series.slice(-20);
-                const history = getHistory(metric, selectedRange.ms);
-                const stats = computeStats(history);
-                return (
-                  <MetricCard
-                    key={metric}
-                    label={meta.label}
-                    unit={meta.unit}
-                    value={value}
-                    sparklineData={sparkline}
-                    stats={stats}
-                  />
-                );
-              })}
+          {TILE_GROUPS.map(({ title, metrics, gridClass }) => (
+            <div key={title}>
+              <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+                {title}
+              </h2>
+              <div className={cn("grid grid-cols-2 gap-3 sm:grid-cols-3", gridClass)}>
+                {metrics.map((metric) => {
+                  const meta = METRIC_META[metric];
+                  const value = activeOpm?.measurements?.[metric];
+                  const series = seriesCache[effectiveServiceUuid]?.[metric] ?? [];
+                  const sparkline = series.slice(-20);
+                  const history = getHistory(metric, selectedRange.ms);
+                  const stats = computeStats(history);
+                  return (
+                    <MetricCard
+                      key={metric}
+                      label={meta.label}
+                      unit={meta.unit}
+                      value={value}
+                      sparklineData={sparkline}
+                      stats={stats}
+                      formatValue={meta.format}
+                    />
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          ))}
 
           {/* ── Time-series charts ───────────────────────────────────────────── */}
           <div>

@@ -87,7 +87,7 @@ spans. See [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir).
 
 | Area | Status |
 |------|--------|
-| Post-FEC BER | Only pre-FEC BER and Q-factor are reported |
+| Soft-decision post-FEC BER | Post-FEC BER comes from a threshold model and a hard-decision block-code model; GMI and NGMI are reported but not mapped to a post-FEC BER, which needs per-code NGMI data |
 | Multi-band (C+L and beyond) | C-band only; the spectrum grid is parameterised but the physics is not |
 | Cross-channel NLI in the EGN kernel | Self-channel NLI only; use the GNPy backend when spectral loading matters |
 | Eye and constellation rendering in the web UI | The backend synthesises the data (`/internal/services/{uuid}/eye-diagram`, `/constellation`); the UI components are placeholders |

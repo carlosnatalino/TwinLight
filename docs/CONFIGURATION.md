@@ -224,6 +224,37 @@ rmsa:
 `qot_margin_db` is the main admission-strictness knob, and is also exposed at
 run time through `POST /config/set` so a single process can sweep it.
 
+## `fec` — post-FEC BER models
+
+Two independent models turn the pre-FEC BER into a post-FEC BER, reported as
+the separate KPIs `post-fec-ber-threshold` and `post-fec-ber-hd`. Neither
+affects admission. The physics is in
+[PHYSICS.md § 3](PHYSICS.md#3-from-gsnr-to-ber-q-post-fec-ber-and-gmi).
+
+```yaml
+fec:
+  threshold:
+    pre_fec_ber_threshold: 3.8e-3
+    post_fec_ber_floor: 1.0e-15
+  hard_decision:          # RS(255,239), ITU-T G.709 GFEC
+    n: 255
+    k: 239
+    t: 8
+    symbol_bits: 8
+```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `threshold.pre_fec_ber_threshold` | `3.8e-3` | Highest pre-FEC BER the code corrects. The default is the 7%-overhead HD-FEC limit that the modulation table's required GSNRs refer to. Other values in use: `1.22e-2` for 400ZR CFEC (OIF 400ZR IA; vendor datasheets often quote `1.25e-2`) and `2.0e-2` for oFEC (OpenROADM MSA) |
+| `threshold.post_fec_ber_floor` | `1e-15` | Post-FEC BER reported at or below the threshold — the output BER the code is specified at |
+| `hard_decision.n`, `.k` | `255`, `239` | Code length and information length, in symbols |
+| `hard_decision.t` | `8` | Symbol errors corrected per codeword; at most (n − k)/2 |
+| `hard_decision.symbol_bits` | `8` | Bits per symbol: m for a Reed–Solomon code over GF(2^m), `1` for a binary code such as BCH. For m > 1, n ≤ 2^m − 1 |
+
+Invalid codes (k ≥ n, t above (n − k)/2, an RS code longer than its field) are
+rejected at startup. The section is restart-only; it is not exposed through
+`POST /config/set`.
+
 ## `spectrum` — the flexi-grid
 
 ```yaml

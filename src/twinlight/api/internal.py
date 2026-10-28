@@ -13,6 +13,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from twinlight.config import FecConfig
+
 # ---------------------------------------------------------------------------
 # Service info endpoint
 # ---------------------------------------------------------------------------
@@ -52,10 +54,10 @@ def _mock_path_factor(service_uuid: str) -> float:
 def _link_failed_measurements() -> dict[str, Any]:
     """OPM payload for a service whose path crosses a failed fiber.
 
-    Returns the standard six-metric dict with ``None`` for every numeric
-    value plus a worst-case ``pre-fec-ber`` of 1.0, so UI charts can render
-    a clear "service down" line rather than zeros that look like a real
-    measurement. The caller adds a top-level ``"status": "link-failed"``.
+    Returns the standard metric dict with ``None`` for every numeric value
+    plus a worst-case 1.0 for each BER, pre- and post-FEC, so UI charts can
+    render a clear "service down" line rather than zeros that look like a
+    real measurement. The caller adds a top-level ``"status": "link-failed"``.
     """
     return {
         "osnr-db": None,
@@ -64,12 +66,19 @@ def _link_failed_measurements() -> dict[str, Any]:
         "q-factor-db": None,
         "chromatic-dispersion-ps-per-nm": None,
         "pmd-ps": None,
+        "gmi-bits-per-symbol": None,
+        "ngmi": None,
         "pre-fec-ber": 1.0,
+        "post-fec-ber-threshold": 1.0,
+        "post-fec-ber-hd": 1.0,
     }
 
 
 def _mock_measurements(
-    service_uuid: str, t: float, modulation_format: str = "DP-QPSK"
+    service_uuid: str,
+    t: float,
+    modulation_format: str = "DP-QPSK",
+    fec_cfg: FecConfig | None = None,
 ) -> dict:
     """Return time-varying sinusoidal mock measurements (fallback).
 
@@ -78,9 +87,11 @@ def _mock_measurements(
     unavailable). Phase offsets per (UUID, metric) keep waveforms distinct.
     BER uses a multiplicative form to stay strictly positive.
 
-    The modulation format is needed only to re-reference OSNR to 0.1 nm,
-    so that a UI reading mock data sees the same pair of fields, in the
-    same relationship, as one reading real physics.
+    The modulation format is needed only to re-reference OSNR to 0.1 nm
+    and to evaluate the coding KPIs, so that a UI reading mock data sees
+    the same fields, in the same relationships, as one reading real
+    physics: the post-FEC BERs follow from the mock pre-FEC BER and the
+    GMI from the mock GSNR.
     """
     path_factor = _mock_path_factor(service_uuid)
     # Longer path: worse OSNR/GSNR/Q (subtract), higher CD/PMD (multiply)
@@ -104,11 +115,18 @@ def _mock_measurements(
         1 + 0.5 * math.sin(2 * math.pi * t / 45.0 + ber_phase)
     )
 
+    from twinlight.physics.fec import fec_measurements
     from twinlight.physics.modulation import osnr_to_01nm_db
 
     measurements["osnr-01nm-db"] = osnr_to_01nm_db(
         measurements["osnr-db"], modulation_format
     )
+    measurements.update(fec_measurements(
+        measurements["pre-fec-ber"],
+        measurements["gsnr-db"],
+        modulation_format,
+        fec_cfg or FecConfig(),
+    ))
     return measurements
 
 
@@ -132,7 +150,7 @@ async def get_all_opm(request: Request) -> dict:
             entry["measurements"] = _link_failed_measurements()
         elif baseline is None:
             entry["measurements"] = _mock_measurements(
-                svc.uuid, t, svc.modulation_format.value
+                svc.uuid, t, svc.modulation_format.value, cfg.fec
             )
         else:
             from twinlight.physics.transients.cascade import apply_all_transients
@@ -144,6 +162,7 @@ async def get_all_opm(request: Request) -> dict:
                 t,
                 cfg.transients,
                 edfa_tracker=ctx.edfa_tracker,
+                fec_cfg=cfg.fec,
             )
         results.append(entry)
 
@@ -174,7 +193,7 @@ async def get_service_opm(service_uuid: str, request: Request) -> dict:
         response["measurements"] = _link_failed_measurements()
     elif baseline is None:
         response["measurements"] = _mock_measurements(
-            service_uuid, t, svc.modulation_format.value
+            service_uuid, t, svc.modulation_format.value, cfg.fec
         )
     else:
         from twinlight.physics.transients.cascade import apply_all_transients
@@ -186,6 +205,7 @@ async def get_service_opm(service_uuid: str, request: Request) -> dict:
             t,
             cfg.transients,
             edfa_tracker=ctx.edfa_tracker,
+            fec_cfg=cfg.fec,
         )
 
     return response
@@ -278,6 +298,7 @@ async def get_path_info(
             t,
             cfg.transients,
             edfa_tracker=ctx.edfa_tracker,
+            fec_cfg=cfg.fec,
         )
 
     return {
