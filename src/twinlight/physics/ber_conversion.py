@@ -18,8 +18,11 @@ from twinlight.physics.modulation import ModulationFormat, get_params
 
 # Gaussian approximation coefficients: (pre_factor, snr_divisor)
 # BER = pre_factor * erfc(sqrt(GSNR_lin / snr_divisor))
+# Both follow from the Gray-coded square M-QAM expression
+#   BER ≈ (2/log2 M)(1 - 1/√M) · erfc(√(3·SNR / (2(M-1))))
+# For QPSK it is exact, BER = ½·erfc(√(SNR/2)), so Q² = SNR.
 _BER_COEFFICIENTS: dict[int, tuple[float, float]] = {
-    2: (1.0,    2.0),    # DP-QPSK:  BER ≈ erfc(sqrt(GSNR/2))
+    2: (1 / 2,  2.0),    # DP-QPSK:  BER = (1/2) * erfc(sqrt(GSNR/2))
     4: (3 / 8,  10.0),   # DP-16QAM: BER ≈ (3/8) * erfc(sqrt(GSNR/10))
     6: (7 / 24, 42.0),   # DP-64QAM: BER ≈ (7/24) * erfc(sqrt(GSNR/42))
 }

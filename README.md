@@ -287,7 +287,7 @@ Then open the **Monitoring** page in the web UI, or watch one over gNMI with
 > `rmsa.qot_margin_db` is there to absorb; larger excursions appear briefly
 > around add/drop events on shared amplifiers. Set `transients.*.enabled: false`
 > (or `POST /config/set`) to see the baseline the admission decision used. See
-> [docs/PHYSICS.md § 3](docs/PHYSICS.md#3-from-gsnr-to-ber-and-q) for why
+> [docs/PHYSICS.md § 3](docs/PHYSICS.md#3-from-gsnr-to-ber-q-post-fec-ber-and-gmi) for why
 > admission gates on the baseline.
 
 ### Stream live OPM
@@ -300,7 +300,8 @@ twinlight-client --rest-url http://host:8080 --gnmi-target host:50051
 ```
 
 It lists the active services, lets you pick one, and streams its transient-aware
-OPM (OSNR, GSNR, pre-FEC BER, Q-factor, chromatic dispersion, PMD) over gNMI.
+OPM (OSNR, GSNR, Q-factor, pre- and post-FEC BER, NGMI, chromatic dispersion,
+PMD) over gNMI.
 
 ### Checkpoint and restore
 
@@ -390,7 +391,12 @@ deliberately excluded from OSNR.
 | **Environmental** | ΔCD, fiber-loss penalty | Thermal dispersion drift `dD/dT` and loss variation over a diurnal cycle — Kato *et al.* [[13]](#ref-13) | 86 400 s |
 
 Pre-FEC BER and Q-factor are recomputed from the perturbed GSNR using the
-Gaussian approximation for coherent DP-QAM [[14]](#ref-14).
+Gaussian approximation for coherent DP-QAM [[14]](#ref-14). From those, two
+post-FEC BER estimates are reported as separate KPIs — a threshold model, and
+bounded-distance decoding of a hard-decision code, RS(255,239) by default,
+after Sklar [[29]](#ref-29) and validated against Smith *et al.* [[30]](#ref-30)
+— together with the generalized mutual information (GMI) and its normalized
+form, the soft-decision FEC metric of Alvarado *et al.* [[31]](#ref-31).
 
 Known simplifications relative to the source literature are documented in
 [docs/PHYSICS.md](docs/PHYSICS.md) — read it before drawing quantitative
@@ -574,6 +580,13 @@ implement. Citation keys used in code comments are shown in brackets.
 26. <a id="ref-26"></a>P. Virtanen *et al.*, "SciPy 1.0: fundamental algorithms for scientific computing in Python," *Nature Methods*, vol. 17, pp. 261–272, 2020. — `erfc`/`erfcinv` in the BER conversion.
 27. <a id="ref-27"></a>C. R. Harris *et al.*, "Array programming with NumPy," *Nature*, vol. 585, pp. 357–362, 2020. — numerical state arrays.
 28. <a id="ref-28"></a>S. Ramírez, **FastAPI**. https://fastapi.tiangolo.com/ — REST application framework and OpenAPI generation.
+
+### Forward error correction
+
+29. <a id="ref-29"></a>B. Sklar, *Digital Communications: Fundamentals and Applications*, 2nd ed. Prentice Hall, 2001, Ch. 8. — decoded symbol error rate of a bounded-distance Reed–Solomon decoder, the basis of `post-fec-ber-hd`.
+30. <a id="ref-30"></a>B. P. Smith, A. Farhood, A. Hunt, F. R. Kschischang, and J. Lodge, "Staircase codes: FEC for 100 Gb/s OTN," *IEEE/OSA Journal of Lightwave Technology*, vol. 30, no. 1, pp. 110–117, 2012. — the 6.2 dB net coding gain of RS(255,239) at 1e-15 that the hard-decision model is validated against.
+31. <a id="ref-31"></a>A. Alvarado, E. Agrell, D. Lavery, R. Maher, and P. Bayvel, "Replacing the soft-decision FEC limit paradigm in the design of optical communication systems," *IEEE/OSA Journal of Lightwave Technology*, vol. 33, no. 20, pp. 4338–4352, 2015. — GMI as the predictor of post-FEC BER for soft-decision decoding.
+32. <a id="ref-32"></a>ITU-T Recommendation G.709, *Interfaces for the optical transport network*. — the RS(255,239) GFEC, default code of the hard-decision model.
 
 ## License and acknowledgements
 

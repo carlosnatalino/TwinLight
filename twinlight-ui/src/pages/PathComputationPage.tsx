@@ -306,6 +306,31 @@ export default function PathComputationPage() {
                 </div>
                 <div className="rounded-lg bg-slate-50 p-3">
                   <p className="text-[10px] uppercase tracking-wide text-slate-500">
+                    Post-FEC BER (threshold)
+                  </p>
+                  <p className="text-sm font-semibold text-slate-800 font-mono break-all">
+                    {pathInfo.measurements["post-fec-ber-threshold"].toExponential(2)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500">
+                    Post-FEC BER (HD code)
+                  </p>
+                  <p className="text-sm font-semibold text-slate-800 font-mono break-all">
+                    {pathInfo.measurements["post-fec-ber-hd"].toExponential(2)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500">
+                    GMI / NGMI
+                  </p>
+                  <p className="text-sm font-semibold text-slate-800 font-mono">
+                    {pathInfo.measurements["gmi-bits-per-symbol"].toFixed(2)} bit/sym ·{" "}
+                    {pathInfo.measurements["ngmi"].toFixed(3)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500">
                     CD
                   </p>
                   <p className="text-sm font-semibold text-slate-800 font-mono">

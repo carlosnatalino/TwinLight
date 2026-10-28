@@ -52,13 +52,28 @@ const OPM_METRICS = [
   "pmd-ps",
 ] as const;
 
-/** Metrics shown as current-value tiles: the charted six, plus OSNR@0.1nm. */
-const TILE_METRICS = [...OPM_METRICS, "osnr-01nm-db"] as const;
+/** Signal-quality tiles: the charted six, plus OSNR@0.1nm. */
+const SIGNAL_TILE_METRICS = [...OPM_METRICS, "osnr-01nm-db"] as const;
+
+/**
+ * Coding-layer tiles, shown as their own group: two post-FEC BER estimates
+ * from different models, and the GMI. Tiles only — on a healthy link the
+ * post-FEC BERs sit at their floor, which makes a flat, uninformative chart.
+ */
+const CODING_TILE_METRICS = [
+  "post-fec-ber-threshold",
+  "post-fec-ber-hd",
+  "gmi-bits-per-symbol",
+  "ngmi",
+] as const;
+
+/** Every metric with a current-value tile; each keeps a sparkline series. */
+const TILE_METRICS = [...SIGNAL_TILE_METRICS, ...CODING_TILE_METRICS] as const;
 
 export type OpmMetric = (typeof OPM_METRICS)[number];
 export type TileMetric = (typeof TILE_METRICS)[number];
 
-export { OPM_METRICS, TILE_METRICS };
+export { OPM_METRICS, SIGNAL_TILE_METRICS, CODING_TILE_METRICS, TILE_METRICS };
 
 export const useMonitoringStore = create<MonitoringState>()((set) => ({
   currentOpm: {},

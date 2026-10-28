@@ -21,8 +21,9 @@ from __future__ import annotations
 import hashlib
 import math
 
-from twinlight.config import TransientsConfig
+from twinlight.config import FecConfig, TransientsConfig
 from twinlight.physics.ber_conversion import ber_to_q_db, gsnr_to_ber
+from twinlight.physics.fec import fec_measurements
 from twinlight.physics.gnpy_adapter import OpmBaseline
 from twinlight.physics.modulation import get_params, osnr_to_01nm_db
 
@@ -53,13 +54,15 @@ def apply_all_transients(
     t: float,
     cfg: TransientsConfig,
     edfa_tracker=None,
+    fec_cfg: FecConfig | None = None,
 ) -> dict[str, float]:
     """Apply all enabled transient perturbations to a GNPy baseline.
 
     Each model contributes an additive delta (in dB or ps) on top of the
     static GNPy result.  After applying physical perturbations, BER and
     Q-factor are recomputed from the perturbed GSNR using the Gaussian
-    approximation for the given modulation format.
+    approximation for the given modulation format, and the post-FEC BERs
+    and GMI from those.
 
     Args:
         baseline: Static QoT metrics from GNPy propagation.
@@ -69,11 +72,13 @@ def apply_all_transients(
         cfg: Transient model configuration.
         edfa_tracker: Optional EdfaStateTracker for Bononi exponential
             step model.  When None, falls back to sinusoidal approximation.
+        fec_cfg: FEC models for the post-FEC BERs; defaults when None.
 
     Returns:
         Measurements dict with keys:
             gsnr-db, osnr-db, osnr-01nm-db, pre-fec-ber, q-factor-db,
-            chromatic-dispersion-ps-per-nm, pmd-ps
+            post-fec-ber-threshold, post-fec-ber-hd, gmi-bits-per-symbol,
+            ngmi, chromatic-dispersion-ps-per-nm, pmd-ps
 
         ``gsnr-db`` and ``osnr-db`` are referenced to the signal bandwidth;
         ``osnr-01nm-db`` is the same OSNR at the conventional 0.1 nm.
@@ -151,6 +156,7 @@ def apply_all_transients(
         "osnr-01nm-db": osnr_to_01nm_db(osnr, modulation_format),
         "pre-fec-ber": ber,
         "q-factor-db": ber_to_q_db(ber),
+        **fec_measurements(ber, gsnr, modulation_format, fec_cfg or FecConfig()),
         "chromatic-dispersion-ps-per-nm": cd,
         "pmd-ps": pmd,
     }

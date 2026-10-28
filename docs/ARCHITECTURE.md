@@ -113,6 +113,8 @@ src/twinlight/
     element_params.py      Per-element parameter read/write for the /config plane
     modulation.py          ModulationFormat enum and per-format parameters
     ber_conversion.py      GSNR → pre-FEC BER → Q-factor (Gaussian approximation)
+    fec.py                 Pre-FEC → post-FEC BER: threshold and hard-decision models
+    gmi.py                 GSNR → GMI / NGMI (Gauss–Hermite quadrature)
     analytical_metrics.py  CD/PMD/latency accumulation along a path
     transients/            The four time-varying impairment models + cascade.py
 
@@ -188,7 +190,8 @@ into the same computation:
 2. Call `physics/transients/cascade.py:apply_all_transients(baseline, t, …)`
    with the current wall-clock time and the context's `EdfaStateTracker`.
 3. The cascade evaluates the four models, combines them on separate GSNR and
-   OSNR tracks, and recomputes BER and Q from the perturbed GSNR.
+   OSNR tracks, and recomputes BER and Q from the perturbed GSNR, then the
+   post-FEC BERs and GMI from those (`physics/fec.py`, configured by `fec`).
 
 The baseline propagation is the expensive step and is cached; the transient
 evaluation is cheap and deliberately *not* cached, which is what makes every

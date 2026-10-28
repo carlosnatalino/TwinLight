@@ -4,7 +4,8 @@ import math
 
 import pytest
 
-from twinlight.config import TransientsConfig
+from twinlight.config import FecConfig, FecThresholdConfig, TransientsConfig
+from twinlight.physics.fec import fec_measurements
 from twinlight.physics.gnpy_adapter import OpmBaseline
 from twinlight.physics.transients.cascade import apply_all_transients
 from twinlight.physics.transients.edfa_reservoir import EdfaStateTracker
@@ -40,9 +41,43 @@ class TestApplyAllTransients:
         )
         expected_keys = {
             "gsnr-db", "osnr-db", "osnr-01nm-db", "pre-fec-ber",
-            "q-factor-db", "chromatic-dispersion-ps-per-nm", "pmd-ps",
+            "q-factor-db", "post-fec-ber-threshold", "post-fec-ber-hd",
+            "gmi-bits-per-symbol", "ngmi",
+            "chromatic-dispersion-ps-per-nm", "pmd-ps",
         }
         assert set(result.keys()) == expected_keys
+
+    def test_fallback_payloads_carry_the_same_metrics(self):
+        """Mock and link-failed OPM expose the fields real physics does.
+
+        A UI or gNMI client written against one payload must not find keys
+        missing in another.
+        """
+        from twinlight.api.internal import (
+            _link_failed_measurements,
+            _mock_measurements,
+        )
+
+        real = apply_all_transients(
+            self._make_baseline(), "svc-1", "DP-QPSK", t=100.0,
+            cfg=TransientsConfig(),
+        )
+        assert set(_mock_measurements("svc-1", 100.0)) == set(real)
+        assert set(_link_failed_measurements()) == set(real)
+
+    def test_coding_kpis_follow_the_perturbed_ber_and_gsnr(self):
+        """Post-FEC BER and GMI are computed after the transients, not before."""
+        fec = FecConfig(threshold=FecThresholdConfig(pre_fec_ber_threshold=2e-2))
+        result = apply_all_transients(
+            self._make_baseline(gsnr_db=12.0), "svc-1", "DP-16QAM", t=100.0,
+            cfg=TransientsConfig(), fec_cfg=fec,
+        )
+        assert result == {
+            **result,
+            **fec_measurements(
+                result["pre-fec-ber"], result["gsnr-db"], "DP-16QAM", fec
+            ),
+        }
 
     def test_osnr_01nm_tracks_osnr_at_a_fixed_offset(self):
         """The two OSNR fields are one measurement on two references.

@@ -11,6 +11,9 @@ Hierarchy:
     │   ├── phase_noise: PhaseNoiseConfig
     │   └── environmental: EnvironmentalConfig
     ├── rmsa: RmsaConfig
+    ├── fec: FecConfig
+    │   ├── threshold: FecThresholdConfig
+    │   └── hard_decision: HardDecisionFecConfig
     ├── spectrum: SpectrumConfig
     └── logging: LoggingConfig
 """
@@ -21,7 +24,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ClockMode(str, Enum):
@@ -265,6 +268,78 @@ class RmsaConfig(BaseModel):
     default_guardband_slots: int = Field(default=1, ge=0)
 
 
+# -- FEC section ------------------------------------------------------------
+# Two independent post-FEC BER models, reported side by side as separate
+# KPIs; physics in physics/fec.py, rationale in docs/PHYSICS.md § 3.
+
+class FecThresholdConfig(BaseModel):
+    """Threshold ("cliff") model: error-free below a pre-FEC BER limit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pre_fec_ber_threshold: float = Field(
+        default=3.8e-3, gt=0, lt=0.5,
+        description=(
+            "Pre-FEC BER the code corrects to the output floor. Default: the "
+            "7%-overhead HD-FEC limit the modulation table's required GSNRs "
+            "are quoted against. Others in use: 1.22e-2 for 400ZR CFEC (OIF "
+            "400ZR IA), 2.0e-2 for oFEC (OpenROADM MSA)."
+        ),
+    )
+    post_fec_ber_floor: float = Field(
+        default=1e-15, gt=0, lt=1,
+        description=(
+            "Post-FEC BER reported below the threshold: the output BER the "
+            "code is specified at. Default: 1e-15, the usual OTN target."
+        ),
+    )
+
+
+class HardDecisionFecConfig(BaseModel):
+    """A t-error-correcting block code with bounded-distance decoding.
+
+    ``symbol_bits`` is m for a Reed-Solomon code over GF(2^m), or 1 for a
+    binary code such as BCH.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    n: int = Field(
+        default=255, ge=2,
+        description="Code length [symbols]. Default: RS(255,239), the ITU-T G.709 GFEC.",
+    )
+    k: int = Field(default=239, ge=1, description="Information length [symbols].")
+    t: int = Field(default=8, ge=1, description="Correctable symbol errors per codeword.")
+    symbol_bits: int = Field(default=8, ge=1, le=16, description="Bits per code symbol (m).")
+
+    @model_validator(mode="after")
+    def _check_code(self) -> HardDecisionFecConfig:
+        """Reject parameters no block code can have.
+
+        The Singleton bound (d ≤ n - k + 1) caps t at (n - k) / 2 for any
+        code, and an RS code over GF(2^m) is at most 2^m - 1 symbols long.
+        """
+        if self.k >= self.n:
+            raise ValueError(f"k must be less than n (got n={self.n}, k={self.k})")
+        if 2 * self.t > self.n - self.k:
+            raise ValueError(
+                f"t={self.t} exceeds the Singleton bound (n-k)/2 = {(self.n - self.k) / 2}"
+            )
+        if self.symbol_bits > 1 and self.n > 2**self.symbol_bits - 1:
+            raise ValueError(
+                f"an RS code over GF(2^{self.symbol_bits}) has n ≤ "
+                f"{2**self.symbol_bits - 1} (got n={self.n})"
+            )
+        return self
+
+
+class FecConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    threshold: FecThresholdConfig = Field(default_factory=FecThresholdConfig)
+    hard_decision: HardDecisionFecConfig = Field(default_factory=HardDecisionFecConfig)
+
+
 # -- Spectrum section -------------------------------------------------------
 
 class SpectrumConfig(BaseModel):
@@ -316,6 +391,7 @@ class TwinConfig(BaseModel):
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     transients: TransientsConfig = Field(default_factory=TransientsConfig)
     rmsa: RmsaConfig = Field(default_factory=RmsaConfig)
+    fec: FecConfig = Field(default_factory=FecConfig)
     spectrum: SpectrumConfig = Field(default_factory=SpectrumConfig)
     physics: PhysicsConfig = Field(default_factory=PhysicsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

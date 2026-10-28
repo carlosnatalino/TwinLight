@@ -77,6 +77,14 @@ export interface OpmMeasurements {
   "gsnr-db": number;
   "pre-fec-ber": number;
   "q-factor-db": number;
+  /** Post-FEC BER, threshold model: the code's floor below its limit, the input above. */
+  "post-fec-ber-threshold": number;
+  /** Post-FEC BER of a bounded-distance hard-decision code, RS(255,239) by default. */
+  "post-fec-ber-hd": number;
+  /** Generalized mutual information per polarization [bit per 2D symbol]. */
+  "gmi-bits-per-symbol": number;
+  /** GMI normalized by the format's bits per symbol, in [0, 1]. */
+  "ngmi": number;
   "chromatic-dispersion-ps-per-nm": number;
   "pmd-ps": number;
 }
