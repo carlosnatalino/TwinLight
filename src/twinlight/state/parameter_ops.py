@@ -272,8 +272,8 @@ def plan_changes(
             _claim(claimed, ref, owner, errors)
             current = _read(ctx, ref)
             if current is None and change.to is None:
-                # A relative change of an unset attribute (e.g. nf0 on an
-                # amplifier that models NF with nf_min/nf_max) is undefined.
+                # A relative change of an unset attribute (e.g. the tilt of
+                # an amplifier GNPy loaded without one) is undefined.
                 skipped.append({
                     "path": ref.path,
                     "reason": "attribute is unset, so a relative change is undefined",
