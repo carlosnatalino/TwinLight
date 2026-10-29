@@ -284,15 +284,81 @@ Ambient temperature follows a diurnal sinusoid (`temp_variation_c`,
 - **Fiber loss variation** via dα/dT ≈ 2×10⁻⁴ dB/(km·°C) on deployed fiber,
   which penalises both GSNR and OSNR.
 
-## 3. From GSNR to BER and Q
+## 3. From GSNR to BER, Q, post-FEC BER and GMI
 
-`physics/ber_conversion.py`. After the transient layer perturbs GSNR, pre-FEC
-BER and Q-factor are recomputed — never carried over from the baseline.
+`physics/ber_conversion.py`, `physics/fec.py`, `physics/gmi.py`. After the
+transient layer perturbs GSNR, everything in this section is recomputed from
+it — never carried over from the baseline.
 
-The Gaussian approximation for coherent DP-M-QAM is used, with per-format
-pre-factor and SNR divisor, evaluated through `scipy.special.erfc` and inverted
-with `erfcinv` [[14]](../README.md#ref-14). This assumes ideal DSP with no
-implementation penalty beyond the GSNR already computed.
+### Pre-FEC BER and Q
+
+The Gaussian approximation for Gray-coded square M-QAM on the AWGN channel,
+
+    BER ≈ (2 / log2 M) · (1 − 1/√M) · erfc( √( 3·SNR / (2(M − 1)) ) )
+
+with SNR = GSNR, evaluated through `scipy.special.erfc` and inverted to
+Q = √2·erfcinv(2·BER) with `erfcinv` [[14]](../README.md#ref-14). For QPSK
+the expression is exact, BER = ½·erfc(√(SNR/2)), so Q² = SNR. This assumes
+ideal DSP with no implementation penalty beyond the GSNR already computed.
+
+### Post-FEC BER: two models, two KPIs
+
+No closed form gives the post-FEC BER of an arbitrary code, so two models
+with different validity are reported side by side. Both take the pre-FEC BER
+above as input and are configured in the `fec` section
+([CONFIGURATION.md](CONFIGURATION.md#fec--post-fec-ber-models)).
+
+**`post-fec-ber-threshold` — threshold model.** The network-planning
+convention: at or below the code's pre-FEC BER limit, the code delivers its
+specified output BER (`post_fec_ber_floor`, 1e-15 by default, or the input if
+that is already lower); above it, the decoder fails and the input BER passes
+through. It applies to any code, hard- or soft-decision, given its limit, but
+it is a step: it locates the cliff, not the shape of the waterfall.
+
+**`post-fec-ber-hd` — bounded-distance hard-decision decoding.** For a
+t-error-correcting block code of n symbols over GF(2^m) with independent bit
+errors at rate p, the decoded symbol error rate is Sklar's
+[[29]](../README.md#ref-29) (Ch. 8)
+
+    P_E = (1/n) · Σ_{j=t+1..n} j · C(n,j) · p_s^j · (1 − p_s)^(n−j),   p_s = 1 − (1 − p)^m
+
+evaluated as the binomial tail P_E = p_s · P[Binomial(n−1, p_s) ≥ t], which
+`scipy.stats.binom.sf` computes accurately where the sum underflows. Sklar
+converts symbols to bits as though every wrong output symbol were random,
+P_B = 2^(m−1)/(2^m − 1) · P_E. TwinLight instead keeps the channel's bit
+errors in the wrong symbols — a failed bounded-distance decoder passes the
+received word through — so P_B = P_E · p/p_s. This reproduces the published
+6.2 dB net coding gain of RS(255,239) at 1e-15 [[30]](../README.md#ref-30),
+where Sklar's factor gives 6.1 dB, and it tends to p, rather than to roughly
+m·p/2, once decoding always fails. The default code is the ITU-T G.709 GFEC,
+RS(255,239) [[32]](../README.md#ref-32).
+
+### GMI and NGMI
+
+**`gmi-bits-per-symbol`, `ngmi`.** The generalized mutual information is the
+achievable rate of a bit-wise soft-decision receiver (BICM), and the quantity
+a soft-decision FEC threshold is properly stated in: Alvarado *et al.*
+[[31]](../README.md#ref-31) show that, unlike pre-FEC BER, it predicts
+post-FEC BER consistently across modulation formats and code rates.
+
+    GMI = Σ_k I(B_k; Y) = m − Σ_k E[ log2( Σ_{x'} p(y|x') / Σ_{x' : b_k(x') = b_k(x)} p(y|x') ) ]
+
+for uniform symbols on the AWGN channel at SNR = GSNR. Both polarizations see
+that SNR, so the GMI is per polarization, in bit per 2D symbol, and
+NGMI = GMI / m lies in [0, 1]. A Gray-labelled square M-QAM is the product of
+two Gray-labelled √M-PAMs and each bit depends on one quadrature, so the GMI
+is twice the PAM's and the expectation is a 1D integral. It is evaluated with
+64-node Gauss–Hermite quadrature — deterministic, below 1e-5 bit of
+quadrature error, and under 0.1 ms for 64QAM — and the tests check it against
+a seeded Monte-Carlo estimate on the full 2D constellation.
+
+The GMI is not turned into a post-FEC BER: that needs a per-code NGMI
+threshold or waterfall, which is not modelled. With uniform Gray-labelled QAM,
+Gaussian noise and overheads up to about 25 %, an NGMI threshold and a pre-FEC
+BER threshold are near-equivalent — at a pre-FEC BER of 2e-2 the NGMI is
+0.923, 0.924 and 0.925 for QPSK, 16QAM and 64QAM — so the GMI's advantage
+shows where those assumptions break: low code rates, probabilistic shaping,
+non-Gaussian noise.
 
 ### Modulation formats
 
@@ -303,7 +369,10 @@ implementation penalty beyond the GSNR already computed.
 | DP-64QAM | 6 | 20.5 dB | 32 Gbaud |
 
 Required-GSNR values are the admission thresholds; `rmsa.qot_margin_db` is added
-on top before a service is accepted.
+on top before a service is accepted. They do not sit at one common pre-FEC
+BER: DP-QPSK's 8.5 dB is at the 7% HD-FEC limit of 3.8e-3, but DP-16QAM's and
+DP-64QAM's give 6.6e-3 and 6.1e-3 — reaching 3.8e-3 takes 15.2 and 21.1 dB.
+See the known limitations below.
 
 **Admission gates on the pristine baseline, not on a transient-inclusive
 sample**, and `rmsa.qot_margin_db` (1.5 dB by default) is the documented
@@ -343,7 +412,10 @@ used for research.
 | **PMD drift** | Sinusoidal, 10 % amplitude, 90 s period | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — magnitude and quadrature accumulation are right; the trajectory shape is an approximation |
 | **PDL ensemble** | Deterministic incommensurate drift covers the alignment ensemble over time | Explicit Monte-Carlo over hinge alignments | Low — equivalent in the long run, and reproducible, but a short window is not a fair ensemble sample |
 | **EDFA noise figure at runtime (GNPy)** | `nf_offset` adds a frequency-flat dB offset to the NF GNPy's equipment model computes, by folding it into the per-channel NF ripple (`Edfa._calc_nf`); the gain dependence of a variable-gain NF is kept. `nf0` is not a GNPy knob: `params.nf0` is an equipment-library input that propagation never reads. The EGN backend exposes the NF itself as `nf0` | An ageing amplifier's NF rises by a different amount across the band and with gain | Low — a flat offset is the usual first-order model of NF degradation; the equipment model's `nf_min`/`nf_max`/`nf0` are not runtime-mutable |
-| **Post-FEC BER** | Not modelled — pre-FEC only | Soft-decision FEC threshold curves | Known gap |
+| **Post-FEC BER, threshold model** | A step at the configured pre-FEC BER limit; beyond it the input passes through | Measured waterfall per code | Low for planning, where the step is the convention; it says nothing about how close to the cliff a link is — read `q-factor-db` against the limit for that |
+| **Post-FEC BER, hard-decision model** | Sklar's decoded symbol error rate, converted to bits at the channel ratio p/p_s | Sklar Ch. 8 converts at 2^(m−1)/(2^m − 1), treating wrong output symbols as random | Low — the channel ratio matches the published RS(255,239) coding gain; both ignore miscorrection and burst errors, and neither describes concatenated or soft-decision codes (CFEC, oFEC) |
+| **Soft-decision post-FEC BER** | GMI and NGMI are reported but not mapped to a post-FEC BER | Per-code NGMI threshold or waterfall (Alvarado *et al.* 2015) | Known gap — needs per-code NGMI data, which specifications rarely publish |
+| **Admission thresholds** | Required GSNRs sit at pre-FEC BERs of 3.9e-3 (QPSK), 6.6e-3 (16QAM), 6.1e-3 (64QAM) | One FEC limit for every format: 8.5 / 15.2 / 21.1 dB at 3.8e-3 | **Moderate** — 16QAM and 64QAM admission is 0.6–0.7 dB optimistic against the 7% HD-FEC limit, absorbed by the default 1.5 dB `qot_margin_db`. The values are unchanged so admission behaves as before |
 | **Spectral scope** | C-band only | C+L, multi-band | Known gap — the grid is parameterised but the physics is not |
 | **Filtering / ROADM penalties** | Not modelled beyond PDL | Cascaded filter narrowing penalties | Known gap |
 | **BER conversion** | Textbook Gaussian approximation per format | Curri 2022 uses measured back-to-back thresholds | Low — standard practice |

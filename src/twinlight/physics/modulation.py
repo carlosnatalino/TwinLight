@@ -24,7 +24,10 @@ class ModulationParams:
     baud_rate_hz: float   # Symbol rate [Hz]
     spacing_hz: float     # Channel spacing [Hz]
     tx_power_dbm: float   # Launch power per channel [dBm]
-    req_gsnr_db: float    # Required GSNR at HD-FEC threshold (BER ~ 3.8e-3) [dB]
+    # Required GSNR for admission [dB]. Not at one common BER: QPSK sits at
+    # the 7% HD-FEC limit (3.8e-3), 16QAM and 64QAM at ~6.6e-3 and ~6.1e-3,
+    # which need 15.2 and 21.1 dB to reach 3.8e-3 — see PHYSICS.md § 3.
+    req_gsnr_db: float
     bits_per_symbol: int  # Selects BER Gaussian approximation formula
 
 

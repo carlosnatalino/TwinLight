@@ -173,6 +173,10 @@ class TestOpmGauges:
             "twinlight_opm_osnr_01nm_db",
             "twinlight_opm_q_factor_db",
             "twinlight_opm_pre_fec_ber",
+            "twinlight_opm_post_fec_ber_threshold",
+            "twinlight_opm_post_fec_ber_hd",
+            "twinlight_opm_gmi_bits_per_symbol",
+            "twinlight_opm_ngmi",
             "twinlight_opm_chromatic_dispersion_ps_per_nm",
             "twinlight_opm_pmd_ps",
         ):

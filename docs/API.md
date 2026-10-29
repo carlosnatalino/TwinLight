@@ -269,11 +269,15 @@ bare `/data/…` paths and omits these three resources.
       "service-uuid": "…",
       "timestamp": 1234567890.123,
       "measurements": {
-        "osnr-db": 30.2,
-        "osnr-01nm-db": 34.3,
-        "gsnr-db": 27.4,
-        "pre-fec-ber": 2.6e-26,
-        "q-factor-db": 19.3,
+        "osnr-db": 19.1,
+        "osnr-01nm-db": 23.2,
+        "gsnr-db": 16.4,
+        "pre-fec-ber": 1.17e-3,
+        "q-factor-db": 9.66,
+        "post-fec-ber-threshold": 1.0e-15,
+        "post-fec-ber-hd": 3.48e-6,
+        "gmi-bits-per-symbol": 3.981,
+        "ngmi": 0.995,
         "chromatic-dispersion-ps-per-nm": 1.3,
         "pmd-ps": 0.87
       }
@@ -291,11 +295,15 @@ one such entry directly, without the `services` wrapper:
   "service-uuid": "…",
   "timestamp": 1234567890.123,
   "measurements": {
-    "osnr-db": 30.2,
-    "osnr-01nm-db": 34.3,
-    "gsnr-db": 27.4,
-    "pre-fec-ber": 2.6e-26,
-    "q-factor-db": 19.3,
+    "osnr-db": 19.1,
+    "osnr-01nm-db": 23.2,
+    "gsnr-db": 16.4,
+    "pre-fec-ber": 1.17e-3,
+    "q-factor-db": 9.66,
+    "post-fec-ber-threshold": 1.0e-15,
+    "post-fec-ber-hd": 3.48e-6,
+    "gmi-bits-per-symbol": 3.981,
+    "ngmi": 0.995,
     "chromatic-dispersion-ps-per-nm": 1.3,
     "pmd-ps": 0.87
   }
@@ -307,6 +315,22 @@ the receiver sees, and the reference the admission thresholds are quoted
 against. `osnr-01nm-db` is the same OSNR at the conventional **0.1 nm**, which
 reads 4.08 dB higher at 32 GBd. There is deliberately no 0.1 nm GSNR; see
 [PHYSICS.md](PHYSICS.md#which-reference-bandwidth-an-snr-is-quoted-against).
+
+The example is a DP-16QAM lightpath. The coding-layer fields come from
+separate models and are meant to be read side by side, not as one number
+measured three ways:
+
+| Field | Model | Configured by |
+|-------|-------|---------------|
+| `pre-fec-ber`, `q-factor-db` | Gaussian approximation for Gray-coded M-QAM at the GSNR | — |
+| `post-fec-ber-threshold` | Threshold model: `post_fec_ber_floor` (or the input, if lower) up to the code's pre-FEC BER limit; the uncorrected input beyond it | `fec.threshold` |
+| `post-fec-ber-hd` | Bounded-distance decoding of a hard-decision block code — RS(255,239) by default | `fec.hard_decision` |
+| `gmi-bits-per-symbol` | Generalized mutual information per polarization, bit per 2D symbol, in [0, bits per symbol] | — |
+| `ngmi` | GMI ÷ bits per symbol, in [0, 1] — what a soft-decision FEC threshold is stated in | — |
+
+A service on a failed link reports every BER as 1.0 and the other fields as
+`null`. See [PHYSICS.md § 3](PHYSICS.md#3-from-gsnr-to-ber-q-post-fec-ber-and-gmi)
+for the formulas and their limits.
 
 Every read is evaluated at the current wall-clock time: poll it twice a couple of
 seconds apart and the numbers move, because the transient models are
@@ -478,7 +502,9 @@ One snapshot per scrape, in Prometheus text exposition format:
 
 - Per-service OPM: `twinlight_opm_gsnr_db`, `twinlight_opm_osnr_db`,
   `twinlight_opm_osnr_01nm_db`, `twinlight_opm_q_factor_db`,
-  `twinlight_opm_pre_fec_ber`,
+  `twinlight_opm_pre_fec_ber`, `twinlight_opm_post_fec_ber_threshold`,
+  `twinlight_opm_post_fec_ber_hd`, `twinlight_opm_gmi_bits_per_symbol`,
+  `twinlight_opm_ngmi`,
   `twinlight_opm_chromatic_dispersion_ps_per_nm`, `twinlight_opm_pmd_ps`,
   each labelled with `service_uuid`, `service_name` and `modulation`.
   The two OSNR gauges are one measurement on two reference bandwidths.
