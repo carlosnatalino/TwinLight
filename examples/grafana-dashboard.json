@@ -696,7 +696,7 @@
     {
       "type": "table",
       "id": 14,
-      "title": "EDFA noise figure (dB)",
+      "title": "EDFA noise figure (EGN) / NF offset (GNPy) (dB)",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -713,6 +713,16 @@
           "format": "table",
           "instant": true,
           "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          }
+        },
+        {
+          "expr": "twinlight_edfa_nf_offset_db",
+          "format": "table",
+          "instant": true,
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"

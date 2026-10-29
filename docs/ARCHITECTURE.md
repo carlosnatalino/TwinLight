@@ -69,7 +69,7 @@ separate module:
 |--------|--------|----------|
 | `/internal/` | `api/internal.py`, `api/diagrams.py` | OPM readings, service path metadata, path-info estimates, eye/constellation synthesis |
 | `/admin/` | `api/admin.py` | Snapshot and restore |
-| `/config/` | `api/config.py` | Runtime parameter overrides (fiber loss, EDFA NF, link failure) |
+| `/config/` | `api/config.py`, `api/parameters.py` | Runtime parameter overrides (fiber loss, EDFA NF, link failure); path-addressed, all-or-nothing parameter batches |
 | `/metrics` | `api/metrics.py` | Prometheus exposition |
 
 A T-API client therefore never encounters a proprietary extension inside a
@@ -98,6 +98,8 @@ src/twinlight/
     topology_state.py      TopologyGraph: NetworkX DiGraph keyed by element UID
     spectrum_state.py      Per-link slot occupancy arrays (6.25 GHz flexi-grid)
     twin_overrides.py      Runtime parameter overrides from the /config plane
+    parameter_path.py      ns-3-style parameter paths: parse + resolve to (uid, attr)
+    parameter_ops.py       Atomic set / to-by-by_percent batches over parameter paths
 
   loader/
     gnpy_topology.py       GNPy JSON → list[GnpyElement]
@@ -136,6 +138,8 @@ src/twinlight_client/    Companion client library and CLI
                            protocol it speaks, not for this project)
   streaming.py             GnmiConsumer — async gNMI Subscribe consumer
   cli.py                   twinlight-client: pick a service, stream its OPM
+  soft_failure.py          twinlight-soft-failure: immediate changes, and the
+                           clock and ramp logic for gradual ones
 ```
 
 ## Startup sequence
@@ -197,6 +201,31 @@ The baseline propagation is the expensive step and is cached; the transient
 evaluation is cheap and deliberately *not* cached, which is what makes every
 read reflect the current instant.
 
+### Changing parameters by path
+
+`POST /config/parameters` and `POST /config/parameters/changes`
+
+1. `state/parameter_path.py` parses each path and resolves it against the
+   backend's `uid_map` and `supported_attributes()` schema, so the same path
+   language works under GNPy and EGN. `/Service` scopes use the
+   element → service reverse index; `/Link` scopes use an inline-element →
+   terminal index built at startup by walking the backend's own graph (GNPy's
+   designed network contains booster amplifiers the parsed topology lacks).
+2. `state/parameter_ops.py` computes every resulting value from the values
+   before the batch and checks them all — range, type, no parameter written
+   twice — collecting every error before refusing. A dry run stops here.
+3. `TapiContext.apply_element_overrides_atomic` writes the batch through
+   `apply_element_overrides`, which records the overrides and invalidates the
+   affected baselines. A write failing despite validation rolls back the earlier
+   ones, so a batch lands entirely or not at all.
+
+The twin keeps no clock for these. A gradual change (a soft failure) is the
+`twinlight-soft-failure` client calling step 3 repeatedly: it plans a scenario
+with one dry run of `/changes`, then sends each tick's values for every due ramp
+in one `POST /config/parameters`. Timing, ramp shapes and recovery therefore
+live entirely in the client, and the twin's state is always just its current
+parameter values — which is also all a snapshot needs to capture.
+
 ## Concurrency
 
 - One asyncio event loop hosts uvicorn, the gRPC server, and every request.
@@ -213,7 +242,7 @@ read reflect the current instant.
 |-------|-----|----------------|
 | `_gnpy_uid_map` | element UID | never (built once at startup) |
 | `_route_cache` | `(src_uid, dst_uid)` | topology mutation (e.g. link failure) |
-| `_baseline_cache` | service UUID | service deletion, `/config` parameter change, link failure |
+| `_baseline_cache` | service UUID | service deletion, `/config` parameter change (including `/config/parameters` batches), link failure |
 
 ## Middleware
 

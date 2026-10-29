@@ -1,6 +1,6 @@
 # API reference
 
-TwinLight exposes 40 REST operations plus a gNMI gRPC service. This document is
+TwinLight exposes 43 REST operations plus a gNMI gRPC service. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
 whenever the twin is running.
@@ -364,6 +364,117 @@ coefficient or fail a fiber, and every affected service's cached baseline is
 invalidated so the next OPM read reflects the change. It is what makes
 before/after experiments possible without restarting the twin.
 
+### `/config/` — parameters by path
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/config/parameters?path=…` | Expand a [parameter path](#parameter-paths) into the parameters it addresses, with current values and bounds. Default `/*/*/*` lists everything mutable |
+| POST | `/config/parameters` | Set absolute values: `{"set": {"<path>": <number>, …}}` |
+| POST | `/config/parameters/changes` | Apply a list of changes: `[{"path": …, "to" \| "by" \| "by_percent": …}, …]` |
+
+Both POSTs take `?dry_run=true`, which validates the batch and returns the
+result (each parameter's `previous` and new `value`) without writing anything.
+
+Both are **immediate and all-or-nothing**: the whole batch is validated before
+anything is written, an error lists every offending parameter, and a write that
+fails despite that rolls back the ones before it. A parameter that two entries of
+one batch would write is an error rather than an order-dependent result. Writes
+go through the same path as `POST /config/set`: the allow-list bounds apply,
+`/config/get` reports the values as overrides, and the affected services'
+baselines are invalidated, so the next OPM read, gNMI sample or Prometheus scrape
+reflects them.
+
+`/config/set` remains the way to fail or restore a fiber and to change the
+twin's own runtime settings; these endpoints add path addressing for element
+parameters.
+
+```json
+POST /config/parameters
+{"set": {"/Fiber/*/loss_coef": 0.22, "/Edfa/Edfa1/tilt_target": 0.5}}
+```
+
+```json
+POST /config/parameters/changes
+[
+  {"path": "/Link/Site_A/Site_B/Fiber/*/loss_coef", "by": 0.05},
+  {"path": "/Edfa/*/gain_target", "by": 3, "direction": "decrease"},
+  {"path": "/Edfa/Edfa1/out_voa", "by_percent": 10, "out_of_bounds": "clamp"}
+]
+```
+
+| Change field | Default | Meaning |
+|--------------|---------|---------|
+| `path` | — | Parameter path naming a single attribute |
+| `to` | — | Absolute value |
+| `by` | — | Additive change from each parameter's own current value (signed) |
+| `by_percent` | — | Relative change from each parameter's current value, in % (signed) |
+| `direction` | — | `increase` / `decrease`: treat `by`/`by_percent` as a magnitude |
+| `out_of_bounds` | `reject` | `reject` a result outside the attribute's range, or `clamp` it to the bound |
+
+Exactly one of `to`, `by` and `by_percent` is required. Every entry is computed
+from the values before the batch, so the order of the list does not matter. A
+relative change skips parameters whose value is unset (reported under
+`skipped`); an entry left with nothing to change is an error.
+
+#### Parameter paths
+
+Parameters are addressed by a path modelled on the
+[ns-3 attribute paths](https://www.nsnam.org/docs/manual/html/attributes.html)
+(`/NodeList/*/DeviceList/0/…`), walking the optical hierarchy instead of an
+object tree:
+
+```
+[/Service/<sel>] [/Link/<from-sel>/<to-sel>] /<Kind>/<uid-sel>/<attribute>
+```
+
+| Segment | Meaning |
+|---------|---------|
+| `<Kind>` | Element kind: `Fiber`, `Edfa`, `Roadm`, or `*` |
+| `<uid-sel>` | Element UID selector |
+| `<attribute>` | One attribute from `allowed_attributes` in `GET /config/get`, or `*` (listing only) |
+| `/Service/<sel>` | Optional scope: only elements on the *allocated* path of a matching service, matched by UUID or `service-name` |
+| `/Link/<from>/<to>` | Optional scope: only inline fibers and amplifiers between a matching pair of ROADMs/transceivers, **in that direction** |
+
+Scopes intersect and may come in either order. A selector is one or more terms
+joined by `|`. Each term is a glob (`*`, `east*`, `roadm ?orlaix`), a quoted
+literal (`"fiber (A → B)-_(1/4)"`, required when a UID contains `/`, `|` or glob
+characters), or a regex (`~"^fiber \(Brest"`; unanchored, like awk's `~`).
+Inside quotes, `\"` and `\\` escape a quote and a backslash; any other
+backslash is literal, so regex escapes are written as usual.
+
+| Path | Addresses |
+|------|-----------|
+| `/Fiber/*/loss_coef` | Every span's loss coefficient |
+| `/*/*/loss_coef` | The same: with a wildcard kind, only kinds that have the attribute match |
+| `/Edfa/east*\|west*/gain_target` | Gain of the amplifiers whose UIDs start with `east` or `west` |
+| `/Link/roadm Brest/roadm Morlaix/Edfa/*/nf_offset` | Noise-figure offset of every amplifier on the Brest → Morlaix link, boosters included |
+| `/Service/my-service/Fiber/*/loss_coef` | Every span carrying the service named `my-service` |
+
+Naming a kind explicitly with an attribute it does not have (`/Edfa/*/loss_coef`)
+is rejected rather than treated as an empty match. Every parameter in a response
+carries a fully qualified `path` naming just that parameter, which can be fed
+straight back into `POST /config/parameters`.
+
+#### Soft failures
+
+A soft failure is a slow degradation that leaves the lightpath up while its
+margin erodes — a span whose loss creeps up as a connector contaminates, an
+amplifier whose gain sags as its pump ages. The twin has no clock of its own and
+does not ramp anything: a gradual change is a client issuing these calls over
+time. `twinlight-soft-failure` is that client. For a scenario it
+
+1. plans every entry in one `POST /config/parameters/changes?dry_run=true`,
+   which checks every end value and returns each parameter's start and end;
+2. on each tick, sends the current value of every due ramp in one
+   `POST /config/parameters`;
+3. sends instant steps through `POST /config/parameters/changes` when they
+   fall due, so a relative step is taken from the value at that moment.
+
+Ramp shapes (`linear`, `accelerating`, `saturating`, `sigmoid`, `step`), speeds,
+start delays, write intervals and what happens at the end (`hold`, `revert`,
+`reverse`) are all options of the script — see its `--help` and
+[examples/soft_failure_scenario.yaml](../examples/soft_failure_scenario.yaml).
+
 ### `/admin/` — checkpoints
 
 | Method | Path | Notes |
@@ -398,7 +509,8 @@ One snapshot per scrape, in Prometheus text exposition format:
   each labelled with `service_uuid`, `service_name` and `modulation`.
   The two OSNR gauges are one measurement on two reference bandwidths.
 - Per-element `/config` values: `twinlight_fiber_loss_coef_db_per_km`,
-  `twinlight_edfa_nf_db`, `twinlight_edfa_gain_target_db`,
+  `twinlight_edfa_nf_db` (EGN), `twinlight_edfa_nf_offset_db` (GNPy),
+  `twinlight_edfa_gain_target_db`,
   `twinlight_fiber_failed`, `twinlight_service_link_failed`.
 - Twin state: `twinlight_services_total`, `twinlight_failed_links_total`,
   `twinlight_rmsa_qot_margin_db`, `twinlight_transient_enabled`.

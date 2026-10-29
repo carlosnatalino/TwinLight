@@ -52,6 +52,10 @@ class AttrSpec:
             writing to every path). Default: cast to ``py_type``.
         display: Internal-value → user-value transform (applied to the value
             read from ``read_path``). Default: cast to ``py_type``.
+        reader: ``element → user value``, replacing ``read_path`` for an
+            attribute that is derived rather than stored (``nf_offset``).
+        writer: ``(element, coerced value) → None``, replacing
+            ``write_paths`` for the same kind of attribute.
     """
 
     py_type: type
@@ -62,6 +66,8 @@ class AttrSpec:
     unit: str = ""
     coerce: Callable[[Any], Any] = field(default=lambda v: v)
     display: Callable[[Any], Any] = field(default=lambda v: v)
+    reader: Callable[[Any], Any] | None = None
+    writer: Callable[[Any, Any], None] | None = None
 
 
 def _walk(obj: Any, dotted: str) -> tuple[Any, str]:
@@ -86,6 +92,33 @@ def _scalar_loss_coef_display(v: Any) -> float:
 def _scalar_loss_coef_coerce(v: Any) -> np.ndarray:
     """User-facing dB/km float → internal 0-d ndarray in dB/m."""
     return np.asarray(float(v) * 1e-3)
+
+
+# EDFA noise-figure offset. GNPy derives an amplifier's NF from its equipment
+# model (``params.nf_model``: nf1/nf2 for variable gain, nf0 for fixed gain)
+# at the operating gain, then adds the per-channel ``params.nf_ripple`` when it
+# propagates (``Edfa._calc_nf``). ``params.nf0`` is an equipment-library input
+# that propagation never reads, so it cannot serve as a runtime knob. A
+# frequency-flat offset folded into the ripple raises or lowers the modelled NF
+# at every operating point instead, for every ``type_def`` — the shape an
+# ageing pump gives. The ripple GNPy loaded is kept on the element so the
+# offset is always applied to it, never stacked on a previous offset.
+_NF_OFFSET = "_twinlight_nf_offset"
+_NF_RIPPLE_BASE = "_twinlight_nf_ripple_base"
+
+
+def _read_nf_offset(element: Any) -> float:
+    return float(getattr(element, _NF_OFFSET, 0.0))
+
+
+def _write_nf_offset(element: Any, offset: float) -> None:
+    base = getattr(element, _NF_RIPPLE_BASE, None)
+    if base is None:
+        base = np.array(element.params.nf_ripple, dtype=float)
+        setattr(element, _NF_RIPPLE_BASE, base)
+    # A new array, never an in-place add: the loaded ripple may be shared.
+    element.params.nf_ripple = base + offset
+    setattr(element, _NF_OFFSET, offset)
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +152,16 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
             display=float,
         ),
     },
+    # The operational knobs are read from the element instance, which is what
+    # ``Edfa.propagate`` uses. ``operational.*`` is the topology-file input:
+    # ``designed_network`` sets the element values (a 16 dB gain_target in
+    # the file may run at an effective 18 dB, and a booster with no gain in
+    # the file still has one), and GNPy's own ``to_json`` exports the element
+    # values for the same reason.
     Edfa: {
         "gain_target": AttrSpec(
             py_type=float,
-            read_path="operational.gain_target",
+            read_path="effective_gain",
             write_paths=("operational.gain_target", "effective_gain"),
             min_value=0.0,
             max_value=40.0,
@@ -132,7 +171,7 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
         ),
         "tilt_target": AttrSpec(
             py_type=float,
-            read_path="operational.tilt_target",
+            read_path="tilt_target",
             write_paths=("operational.tilt_target", "tilt_target"),
             min_value=-5.0,
             max_value=5.0,
@@ -142,7 +181,7 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
         ),
         "out_voa": AttrSpec(
             py_type=float,
-            read_path="operational.out_voa",
+            read_path="out_voa",
             write_paths=("operational.out_voa", "out_voa"),
             min_value=0.0,
             max_value=20.0,
@@ -150,15 +189,17 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
             coerce=float,
             display=float,
         ),
-        "nf0": AttrSpec(
+        "nf_offset": AttrSpec(
             py_type=float,
-            read_path="params.nf0",
-            write_paths=("params.nf0",),
-            min_value=3.0,
-            max_value=12.0,
+            read_path="",
+            write_paths=(),
+            min_value=-3.0,
+            max_value=10.0,
             unit="dB",
             coerce=float,
             display=float,
+            reader=_read_nf_offset,
+            writer=_write_nf_offset,
         ),
     },
     Roadm: {
@@ -195,12 +236,14 @@ def read_attr(element: Any, attr: str) -> Any:
             f"{type(element).__name__} {element.uid!r}: "
             f"attribute {attr!r} is not exposed"
         )
+    if spec.reader is not None:
+        return spec.reader(element)
     parent, leaf = _walk(element, spec.read_path)
     raw = getattr(parent, leaf)
     if raw is None:
-        # Equipment-library amps may leave optional fields (e.g. nf0 on a
-        # type that uses nf_min/nf_max instead) unset. Surface ``None`` to
-        # the API rather than crashing the read.
+        # An optional field the topology and design left unset (e.g. an
+        # amplifier's tilt). Surface ``None`` to the API rather than
+        # crashing the read.
         return None
     return spec.display(raw)
 
@@ -257,6 +300,9 @@ def write_attr(element: Any, attr: str, value: Any) -> Any:
         )
 
     coerced = spec.coerce(value)
+    if spec.writer is not None:
+        spec.writer(element, coerced)
+        return coerced
     for path in spec.write_paths:
         parent, leaf = _walk(element, path)
         setattr(parent, leaf, coerced)
