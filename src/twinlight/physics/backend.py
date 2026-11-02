@@ -71,6 +71,17 @@ class PhysicalBackend(Protocol):
     def read_all_attributes(self, uid: str) -> dict[str, Any]:
         """Return every allow-listed attribute for the element."""
 
+    def capture_attribute(self, uid: str, attr: str) -> Any:
+        """Return an opaque token of the attribute's stored state.
+
+        Unlike ``read_attribute`` the token round-trips an *unset* value, so
+        ``restore_attribute`` can put back exactly what the engine loaded.
+        Used to revert to startup values and to undo a QoT what-if.
+        """
+
+    def restore_attribute(self, uid: str, attr: str, token: Any) -> None:
+        """Restore state captured by ``capture_attribute`` (no validation)."""
+
     def supported_attributes(
         self,
     ) -> dict[str, dict[str, dict[str, Any]]]:
