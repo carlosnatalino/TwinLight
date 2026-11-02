@@ -22,6 +22,7 @@ from twinlight.api import (
     parameters,
     path_computation,
     topology,
+    transparent,
 )
 from twinlight.api import (
     config as config_api,
@@ -172,6 +173,7 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.include_router(admin.router)
     app.include_router(config_api.router)
     app.include_router(parameters.router)
+    app.include_router(transparent.router)
     app.include_router(metrics_api.router)
 
     if root:

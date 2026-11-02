@@ -244,7 +244,31 @@ class TapiContext:
         # removing a failed fiber's edges never hides it from the index.
         # Backs the /Link scope of parameter paths.
         self._element_terminals: dict[str, tuple[str | None, str | None]] = {}
+        # (upstream, downstream) terminal pair → its inline element UIDs in
+        # propagation order. Built by the same walk; backs /LinkList in the
+        # transparent controller.
+        self._link_elements: dict[tuple[str, str], list[str]] = {}
         self._build_element_terminal_index()
+
+        # -- Running-datastore revision and startup values -------------------
+        # Every change to configuration state — element parameters, failed
+        # links, twin config — bumps the revision. It is the entity-tag of the
+        # transparent controller's running datastore, whichever interface
+        # made the change, so a client holding an ETag learns of a write made
+        # through /config/set as surely as of one made through /transparent.
+        self._revision: int = 0
+        self._last_modified: datetime = datetime.now(UTC)
+        # The configuration as loaded, for reverting twin-config overrides.
+        self._startup_config: TwinConfig = config.model_copy(deep=True)
+        # (uid, attr) → (user value, backend capture token) taken just before
+        # the first write to that attribute: the value the element had at
+        # startup, exactly as the engine stored it (an unset value included).
+        self._element_startup: dict[tuple[str, str], tuple[Any, Any]] = {}
+
+        # -- Transparent controller: candidate datastore ---------------------
+        from twinlight.transparent.datastore import CandidateDatastore
+
+        self.candidate = CandidateDatastore()
 
     # -- Backend pass-throughs ------------------------------------------
     # These three properties existed as direct attributes before the
@@ -789,8 +813,10 @@ class TapiContext:
 
         invalidated: dict[str, set[str]] = {}
         for uid, attr, value in resolved:
+            self._remember_startup(uid, attr)
             self._backend.write_attribute(uid, attr, value)
             self._element_overrides.setdefault(uid, {})[attr] = value
+            self._bump_revision()
             affected = set(self._element_to_services.get(uid, ()))
             for svc_uuid in affected:
                 self.invalidate_baseline(svc_uuid)
@@ -817,6 +843,7 @@ class TapiContext:
         if redesign and self._backend.available:
             self._backend.redesign()
             self._baseline_cache.clear()
+            self._bump_revision()
             # Reverse-index entries were keyed by UIDs that did not change
             # across redesign, so they stay valid; same for failed-links.
             for svc_uuid in list(self._services):
@@ -839,6 +866,8 @@ class TapiContext:
 
         _apply(self._config, updates)
         self._twin_overrides.update(updates)
+        if updates:
+            self._bump_revision()
         return updates
 
     def get_element_overrides(self) -> dict[str, dict[str, Any]]:
@@ -864,16 +893,19 @@ class TapiContext:
             for attr in attrs:
                 if attr == "failed" or uid not in self._backend.uid_map:
                     continue
-                previous[(uid, attr)] = self._backend.read_attribute(uid, attr)
+                try:
+                    previous[(uid, attr)] = self._backend.capture_attribute(uid, attr)
+                except (KeyError, ValueError):  # the write below reports it
+                    continue
         prior_records = self.get_element_overrides()
         try:
             return self.apply_element_overrides(updates)
         except Exception:
-            for (uid, attr), value in previous.items():
-                if value is None:
-                    continue
+            # Capture tokens restore exactly what was stored, an unset value
+            # included, which a write of the previous user value could not.
+            for (uid, attr), token in previous.items():
                 try:
-                    self._backend.write_attribute(uid, attr, value)
+                    self._backend.restore_attribute(uid, attr, token)
                 except Exception:  # keep unwinding the rest
                     logger.exception("Rollback of %s.%s failed", uid, attr)
             self._element_overrides = prior_records
@@ -885,8 +917,256 @@ class TapiContext:
     def get_twin_overrides(self) -> dict[str, Any]:
         return dict(self._twin_overrides)
 
+    # -- Running-datastore revision, startup values and revert ---------------
+
+    @property
+    def revision(self) -> int:
+        """Counter bumped by every configuration change (see ``__init__``)."""
+        return self._revision
+
+    @property
+    def last_modified(self) -> datetime:
+        return self._last_modified
+
+    def _bump_revision(self) -> None:
+        self._revision += 1
+        self._last_modified = datetime.now(UTC)
+
+    def _remember_startup(self, uid: str, attr: str) -> None:
+        """Record (uid, attr)'s value before the twin first changes it."""
+        key = (uid, attr)
+        if key in self._element_startup:
+            return
+        try:
+            self._element_startup[key] = (
+                self._backend.read_attribute(uid, attr),
+                self._backend.capture_attribute(uid, attr),
+            )
+        except Exception:  # noqa: BLE001 - the write itself will report it
+            return
+
+    def startup_element_value(self, uid: str, attr: str) -> Any:
+        """The value ``attr`` had when the twin started (user units).
+
+        ``failed`` is always ``False`` at startup: a restored snapshot's
+        failures are state applied after startup, like any other change.
+        """
+        if attr == "failed":
+            return False
+        recorded = self._element_startup.get((uid, attr))
+        if recorded is not None:
+            return recorded[0]
+        return self._backend.read_attribute(uid, attr)
+
+    def startup_twin_value(self, key: str) -> Any:
+        """The value twin-config ``key`` had when the twin started."""
+        from twinlight.state.twin_overrides import read_key
+
+        return read_key(self._startup_config, key)
+
+    def revert_element_overrides(
+        self, pairs: list[tuple[str, str]],
+    ) -> dict[str, set[str]]:
+        """Put (uid, attr) pairs back to their startup values.
+
+        Restores exactly what the engine stored at startup (via the backend
+        capture token), so an attribute that was unset becomes unset again.
+        ``failed`` restores the fiber. The override record is dropped and the
+        affected services' baselines are invalidated, as for a write.
+
+        Returns ``{uid: invalidated service UUIDs}``.
+        """
+        invalidated: dict[str, set[str]] = {}
+        for uid, attr in pairs:
+            if attr == "failed":
+                affected = self.set_link_failed(uid, False)
+            else:
+                recorded = self._element_startup.get((uid, attr))
+                if recorded is not None:
+                    self._backend.restore_attribute(uid, attr, recorded[1])
+                attrs = self._element_overrides.get(uid)
+                if attrs is not None:
+                    attrs.pop(attr, None)
+                    if not attrs:
+                        del self._element_overrides[uid]
+                affected = self.services_for_element(uid)
+                for svc_uuid in affected:
+                    self.invalidate_baseline(svc_uuid)
+                self._bump_revision()
+            if affected:
+                invalidated.setdefault(uid, set()).update(affected)
+        return invalidated
+
+    def revert_twin_overrides(self, keys: list[str]) -> dict[str, Any]:
+        """Put twin-config keys back to their startup values.
+
+        Returns ``{key: restored value}``.
+        """
+        from twinlight.state.twin_overrides import _walk_for_write
+
+        restored: dict[str, Any] = {}
+        for key in keys:
+            value = self.startup_twin_value(key)
+            parent, leaf = _walk_for_write(self._config, key)
+            setattr(parent, leaf, value)
+            self._twin_overrides.pop(key, None)
+            restored[key] = value
+        if restored:
+            self._bump_revision()
+        return restored
+
+    def revert_all_overrides(self) -> None:
+        """Return every element, fiber and twin-config setting to startup."""
+        pairs = [
+            (uid, attr)
+            for uid, attrs in self._element_overrides.items()
+            for attr in attrs
+        ]
+        pairs += [(uid, "failed") for uid in sorted(self._failed_links)]
+        self.revert_element_overrides(pairs)
+        self.revert_twin_overrides(list(self._twin_overrides))
+
     def get_failed_links(self) -> set[str]:
         return set(self._failed_links)
+
+    async def preview_qot(
+        self,
+        element_values: dict[str, dict[str, Any]],
+        element_reverts: list[tuple[str, str]],
+        margin_db: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Predict the QoT of every service a change would touch, without
+        making it.
+
+        ``element_values`` (``{uid: {attr: value}}``, ``failed`` allowed) and
+        ``element_reverts`` (``[(uid, attr)]`` going back to startup) are
+        assumed validated. Parameter changes are written to the live
+        elements, the affected services' allocated paths are propagated, and
+        every written attribute is restored from its capture token in a
+        ``finally``. Failure changes are evaluated hypothetically — a path
+        through a fiber that would be failed reports ``link-failed`` — so the
+        routing graphs are never touched.
+
+        The whole write → propagate → restore sequence runs under
+        ``_propagation_lock`` and the backends' ``compute_baseline`` does not
+        yield to the event loop, so no other request can observe the
+        tentative values. Nothing is cached and no revision is bumped.
+
+        ``margin_db`` is the admission margin to judge against (the candidate
+        value when the change also moves ``rmsa.qot_margin_db``).
+        """
+        from twinlight.physics.modulation import get_params
+
+        touched = set(element_values) | {uid for uid, _ in element_reverts}
+        affected: set[str] = set()
+        for uid in touched:
+            affected |= self.services_for_element(uid)
+        services = [
+            svc for uuid in sorted(affected)
+            if (svc := self._services.get(uuid)) is not None
+        ]
+        if margin_db is None:
+            margin_db = self._config.rmsa.qot_margin_db
+
+        current = {
+            svc.uuid: await self.get_or_compute_baseline(svc) for svc in services
+        }
+
+        failed_after = set(self._failed_links)
+        for uid, attrs in element_values.items():
+            if "failed" in attrs:
+                (failed_after.add if attrs["failed"] else failed_after.discard)(uid)
+        for uid, attr in element_reverts:
+            if attr == "failed":
+                failed_after.discard(uid)
+
+        predicted: dict[str, OpmBaseline | None] = {}
+        async with self._propagation_lock:
+            tokens: list[tuple[str, str, Any]] = []
+            try:
+                for uid, attrs in element_values.items():
+                    for attr, value in attrs.items():
+                        if attr == "failed":
+                            continue
+                        tokens.append(
+                            (uid, attr, self._backend.capture_attribute(uid, attr))
+                        )
+                        self._backend.write_attribute(uid, attr, value)
+                for uid, attr in element_reverts:
+                    recorded = self._element_startup.get((uid, attr))
+                    if attr == "failed" or recorded is None:
+                        continue
+                    tokens.append(
+                        (uid, attr, self._backend.capture_attribute(uid, attr))
+                    )
+                    self._backend.restore_attribute(uid, attr, recorded[1])
+                for svc in services:
+                    path = self._allocated_path_uids(svc.uuid)
+                    if not path:
+                        predicted[svc.uuid] = None
+                    elif any(uid in failed_after for uid in path):
+                        from twinlight.physics.gnpy_adapter import OpmBaseline
+
+                        predicted[svc.uuid] = OpmBaseline(
+                            gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0,
+                            pmd_ps=0.0, latency_ms=0.0, total_fiber_km=0.0,
+                            status="link-failed",
+                        )
+                    else:
+                        predicted[svc.uuid] = await self._backend.compute_baseline(
+                            path, svc.modulation_format.value,
+                        )
+            finally:
+                for uid, attr, token in reversed(tokens):
+                    try:
+                        self._backend.restore_attribute(uid, attr, token)
+                    except Exception:  # keep unwinding the rest
+                        logger.exception("What-if restore of %s.%s failed", uid, attr)
+
+        def summary(b: OpmBaseline | None) -> dict[str, Any] | None:
+            if b is None:
+                return None
+            if b.status == "link-failed":
+                return {"status": "link-failed", "gsnr_db": None, "osnr_db": None}
+            return {
+                "status": b.status or "ok",
+                "gsnr_db": round(b.gsnr_db, 4),
+                "osnr_db": round(b.osnr_ase_db, 4),
+                "cd_ps_nm": round(b.cd_ps_nm, 4),
+                "pmd_ps": round(b.pmd_ps, 4),
+            }
+
+        report: list[dict[str, Any]] = []
+        for svc in services:
+            required = get_params(svc.modulation_format).req_gsnr_db
+            before, after = summary(current[svc.uuid]), summary(predicted[svc.uuid])
+            gsnr_before = before["gsnr_db"] if before else None
+            gsnr_after = after["gsnr_db"] if after else None
+            report.append({
+                "service": svc.uuid,
+                "name": next(
+                    (n.value for n in svc.name or [] if n.value_name == "service-name"),
+                    None,
+                ),
+                "modulation_format": svc.modulation_format.value,
+                "required_gsnr_db": required,
+                "qot_margin_db": margin_db,
+                "current": before,
+                "predicted": after,
+                "delta_gsnr_db": (
+                    round(gsnr_after - gsnr_before, 4)
+                    if gsnr_before is not None and gsnr_after is not None
+                    else None
+                ),
+                # Two thresholds, because they answer different questions:
+                # would the lightpath still work, and would the controller
+                # still admit it today?
+                "above_required": gsnr_after is not None and gsnr_after >= required,
+                "meets_admission_margin": (
+                    gsnr_after is not None and gsnr_after >= required + margin_db
+                ),
+            })
+        return report
 
     def services_for_element(self, uid: str) -> set[str]:
         """Service UUIDs whose path traverses the element with ``uid``."""
@@ -975,28 +1255,45 @@ class TapiContext:
         def kind_of(node: Any) -> str:
             return _kind_name(node if net is not None else uid_map.get(node))
 
-        def walk(start: Any, step: Any) -> str | None:
+        def walk(start: Any, step: Any) -> tuple[str | None, int]:
+            """(terminal UID or None, number of hops to it)."""
             cur, seen = start, {start}
             while True:
                 neighbours = list(step(cur))
                 if len(neighbours) != 1:
-                    return None
+                    return None, 0
                 cur = neighbours[0]
                 if cur in seen:
-                    return None
+                    return None, 0
                 seen.add(cur)
                 kind = kind_of(cur)
                 if kind in ("Roadm", "Transceiver"):
-                    return uid_of(cur)
+                    return uid_of(cur), len(seen) - 1
                 if kind not in ("Edfa", "Fiber"):
-                    return None
+                    return None, 0
 
+        positions: dict[tuple[str, str], list[tuple[int, str]]] = {}
         for node in graph.nodes:
             if kind_of(node) in ("Fiber", "Edfa"):
-                self._element_terminals[uid_of(node)] = (
+                (a, hops), (z, _) = (
                     walk(node, graph.predecessors),
                     walk(node, graph.successors),
                 )
+                self._element_terminals[uid_of(node)] = (a, z)
+                if a is not None and z is not None:
+                    positions.setdefault((a, z), []).append((hops, uid_of(node)))
+        self._link_elements = {
+            pair: [uid for _hops, uid in sorted(items)]
+            for pair, items in positions.items()
+        }
+
+    def link_elements(self) -> dict[tuple[str, str], list[str]]:
+        """(upstream, downstream) terminals → inline element UIDs, in order.
+
+        Links are directional, as GNPy's are: a bidirectional span pair is
+        two entries.
+        """
+        return {pair: list(uids) for pair, uids in self._link_elements.items()}
 
     def element_terminals(self, uid: str) -> tuple[str | None, str | None]:
         """(upstream, downstream) ROADM/transceiver UIDs of an inline element.
@@ -1080,6 +1377,7 @@ class TapiContext:
 
         # Cached routes may include this fiber; rebuild lazily on demand.
         self._route_cache.clear()
+        self._bump_revision()
 
         affected = self.services_for_element(fiber_uid)
         for svc_uuid in affected:
@@ -1401,10 +1699,10 @@ class TapiContext:
         self._service_allocation.clear()
         self._baseline_cache.clear()
         self._element_to_services.clear()
-        for fiber_uid in list(self._failed_links):
-            self.set_link_failed(fiber_uid, False)
-        self._element_overrides.clear()
-        self._twin_overrides.clear()
+        # Revert, not just forget: dropping the override records alone would
+        # leave the overridden values live on the elements and in the config,
+        # and the restored twin would silently keep them.
+        self.revert_all_overrides()
 
         # Restore spectrum
         self._spectrum_state = SpectrumState.from_dict(data["spectrum"])
@@ -1443,6 +1741,7 @@ class TapiContext:
         twin_overrides = data.get("twin_overrides") or {}
         if twin_overrides:
             self.apply_twin_overrides(twin_overrides)
+        self._bump_revision()
 
         logger.info(
             "Restored from %s: %d services, %d element overrides, "
