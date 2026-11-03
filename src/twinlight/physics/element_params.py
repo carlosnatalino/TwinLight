@@ -168,6 +168,26 @@ def _write_dispersion(element: Any, value: float) -> None:
     element.params._dispersion = np.asarray(float(value) * _PS_PER_NM_KM)
 
 
+# ROADM per-channel power target. ``designed_network`` copies the ROADM-level
+# target into a per-egress-degree dict (``per_degree_pch_out_dbm``, the same
+# object as ``params.per_degree_pch_out_db``), and ``Roadm.propagate`` reads
+# the per-degree value first (``get_per_degree_ref_power`` /
+# ``get_per_degree_power``). Writing only the ROADM-level target would
+# therefore change nothing on a designed network. The degrees still at the
+# old ROADM-level value inherited it and move with it; a degree the topology
+# equalises to a target of its own keeps that target.
+
+
+def _write_roadm_target(element: Any, value: float) -> None:
+    previous = element.target_pch_out_dbm
+    element.params.target_pch_out_db = value
+    element.target_pch_out_dbm = value
+    per_degree = element.per_degree_pch_out_dbm
+    for degree, target in list(per_degree.items()):
+        if previous is not None and target == previous:
+            per_degree[degree] = value  # in place: the dict is shared
+
+
 # ---------------------------------------------------------------------------
 # ALLOW-LIST
 # ---------------------------------------------------------------------------
@@ -345,13 +365,17 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
         "target_pch_out_db": AttrSpec(
             py_type=float,
             read_path="params.target_pch_out_db",
-            write_paths=("params.target_pch_out_db", "target_pch_out_dbm"),
+            write_paths=(
+                "params.target_pch_out_db", "target_pch_out_dbm", "per_degree_pch_out_dbm",
+            ),
             min_value=-25.0,
             max_value=0.0,
             unit="dBm",
             coerce=float,
             display=float,
-            description="Per-channel output power target",
+            writer=_write_roadm_target,
+            description="Per-channel output power target (and that of every "
+                        "degree inheriting it)",
         ),
     },
 }
@@ -484,7 +508,13 @@ def restore_attr(element: Any, attr: str, token: Any) -> None:
         return
     for path, value in zip(spec.write_paths, payload, strict=True):
         parent, leaf = _walk(element, path)
-        setattr(parent, leaf, copy.deepcopy(value))
+        current = getattr(parent, leaf, None)
+        if isinstance(current, dict) and isinstance(value, dict):
+            # In place, so objects sharing the dict see the restore too.
+            current.clear()
+            current.update(copy.deepcopy(value))
+        else:
+            setattr(parent, leaf, copy.deepcopy(value))
 
 
 def schema() -> dict[str, dict[str, dict[str, Any]]]:

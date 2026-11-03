@@ -33,8 +33,19 @@ def _baseline(ctx: TapiContext) -> Any:
     return baseline
 
 
-# (uid, attribute, new value, metric, expected direction of the metric)
+FWD_BOOSTER = "Edfa_booster_roadm Brest_to_fiber (Brest → Morlaix)-F"
+ROADM_A = "roadm Brest"
+
+# (uid, attribute, new value, metric, expected direction of the metric; 0 =
+# it must move, in a direction that depends on the operating point)
 CASES = [
+    (FWD_FIBER, "loss_coef", 0.25, "gsnr_db", -1),
+    (FWD_FIBER, "att_in", 3.0, "gsnr_db", -1),
+    (FWD_BOOSTER, "gain_target", 14.0, "gsnr_db", 0),
+    (FWD_BOOSTER, "tilt_target", 1.0, "gsnr_db", 0),
+    (FWD_BOOSTER, "out_voa", 3.0, "gsnr_db", 0),
+    (EAST_AMP, "nf_offset", 2.0, "gsnr_db", -1),
+    (ROADM_A, "target_pch_out_db", -10.0, "gsnr_db", 0),
     (FWD_FIBER, "con_in", 3.0, "gsnr_db", -1),
     (FWD_FIBER, "con_out", 3.0, "gsnr_db", -1),
     (FWD_FIBER, "pmd_coef", 0.4, "pmd_ps", +1),
@@ -54,7 +65,10 @@ def test_writable_attribute_reaches_propagation(
     gnpy_context._backend.write_attribute(uid, attr, value)
     assert gnpy_context._backend.read_attribute(uid, attr) == pytest.approx(value)
     after = getattr(_baseline(gnpy_context), metric)
-    assert (after - before) * sign > 1e-6, (attr, before, after)
+    if sign:
+        assert (after - before) * sign > 1e-6, (attr, before, after)
+    else:
+        assert abs(after - before) > 1e-6, (attr, before, after)
 
 
 def test_units_are_user_facing(gnpy_context: TapiContext) -> None:
@@ -117,3 +131,18 @@ def test_capture_does_not_alias_arrays(gnpy_context: TapiContext) -> None:
     fiber.params._loss_coef *= 2  # in place
     restore_attr(fiber, "loss_coef", token)
     assert gnpy_context._backend.read_attribute(FWD_FIBER, "loss_coef") == pytest.approx(0.2)
+
+
+def test_roadm_target_moves_inherited_degrees_only(gnpy_context: TapiContext) -> None:
+    """Regression: on a designed network the ROADM-level target alone is
+    never read — every egress degree carries its own copy."""
+    roadm = gnpy_context._backend.uid_map[ROADM_A]
+    [degree] = roadm.per_degree_pch_out_dbm
+    token = capture_attr(roadm, "target_pch_out_db")
+    roadm.per_degree_pch_out_dbm["explicit degree"] = -15.0
+    gnpy_context._backend.write_attribute(ROADM_A, "target_pch_out_db", -10.0)
+    assert roadm.per_degree_pch_out_dbm == {degree: -10.0, "explicit degree": -15.0}
+    assert roadm.params.per_degree_pch_out_db is roadm.per_degree_pch_out_dbm
+    restore_attr(roadm, "target_pch_out_db", token)
+    assert roadm.per_degree_pch_out_dbm == {degree: -20}
+    assert roadm.params.per_degree_pch_out_db is roadm.per_degree_pch_out_dbm
