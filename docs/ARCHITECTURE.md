@@ -12,8 +12,10 @@ How TwinLight is put together, and why. For the endpoint catalogue see
 ┌─────────────────────────────────────────────────────────────────┐
 │  FastAPI application  (src/twinlight, port 8080)                │
 │                                                                 │
-│  api/          T-API routers + /internal, /admin, /config       │
+│  api/          T-API routers + /internal, /admin, /config,      │
+│                /transparent                                     │
 │  state/        TapiContext — the single owner of all state      │
+│  transparent/  transparent controller: paths, tree, datastores  │
 │  physics/      QoT baseline + four transient models             │
 │  algorithms/   routing (k-shortest) and spectrum assignment     │
 │  loader/       GNPy JSON → internal elements → T-API objects    │
@@ -70,6 +72,7 @@ separate module:
 | `/internal/` | `api/internal.py`, `api/diagrams.py` | OPM readings, service path metadata, path-info estimates, eye/constellation synthesis |
 | `/admin/` | `api/admin.py` | Snapshot and restore |
 | `/config/` | `api/config.py`, `api/parameters.py` | Runtime parameter overrides (fiber loss, EDFA NF, link failure); path-addressed, all-or-nothing parameter batches |
+| `/transparent/` | `api/transparent.py` (logic in `transparent/`) | The fully transparent controller view: every element and parameter as one data tree, ns-3-style paths, RESTCONF-shaped datastores and operations — see [TRANSPARENT_CONTROLLER.md](TRANSPARENT_CONTROLLER.md) |
 | `/metrics` | `api/metrics.py` | Prometheus exposition |
 
 A T-API client therefore never encounters a proprietary extension inside a
@@ -97,7 +100,8 @@ src/twinlight/
     context.py             TapiContext — root state owner (see below)
     topology_state.py      TopologyGraph: NetworkX DiGraph keyed by element UID
     spectrum_state.py      Per-link slot occupancy arrays (6.25 GHz flexi-grid)
-    twin_overrides.py      Runtime parameter overrides from the /config plane
+    twin_overrides.py      Runtime-mutable twin config (transients, rmsa, fec):
+                           allow-list and pydantic-constraint validation
     parameter_path.py      ns-3-style parameter paths: parse + resolve to (uid, attr)
     parameter_ops.py       Atomic set / to-by-by_percent batches over parameter paths
 
@@ -120,6 +124,13 @@ src/twinlight/
     analytical_metrics.py  CD/PMD/latency accumulation along a path
     transients/            The four time-varying impairment models + cascade.py
 
+  transparent/           The transparent optical domain controller
+    path.py                ns-3-style paths: selectors, [i-j] indices, $Kind casts
+    tree.py                The data tree, built on demand from TapiContext;
+                           leaf specs shared with the schema endpoint
+    datastore.py           Datastores (operational, running, candidate,
+                           startup), change sets, validate/apply, compare
+
   algorithms/
     routing.py             k_shortest_paths() over the NetworkX graph
     spectrum_assignment.py First-fit slot allocation with guard bands
@@ -140,6 +151,8 @@ src/twinlight_client/    Companion client library and CLI
   cli.py                   twinlight-client: pick a service, stream its OPM
   soft_failure.py          twinlight-soft-failure: immediate changes, and the
                            clock and ramp logic for gradual ones
+  transparent.py           TransparentClient — sync client for /transparent
+  transparent_cli.py       twinlight-transparent: get/set/revert/commit/…
 ```
 
 ## Startup sequence
@@ -225,6 +238,48 @@ with one dry run of `/changes`, then sends each tick's values for every due ramp
 in one `POST /config/parameters`. Timing, ramp shapes and recovery therefore
 live entirely in the client, and the twin's state is always just its current
 parameter values — which is also all a snapshot needs to capture.
+
+### Changing parameters through the transparent controller
+
+`PUT`, `PATCH`, YANG Patch and `DELETE` on `/transparent/data/…` (running) or
+`/transparent/ds/candidate/…`, and `POST /transparent/operations/commit`
+
+1. `transparent/path.py` parses the path — from the *undecoded* request path,
+   so `%2F` stays inside a segment — and `transparent/tree.py` resolves it
+   against a tree built on demand from the live context. The tree is a view:
+   `/ElementList`, `/NodeList`, `/LinkList/…/ElementList` and
+   `/ServiceList/…/ElementList` all reach the same element leaves.
+2. `transparent/datastore.py` turns the request into a change set
+   `{LeafKey: value | REVERT}`. Only two kinds of key exist — an element
+   attribute and a twin-config field — so every view writes the same leaf.
+3. The whole change set is validated (backend allow-list bounds for element
+   attributes, the pydantic model for twin config, cross-field rules on the
+   section as it would be after the change), reporting every error.
+4. A running write applies it: `apply_element_overrides_atomic` for element
+   values and failures, `revert_element_overrides` / `revert_twin_overrides`
+   for reverts, `apply_twin_overrides` for twin config. These are the methods
+   `/config` uses, so baselines, override records and snapshots follow. A
+   candidate write stores the change set instead, and `commit` applies the
+   accumulated set the same way.
+
+Two pieces of `TapiContext` state exist for this interface:
+
+- **the running revision** (`ctx.revision`), bumped by every configuration
+  change through any of those methods — whichever router called them. It is
+  the running datastore's ETag, so a conditional write through `/transparent`
+  notices a change made through `/config/set`;
+- **startup values** (`_element_startup`, `_startup_config`): before an element
+  attribute is first written, its value and the backend's capture token are
+  recorded; the token restores exactly what the engine stored, an unset value
+  included. Reverts — and `restore_from`, which now reverts before reapplying a
+  snapshot — use them.
+
+The QoT what-if (`validate` with `with-qot-impact`) is
+`TapiContext.preview_qot`: under `_propagation_lock` it writes the changed
+attributes to the live elements, propagates each affected service's allocated
+path, and restores every attribute from its capture token in a `finally`.
+Backend propagation does not yield to the event loop, so no other request can
+observe the tentative values; nothing is cached.
 
 ## Concurrency
 

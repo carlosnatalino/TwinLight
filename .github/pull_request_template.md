@@ -23,7 +23,8 @@ Closes #
 
 - [ ] The change stays within T-API v2.6.0 — standard paths and JSON keys
 - [ ] Nothing proprietary was added to a `/data/` response
-      (non-standard surfaces belong under `/internal/`, `/admin/` or `/config/`)
+      (non-standard surfaces belong under `/internal/`, `/admin/`, `/config/`
+      or `/transparent/`)
 - [ ] [docs/TAPI_COMPLIANCE.md](../docs/TAPI_COMPLIANCE.md) updated if the
       compliance picture changed
 

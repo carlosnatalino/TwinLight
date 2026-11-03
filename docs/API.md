@@ -1,6 +1,6 @@
 # API reference
 
-TwinLight exposes 43 REST operations plus a gNMI gRPC service. This document is
+TwinLight exposes 65 REST operations plus a gNMI gRPC service. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
 whenever the twin is running.
@@ -10,8 +10,10 @@ Endpoints fall into two groups, kept strictly apart (see
 
 - **`/restconf/data/…`** — T-API v2.6.0 only. Standard paths, hyphenated JSON
   keys, RESTCONF errors, `application/yang-data+json` responses.
-- **`/internal/`, `/admin/`, `/config/`, `/metrics`** — everything the standard
-  does not cover.
+- **`/internal/`, `/admin/`, `/config/`, `/transparent/`, `/metrics`** —
+  everything the standard does not cover. `/transparent/` is the twin's *fully
+  transparent* controller view: every element and parameter, addressed
+  independently of T-API objects.
 
 > **The T-API paths below are written as `/data/…` throughout.** Every one is
 > also served under the RESTCONF root — `/restconf/data/…` by default, set by
@@ -356,7 +358,7 @@ re-evaluated rather than cached.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/config/get` | Current values of the twin's runtime-mutable knobs |
-| POST | `/config/set` | Change a parameter (fiber loss, EDFA noise figure, link failure, RMSA margin, transient enables) |
+| POST | `/config/set` | Change element parameters (any attribute in `allowed_attributes`), fail or restore a fiber, or change the runtime-mutable twin config (every field of `transients`, `rmsa` and `fec`; listed as `allowed_twin_keys`) |
 | GET | `/config/devices/{uid}` | Per-element parameter values for one network element |
 
 This is the fault-injection and sensitivity-analysis plane: raise a span's loss
@@ -474,6 +476,43 @@ Ramp shapes (`linear`, `accelerating`, `saturating`, `sigmoid`, `step`), speeds,
 start delays, write intervals and what happens at the end (`hold`, `revert`,
 `reverse`) are all options of the script — see its `--help` and
 [examples/soft_failure_scenario.yaml](../examples/soft_failure_scenario.yaml).
+
+### `/transparent/` — transparent optical domain controller
+
+The whole physical model as one data tree — every element of the backend's
+network and every parameter the twin models, plus its own configuration —
+addressed with ns-3-style paths keyed by element UIDs, over a RESTCONF-shaped
+protocol. The full description, with the path grammar, datastore semantics and a
+worked scenario, is [TRANSPARENT_CONTROLLER.md](TRANSPARENT_CONTROLLER.md).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/transparent` | Root resource: datastores, operations, backend |
+| GET | `/transparent/schema` | Every node and leaf: type, unit, bounds, `config` flag, why a field is read-only |
+| GET | `/transparent/data[/<path>]` | Operational view (config + state). Query: `content`, `depth`, `with-defaults`, `format=tree\|leaves` |
+| PUT | `/transparent/data[/<path>]` | Replace in running: set what the body names, revert every other config leaf under the target |
+| PATCH | `/transparent/data[/<path>]` | Merge into running; with `Content-Type: application/yang-patch+json`, a YANG Patch (RFC 8072) transaction |
+| DELETE | `/transparent/data[/<path>]` | Revert every config leaf under the target to its startup value |
+| GET, PUT, PATCH, DELETE | `/transparent/ds/<datastore>[/<path>]` | The same per NMDA datastore: `running`, `candidate` (writable), `startup`, `operational` |
+| GET | `/transparent/operations` | The operations below |
+| POST | `/transparent/operations/{commit,discard-changes,validate,compare,redesign}` | Commit the candidate; drop it; validate it (or an inline YANG Patch) with an optional QoT what-if; diff two datastores as a YANG Patch; re-run the GNPy design |
+
+```
+/ElementList/<uid>[/$Kind]/<leaf>          /ElementList/*/$Fiber/loss_coef
+/NodeList/<uid>/…                          /NodeList/*/$Roadm/target_pch_out_db
+/LinkList/<from>/<to>[/ElementList/…]      /LinkList/roadm A/roadm B/ElementList/[0]
+/ServiceList/<uuid|name>[/qot|/ElementList] /ServiceList/my-service/qot/gsnr_db
+/ModulationList/<format>/<leaf>            /ModulationList/DP-QPSK/req_gsnr_db
+/Config/<section>/…/<field>                /Config/transients/*/enabled
+```
+
+Writes answer `204`, or `200` with the applied changes and the invalidated
+services under `Prefer: return=representation`. Every data response carries an
+`ETag` — the running revision, which any configuration change through any
+interface moves — and `If-Match` makes a write or a commit conditional on it
+(`412` otherwise). Errors use the RESTCONF errors body, one entry per offending
+leaf. Writes go through the same `TapiContext` methods as `/config`, so OPM,
+gNMI, Prometheus, `/config/get` and snapshots all reflect them.
 
 ### `/admin/` — checkpoints
 

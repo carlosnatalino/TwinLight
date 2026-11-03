@@ -222,7 +222,9 @@ rmsa:
 | `default_guardband_slots` | `1` | Guard band in 6.25 GHz slots on each side of an allocation |
 
 `qot_margin_db` is the main admission-strictness knob, and is also exposed at
-run time through `POST /config/set` so a single process can sweep it.
+run time — through `POST /config/set` or `/transparent/data/Config/rmsa` — so a
+single process can sweep it. All three fields are runtime-mutable; they affect
+future admissions only, never a service already admitted.
 
 ## `fec` — post-FEC BER models
 
@@ -252,8 +254,9 @@ fec:
 | `hard_decision.symbol_bits` | `8` | Bits per symbol: m for a Reed–Solomon code over GF(2^m), `1` for a binary code such as BCH. For m > 1, n ≤ 2^m − 1 |
 
 Invalid codes (k ≥ n, t above (n − k)/2, an RS code longer than its field) are
-rejected at startup. The section is restart-only; it is not exposed through
-`POST /config/set`.
+rejected at startup, and the same rules are checked when the section is changed
+at run time (`POST /config/set` or `/transparent`) — on the section as it would
+be after the whole change, so `k` and `t` can move together in one request.
 
 ## `spectrum` — the flexi-grid
 
@@ -343,11 +346,28 @@ process exit non-zero.
 ## Runtime overrides
 
 Some parameters can be changed while the twin is running, through
-`POST /config/set` (see [API.md](API.md#config--runtime-parameter-overrides)):
-per-fiber loss coefficient, per-EDFA noise figure and gain target, fiber failure
-state, the RMSA margin, and the per-model transient enable flags. Changing one
-invalidates the affected cached baselines, so the next OPM read reflects it.
+`POST /config/set` (see [API.md](API.md#config--runtime-parameter-overrides)),
+`POST /config/parameters`, or the transparent controller
+([TRANSPARENT_CONTROLLER.md](TRANSPARENT_CONTROLLER.md)):
 
-Everything else — topology, backend, spectrum grid — is fixed at startup by
-design: changing it mid-run would make measurements taken before and after the
-change incomparable.
+- per-element physical parameters — fiber loss, padding, connector losses, PMD
+  coefficient and dispersion; amplifier gain, tilt, VOAs, NF offset, saturation
+  power and PMD; ROADM power target (the list depends on the backend; see
+  `allowed_attributes` in `GET /config/get`);
+- fiber failure state;
+- every field of `transients`, `rmsa` and `fec` — the sections read live on
+  each OPM sample or admission — except four that no model reads
+  (`transients.edfa_reservoir.solver_method`, `….solver_max_step_ms`,
+  `transients.polarization.pmd_coeff_ps_per_sqrt_km`,
+  `….sop_drift_rate_rad_per_s`), which stay read-only so a write cannot appear
+  to succeed while changing nothing.
+
+Changing an element parameter invalidates the affected cached baselines, so the
+next OPM read reflects it. Transient and FEC parameters take effect on the next
+OPM sample (the EDFA reservoir's time constants from the next add/drop event);
+RMSA parameters on the next admission.
+
+Everything else — topology, backend, spectrum grid, server, simulation and
+logging settings — is fixed at startup by design: changing it mid-run would make
+measurements taken before and after the change incomparable. The transparent
+controller's `startup` datastore is these files as loaded.

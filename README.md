@@ -53,6 +53,8 @@ way a deployed coherent receiver's telemetry moves.
   - [Create a connectivity service](#create-a-connectivity-service)
   - [Populate the twin with demo services](#populate-the-twin-with-demo-services)
   - [Stream live OPM](#stream-live-opm)
+  - [Rehearse soft failures](#rehearse-soft-failures)
+  - [Drive the transparent controller](#drive-the-transparent-controller)
   - [Checkpoint and restore](#checkpoint-and-restore)
 - [Architecture](#architecture)
 - [Physics](#physics)
@@ -91,6 +93,13 @@ way a deployed coherent receiver's telemetry moves.
   Grafana dashboard in the Compose stack.
 - **Web UI** — a React SPA for topology, services, spectrum occupancy, path
   computation and live OPM charts.
+- **A fully transparent optical domain controller** — besides the abstracted
+  T-API view, every element and every modelled parameter (span loss, connector
+  loss, dispersion, PMD; amplifier gain, tilt, VOAs, NF, saturation power; ROADM
+  targets; the transient, RMSA and FEC model parameters) is one data tree under
+  `/transparent`, addressed with ns-3-style paths independently of T-API objects,
+  over a RESTCONF-shaped protocol with running/candidate/startup datastores,
+  YANG Patch transactions, ETags, and a QoT what-if before you commit.
 - **Path-addressed parameter changes and soft failures** — set or shift span
   loss, amplifier gain/NF/tilt and ROADM targets in atomic batches addressed
   with ns-3-style parameter paths; the `twinlight-soft-failure` client drifts
@@ -330,6 +339,30 @@ endpoints the client drives — `POST /config/parameters` and
 `POST /config/parameters/changes` — are documented in
 [docs/API.md](docs/API.md#config--parameters-by-path).
 
+### Drive the transparent controller
+
+T-API shows the network the way an *abstracted* optical domain controller does.
+`/transparent` shows it the way a *fully transparent* one does: every element of
+the physical backend's network — designed boosters and fiber sub-spans included
+— and every parameter the twin models, as one tree addressed ns-3 style:
+
+```bash
+twinlight-transparent get '/LinkList/*/*' --depth 1           # every link
+twinlight-transparent get '/ElementList/*/$Edfa' --leaves --content config
+twinlight-transparent set --candidate '/ElementList/*/$Fiber/con_in=1.0' \
+                                      '/Config/rmsa/qot_margin_db=2'
+twinlight-transparent validate --qot                          # predicted GSNR per service
+twinlight-transparent commit
+twinlight-transparent revert /                                # back to startup
+```
+
+Writes go through the same code as `/config`, so OPM, gNMI, Prometheus and
+snapshots follow. [`examples/transparent_odc_scenario.py`](examples/transparent_odc_scenario.py)
+plays an orchestrator through a full maintenance window — stage, what-if,
+ETag-guarded commit, roll back — and
+[docs/TRANSPARENT_CONTROLLER.md](docs/TRANSPARENT_CONTROLLER.md) documents the
+tree, the path grammar and the protocol.
+
 ### Checkpoint and restore
 
 The twin checkpoints itself when it shuts down gracefully — Ctrl+C, SIGTERM,
@@ -381,9 +414,10 @@ Two design rules shape the codebase:
    through `httpx.ASGITransport`, so there is no TCP round-trip and no second
    cache to keep coherent.
 2. **T-API surfaces stay standard.** Anything non-standard — OPM readings, path
-   metadata, admin utilities — lives under separate `/internal/` and `/admin/`
-   prefixes, so a T-API client never meets a proprietary extension inside a
-   standard path.
+   metadata, admin utilities, runtime configuration, the transparent controller
+   — lives under separate `/internal/`, `/admin/`, `/config/` and
+   `/transparent/` prefixes, so a T-API client never meets a proprietary
+   extension inside a standard path.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module-level tour and
 [docs/API.md](docs/API.md) for the full endpoint reference.
@@ -529,6 +563,7 @@ files rather than editing it by hand (see
 |----------|----------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module tour, state ownership, request lifecycle |
 | [docs/API.md](docs/API.md) | Full REST + gNMI endpoint reference with payloads |
+| [docs/TRANSPARENT_CONTROLLER.md](docs/TRANSPARENT_CONTROLLER.md) | The transparent controller: data tree, ns-3-style paths, datastores, what-if, scenario |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every YAML field and CLI flag |
 | [docs/PHYSICS.md](docs/PHYSICS.md) | Model equations, citations and known limitations |
 | [docs/TAPI_COMPLIANCE.md](docs/TAPI_COMPLIANCE.md) | What is and is not T-API v2.6.0 compliant |
