@@ -7,6 +7,15 @@
 #   * grafana    — pre-provisioned with the Prometheus data source and
 #                  the dashboard from examples/grafana-dashboard.json.
 #
+# Each service sets `hostname` to its service name. Compose adds the service
+# name as a DNS alias only when it creates a container. Recreating the project
+# network — the ONOS overlay pins a subnet on this same default network, so
+# switching between the two files does that — reconnects existing containers
+# without those aliases, and Grafana/Prometheus then fail to resolve each
+# other (`lookup prometheus: no such host`). Docker re-registers the container
+# hostname on that reconnect, so the hostname is what keeps the service name
+# resolvable.
+#
 # Usage:
 #   docker compose up --build
 # then open:
@@ -33,6 +42,7 @@ services:
     # about the mismatch on every up.
     platform: linux/amd64
     container_name: twinlight
+    hostname: twin
     ports:
       - "8080:8080"   # REST (TAPI + /config + /metrics + /admin)
       - "50051:50051" # gNMI gRPC
@@ -73,6 +83,7 @@ services:
       dockerfile: Dockerfile
     image: twinlight-ui:latest
     container_name: twinlight-ui
+    hostname: ui
     environment:
       # URL the *browser* uses to reach the twin's REST API. The UI runs in
       # the visitor's browser, not on this docker network, so this must be a
@@ -90,6 +101,7 @@ services:
   prometheus:
     image: prom/prometheus:v3.13.1
     container_name: twinlight-prometheus
+    hostname: prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -111,6 +123,7 @@ services:
   grafana:
     image: grafana/grafana:13.1.1
     container_name: twinlight-grafana
+    hostname: grafana
     environment:
       # Override on the command line for any real deployment.
       GF_SECURITY_ADMIN_USER: admin
@@ -142,6 +155,7 @@ services:
   grafana-init:
     image: curlimages/curl:8.11.1
     container_name: twinlight-grafana-init
+    hostname: grafana-init
     depends_on:
       - grafana
     environment:
@@ -157,9 +171,16 @@ services:
         echo "waiting for grafana...";
         until curl -sf "$$GRAFANA_URL/api/health" >/dev/null 2>&1; do sleep 2; done;
         echo "waiting for dashboard provisioning...";
-        until curl -sf -u "$$GRAFANA_USER:$$GRAFANA_PASSWORD"
-        "$$GRAFANA_URL/api/dashboards/uid/$$DASHBOARD_UID" >/dev/null 2>&1;
-        do sleep 2; done;
+        while true; do
+          code=$$(curl -s -o /dev/null -w "%{http_code}" -u "$$GRAFANA_USER:$$GRAFANA_PASSWORD" "$$GRAFANA_URL/api/dashboards/uid/$$DASHBOARD_UID" || true);
+          case "$$code" in
+            200) break ;;
+            401|403)
+              echo "grafana rejected $$GRAFANA_USER (HTTP $$code); skipping star";
+              exit 0 ;;
+          esac;
+          sleep 2;
+        done;
         curl -sf -X POST -u "$$GRAFANA_USER:$$GRAFANA_PASSWORD"
         "$$GRAFANA_URL/api/user/stars/dashboard/uid/$$DASHBOARD_UID" >/dev/null
         && echo "starred dashboard $$DASHBOARD_UID"

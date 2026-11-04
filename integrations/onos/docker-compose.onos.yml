@@ -35,6 +35,10 @@ services:
       dockerfile: Dockerfile
     image: twinlight-tapi-adapter:latest
     container_name: twinlight-tapi-adapter
+    # Same reason as the base stack: Compose drops service-name DNS aliases
+    # when this overlay's subnet pin recreates the default network. The
+    # hostname is registered again on reconnect.
+    hostname: tapi-adapter
     environment:
       TWIN_BASE_URL: "http://twin:8080"
       # Modulation the adapter asks the twin for. ONOS's T-API 2.1 connectivity
@@ -67,6 +71,7 @@ services:
     image: onosproject/onos:2.7-latest
     platform: linux/amd64
     container_name: twinlight-onos
+    hostname: onos
     environment:
       # Apps activated at boot. ONOS resolves each to org.onosproject.<name>.
       #   drivers        — base driver subsystem
