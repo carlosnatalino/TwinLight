@@ -160,7 +160,8 @@ def run(http: httpx.Client, keep: bool) -> None:
     params = odc.leaves(f"{link}/ElementList/*", content="config")
     shown = [
         leaf for leaf in params
-        if leaf["path"].rsplit("/", 1)[-1] in ("loss_coef", "con_in", "gain_target", "p_max")
+        if leaf["path"].rsplit("/", 1)[-1]
+        in ("loss_coef", "con_in", "gain_target", "p_max", "nf0")
     ]
     print(f"   it has {len(params)} writable parameters, among them:")
     for leaf in shown[:8]:
@@ -170,10 +171,17 @@ def run(http: httpx.Client, keep: bool) -> None:
 
     heading(5, "Stage a maintenance change in the candidate datastore")
     # Span ageing: 1 dB more loss across the link, spread over its fibers in
-    # proportion to their length; a pump degraded by 6 dB on its last
-    # amplifier; and a stricter admission margin network-wide.
+    # proportion to their length; a degraded pump on its last amplifier; and
+    # a stricter admission margin network-wide. Under GNPy the pump loses
+    # 6 dB of output-power ceiling (p_max), which saturates the amplifier.
+    # The EGN backend exposes only the noise figure, so there the same fault
+    # shows as a 2 dB higher nf0.
+    edfa_schema = schema["ElementList"]["entry-by-kind"].get("Edfa", {})
+    pump_attr, pump_delta = (
+        ("p_max", -6.0) if edfa_schema.get("p_max", {}).get("config") else ("nf0", 2.0)
+    )
     fibers = odc.leaves(f"{link}/ElementList/*/$Fiber/loss_coef")
-    amps = odc.leaves(f"{link}/ElementList/*/$Edfa/p_max")
+    amps = odc.leaves(f"{link}/ElementList/*/$Edfa/{pump_attr}")
     link_km = odc.value(f"{link}/length_km")
     edits: list[dict[str, Any]] = [
         {"operation": "replace", "target": f["canonical"],
@@ -181,7 +189,7 @@ def run(http: httpx.Client, keep: bool) -> None:
         for f in fibers
     ]
     edits.append({"operation": "replace", "target": amps[-1]["canonical"],
-                  "value": {"p_max": amps[-1]["value"] - 6}})
+                  "value": {pump_attr: amps[-1]["value"] + pump_delta}})
     edits.append({"operation": "merge", "target": "/Config/rmsa",
                   "value": {"qot_margin_db": 2.0}})
     status = odc.yang_patch(edits, patch_id="maintenance-window", datastore="candidate")

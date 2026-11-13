@@ -351,8 +351,9 @@ plays an orchestrator against a running twin:
 2. inventory the network through the transparent tree — no T-API objects;
 3. provision a lightpath through T-API, the abstracted interface;
 4. look at it, and every parameter of its first link, transparently;
-5. stage span ageing (+1 dB over the link), a pump degraded by 6 dB, and a
-   stricter admission margin in the candidate;
+5. stage span ageing (+1 dB over the link), a degraded amplifier pump, and a
+   stricter admission margin in the candidate. Under GNPy the pump loses 6 dB
+   of `p_max`; EGN has no `p_max`, so there the fault is a 2 dB higher `nf0`;
 6. validate with the QoT what-if and compare candidate with running;
 7. commit guarded by the running ETag — losing a race to a concurrent
    `/config/set` write, then retrying;
