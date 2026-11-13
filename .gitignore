@@ -12,6 +12,10 @@ __pycache__/
 # Runtime snapshots (admin /admin/snapshot output, accidental test artifacts)
 snapshots/
 
+# API responses saved while debugging (e.g. a T-API context dump). No JSON
+# belongs at the repository root; anchored, so nested JSON is unaffected.
+/*.json
+
 examples/gnpy-data/*.json
 
 brand-workshop/
