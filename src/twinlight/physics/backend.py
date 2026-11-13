@@ -52,6 +52,9 @@ class ElementStub:
     uid: str
     type: str
     params: Any = None
+    # The element's equipment-library variety, like a GNPy element's
+    # ``type_variety``; ``None`` for transceivers, which carry none.
+    type_variety: str | None = None
 
 
 class PhysicalBackend(Protocol):

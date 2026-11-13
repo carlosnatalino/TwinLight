@@ -198,6 +198,24 @@ class TestParityWithInProcessGnpy:
             remote.write_attribute("no such element", "loss_coef", 0.2)
         assert remote.read_attribute(FIBER, "loss_coef") == pytest.approx(0.2)
 
+    def test_capture_and_restore(self, remote_config) -> None:
+        remote = GnpyApiBackend(remote_config)
+        path = remote.compute_path(SRC, DST)
+        nominal = _baseline(remote, path)
+        token = remote.capture_attribute(FIBER, "loss_coef")
+
+        remote.restore_attribute(FIBER, "loss_coef", token)
+        assert remote._journal == []  # unchanged: nothing sent
+
+        remote.write_attribute(FIBER, "loss_coef", 0.3)
+        remote.restore_attribute(FIBER, "loss_coef", token)
+        assert remote.read_attribute(FIBER, "loss_coef") == token
+        assert _baseline(remote, path) == nominal
+
+        # the service writes numbers only, so an unset value cannot come back
+        with pytest.raises(ParamValidationError, match="cannot unset"):
+            remote.restore_attribute(FIBER, "loss_coef", None)
+
 
 class TestFailuresAndRedesign:
     def test_failed_fiber_is_routed_around(self, coronet_config, service) -> None:

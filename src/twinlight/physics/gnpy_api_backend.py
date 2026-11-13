@@ -115,6 +115,7 @@ class GnpyApiBackend:
             el["uid"]: ElementStub(
                 uid=el["uid"],
                 type=el["type"],
+                type_variety=el.get("type-variety"),
                 params=(
                     SimpleNamespace(length=el["length-km"] * 1000.0)
                     if "length-km" in el else None
@@ -169,7 +170,11 @@ class GnpyApiBackend:
         if not self.available:
             return None
         params = get_params(modulation_format)
-        # The comb gnpy_adapter.compute_path_baseline propagates in-process.
+        # The comb gnpy_adapter.compute_path_baseline propagates in-process,
+        # 88 channels at 190.95-195.30 THz, in the gnpy 2 convention of the
+        # gnpy-api service (gnpy 2.14.1): its first channel sits one slot
+        # above f-min. When the service moves to gnpy 3, send the adapter's
+        # _F_MIN_HZ/_F_MAX_HZ instead, or it launches 89 channels.
         request = {
             "path": path_uids,
             "spectrum": {
@@ -210,6 +215,28 @@ class GnpyApiBackend:
         if uid not in self._attributes:
             raise KeyError(f"Unknown GNPy element UID: {uid!r}")
         return dict(self._attributes[uid])
+
+    def capture_attribute(self, uid: str, attr: str) -> Any:
+        """The token is the attribute's value in user units, ``None`` if unset.
+
+        In-process GNPy captures the raw stored state; over the API the user
+        value is all there is, so a restore writes it back through the same
+        unit conversion, which may differ from the stored value in the last
+        bit.
+        """
+        return self.read_attribute(uid, attr)
+
+    def restore_attribute(self, uid: str, attr: str, token: Any) -> None:
+        if self.read_attribute(uid, attr) == token:
+            return  # unchanged: no request, nothing to journal
+        if token is None:
+            # gnpy-api writes numbers only; it cannot put back an attribute
+            # GNPy loaded as unset (e.g. an amplifier's tilt).
+            raise ParamValidationError(
+                f"{self.uid_map[uid].type} {uid!r}: {attr!r} was unset at "
+                "capture and gnpy-api cannot unset an attribute"
+            )
+        self._patch(uid, {attr: token})
 
     def supported_attributes(self) -> dict[str, dict[str, dict[str, Any]]]:
         return self._schema

@@ -21,7 +21,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, status
 
-from twinlight.physics.element_params import ParamValidationError
+from twinlight.physics.backend import ParamValidationError
 from twinlight.state.parameter_ops import (
     ParameterChange,
     ParameterOpError,
