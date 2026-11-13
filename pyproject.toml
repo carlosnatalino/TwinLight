@@ -84,6 +84,7 @@ exclude-newer = "30 days"
 twinlight = "twinlight.main:main"
 twinlight-client = "twinlight_client.cli:main"
 twinlight-soft-failure = "twinlight_client.soft_failure:main"
+twinlight-transparent = "twinlight_client.transparent_cli:main"
 twinlight-fetch-examples = "twinlight.example_data:main"
 
 [tool.setuptools.packages.find]

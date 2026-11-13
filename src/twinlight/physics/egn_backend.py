@@ -334,18 +334,62 @@ class EgnBackend:
             return {attr: self.read_attribute(uid, attr) for attr in _EGN_EDFA_ATTRS}
         return {}
 
+    def capture_attribute(self, uid: str, attr: str) -> Any:
+        """The span's override record (``None`` = as loaded) is the token:
+        both writable attributes of a span live in it."""
+        self.read_attribute(uid, attr)  # same KeyError / validation errors
+        loc = self._egn_topo.gnpy_uid_index[uid]
+        if loc.link_id is None or loc.span_index is None:
+            return None
+        return self._span_overrides.get((loc.link_id, loc.span_index))
+
+    def restore_attribute(self, uid: str, attr: str, token: Any) -> None:
+        loc = self._egn_topo.gnpy_uid_index.get(uid)
+        if loc is None:
+            raise KeyError(f"Unknown element UID: {uid!r}")
+        if loc.link_id is None or loc.span_index is None:
+            return
+        key = (loc.link_id, loc.span_index)
+        span = self._egn_topo.links[loc.link_id].spans[loc.span_index]
+        loaded = _SpanFields(
+            attenuation_db_per_km=span.attenuation_db_per_km,
+            noise_figure_db=span.noise_figure_db,
+        )
+        recorded = token or loaded
+        # Restore only the field this attribute owns: the span's other
+        # attribute may have been written since the capture.
+        base = self._span_overrides.get(key) or loaded
+        restored = _SpanFields(
+            attenuation_db_per_km=(
+                recorded.attenuation_db_per_km if attr == "loss_coef"
+                else base.attenuation_db_per_km
+            ),
+            noise_figure_db=(
+                recorded.noise_figure_db if attr == "nf0"
+                else base.noise_figure_db
+            ),
+        )
+        if restored == loaded:
+            self._span_overrides.pop(key, None)
+        else:
+            self._span_overrides[key] = restored
+        self._span_inputs_cache.pop(key, None)
+
     def supported_attributes(self) -> dict[str, dict[str, dict[str, Any]]]:
         return {
             "Fiber": {
                 "loss_coef": {"type": "float", "unit": "dB/km",
-                              "min": 0.0, "max": 2.0},
+                              "min": 0.0, "max": 2.0,
+                              "description": "Span attenuation coefficient"},
                 "att_in": {"type": "float", "unit": "dB",
                            "min": 0.0, "max": 20.0,
-                           "note": "accepted but no-op under EGN"},
+                           "note": "accepted but no-op under EGN",
+                           "description": "Padding attenuation (no-op under EGN)"},
             },
             "Edfa": {
                 "nf0": {"type": "float", "unit": "dB",
-                        "min": 3.0, "max": 12.0},
+                        "min": 3.0, "max": 12.0,
+                        "description": "Amplifier noise figure"},
             },
             "Roadm": {},  # no writable params under EGN
         }

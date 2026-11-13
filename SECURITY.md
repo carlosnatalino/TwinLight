@@ -3,9 +3,10 @@
 ## Scope and threat model
 
 TwinLight is a research and laboratory tool. Neither the REST API nor the gNMI
-interface implements authentication, authorization or TLS, and the `/admin/` and
-`/config/` planes let any client with network access mutate twin state and write
-snapshot files.
+interface implements authentication, authorization or TLS, and the `/admin/`,
+`/config/` and `/transparent/` planes let any client with network access mutate
+twin state and write snapshot files. `/transparent/` in particular can change
+every parameter the twin models.
 
 **Do not expose a TwinLight instance to an untrusted network.** Run it on
 localhost, inside a lab network, or behind an authenticating reverse proxy. The
@@ -17,8 +18,8 @@ experiment.
 Within that model, the following are *not* considered vulnerabilities:
 
 - Unauthenticated access to any endpoint.
-- State mutation through `/config/` or `/admin/` by any client that can reach
-  the port.
+- State mutation through `/config/`, `/transparent/` or `/admin/` by any client
+  that can reach the port.
 - Denial of service caused by requesting propagation over a very large topology.
 
 ## Reporting a vulnerability

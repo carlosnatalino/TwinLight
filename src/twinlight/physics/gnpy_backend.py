@@ -111,6 +111,22 @@ class GnpyBackend:
             raise KeyError(f"Unknown GNPy element UID: {uid!r}")
         return read_all(el)
 
+    def capture_attribute(self, uid: str, attr: str) -> Any:
+        from twinlight.physics.element_params import capture_attr
+
+        el = self.uid_map.get(uid)
+        if el is None:
+            raise KeyError(f"Unknown GNPy element UID: {uid!r}")
+        return capture_attr(el, attr)
+
+    def restore_attribute(self, uid: str, attr: str, token: Any) -> None:
+        from twinlight.physics.element_params import restore_attr
+
+        el = self.uid_map.get(uid)
+        if el is None:
+            raise KeyError(f"Unknown GNPy element UID: {uid!r}")
+        restore_attr(el, attr, token)
+
     def supported_attributes(self) -> dict[str, dict[str, dict[str, Any]]]:
         from twinlight.physics.element_params import schema
 

@@ -20,6 +20,8 @@ mapping at the bottom of this module.
 
 from __future__ import annotations
 
+import copy
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -55,7 +57,11 @@ class AttrSpec:
         reader: ``element → user value``, replacing ``read_path`` for an
             attribute that is derived rather than stored (``nf_offset``).
         writer: ``(element, coerced value) → None``, replacing
-            ``write_paths`` for the same kind of attribute.
+            ``write_paths`` for the same kind of attribute. When both are
+            given, ``writer`` performs writes and ``write_paths`` still names
+            the storage that :func:`capture_attr` snapshots.
+        description: One line for self-describing schemas (the transparent
+            controller's ``/transparent/schema``).
     """
 
     py_type: type
@@ -68,6 +74,7 @@ class AttrSpec:
     display: Callable[[Any], Any] = field(default=lambda v: v)
     reader: Callable[[Any], Any] | None = None
     writer: Callable[[Any, Any], None] | None = None
+    description: str = ""
 
 
 def _walk(obj: Any, dotted: str) -> tuple[Any, str]:
@@ -121,6 +128,66 @@ def _write_nf_offset(element: Any, offset: float) -> None:
     setattr(element, _NF_OFFSET, offset)
 
 
+# Fiber PMD coefficient. GNPy stores it in s/√m (``params._pmd_coef``, no
+# setter) and ``Fiber.pmd`` reads it on every propagation; users think in
+# ps/√km, as in ITU-T G.652 datasheets. 1 ps/√km = 1e-12 s / √(1000 m).
+_PS_PER_SQRT_KM = 1e-12 / math.sqrt(1000.0)
+
+
+def _pmd_coef_display(v: Any) -> float:
+    return float(v) / _PS_PER_SQRT_KM
+
+
+def _pmd_coef_coerce(v: Any) -> float:
+    return float(v) * _PS_PER_SQRT_KM
+
+
+# Fiber chromatic dispersion. GNPy stores it in s/m/m (``params._dispersion``,
+# an ndarray) and reads it on every propagation, for the accumulated CD and
+# for beta2 in the NLI integral. A scalar is shown in ps/(nm·km): 1 ps/(nm·km)
+# = 1e-12 s / (1e-9 m · 1e3 m) = 1e-6 s/m². A frequency-dependent profile
+# (``dispersion_per_frequency`` in the topology) has no single scalar to
+# show or set, so it reads as ``None`` and refuses writes rather than
+# silently flattening the profile.
+_PS_PER_NM_KM = 1e-6
+
+
+def _read_dispersion(element: Any) -> float | None:
+    value = np.asarray(element.params.dispersion)
+    if value.size != 1:
+        return None
+    return float(value.flat[0]) / _PS_PER_NM_KM
+
+
+def _write_dispersion(element: Any, value: float) -> None:
+    if np.asarray(element.params.dispersion).size != 1:
+        raise ParamValidationError(
+            f"Fiber {element.uid!r}: dispersion is frequency-dependent in the "
+            f"topology, so it cannot be set as a single value"
+        )
+    element.params._dispersion = np.asarray(float(value) * _PS_PER_NM_KM)
+
+
+# ROADM per-channel power target. ``designed_network`` copies the ROADM-level
+# target into a per-egress-degree dict (``per_degree_pch_out_dbm``, the same
+# object as ``params.per_degree_pch_out_db``), and ``Roadm.propagate`` reads
+# the per-degree value first (``get_per_degree_ref_power`` /
+# ``get_per_degree_power``). Writing only the ROADM-level target would
+# therefore change nothing on a designed network. The degrees still at the
+# old ROADM-level value inherited it and move with it; a degree the topology
+# equalises to a target of its own keeps that target.
+
+
+def _write_roadm_target(element: Any, value: float) -> None:
+    previous = element.target_pch_out_dbm
+    element.params.target_pch_out_db = value
+    element.target_pch_out_dbm = value
+    per_degree = element.per_degree_pch_out_dbm
+    for degree, target in list(per_degree.items()):
+        if previous is not None and target == previous:
+            per_degree[degree] = value  # in place: the dict is shared
+
+
 # ---------------------------------------------------------------------------
 # ALLOW-LIST
 # ---------------------------------------------------------------------------
@@ -140,6 +207,7 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
             unit="dB/km",
             coerce=_scalar_loss_coef_coerce,
             display=_scalar_loss_coef_display,
+            description="Attenuation coefficient at the reference frequency",
         ),
         "att_in": AttrSpec(
             py_type=float,
@@ -150,6 +218,56 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
             unit="dB",
             coerce=float,
             display=float,
+            description="Padding attenuation at the span input",
+        ),
+        # Connector losses, applied by ``Fiber.propagate`` before and after
+        # the span. ``designed_network`` fills them from the equipment
+        # library's ``Span`` defaults when the topology leaves them unset.
+        "con_in": AttrSpec(
+            py_type=float,
+            read_path="params.con_in",
+            write_paths=("params.con_in",),
+            min_value=0.0,
+            max_value=10.0,
+            unit="dB",
+            coerce=float,
+            display=float,
+            description="Input connector loss",
+        ),
+        "con_out": AttrSpec(
+            py_type=float,
+            read_path="params.con_out",
+            write_paths=("params.con_out",),
+            min_value=0.0,
+            max_value=10.0,
+            unit="dB",
+            coerce=float,
+            display=float,
+            description="Output connector loss (includes the library's EOL margin)",
+        ),
+        "pmd_coef": AttrSpec(
+            py_type=float,
+            read_path="params._pmd_coef",
+            write_paths=("params._pmd_coef",),
+            min_value=0.0,
+            max_value=2.0,
+            unit="ps/√km",
+            coerce=_pmd_coef_coerce,
+            display=_pmd_coef_display,
+            description="PMD coefficient",
+        ),
+        "dispersion": AttrSpec(
+            py_type=float,
+            read_path="params._dispersion",
+            write_paths=("params._dispersion",),
+            min_value=-150.0,
+            max_value=150.0,
+            unit="ps/(nm·km)",
+            coerce=float,
+            display=float,
+            reader=_read_dispersion,
+            writer=_write_dispersion,
+            description="Chromatic dispersion at the reference frequency",
         ),
     },
     # The operational knobs are read from the element instance, which is what
@@ -168,6 +286,7 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
             unit="dB",
             coerce=float,
             display=float,
+            description="Operating gain",
         ),
         "tilt_target": AttrSpec(
             py_type=float,
@@ -178,6 +297,7 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
             unit="dB",
             coerce=float,
             display=float,
+            description="Gain tilt across the amplifier band (unset unless the topology or design sets it)",
         ),
         "out_voa": AttrSpec(
             py_type=float,
@@ -188,6 +308,7 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
             unit="dB",
             coerce=float,
             display=float,
+            description="Output variable optical attenuator",
         ),
         "nf_offset": AttrSpec(
             py_type=float,
@@ -200,18 +321,61 @@ ALLOWED: dict[type, dict[str, AttrSpec]] = {
             display=float,
             reader=_read_nf_offset,
             writer=_write_nf_offset,
+            description="Frequency-flat offset added to the modelled noise figure",
+        ),
+        # Input VOA, applied by ``Edfa.propagate`` before the gain stage.
+        "in_voa": AttrSpec(
+            py_type=float,
+            read_path="in_voa",
+            write_paths=("operational.in_voa", "in_voa"),
+            min_value=0.0,
+            max_value=20.0,
+            unit="dB",
+            coerce=float,
+            display=float,
+            description="Input variable optical attenuator",
+        ),
+        # Total output power ceiling. ``Edfa.interpol_params`` caps the
+        # effective gain at ``p_max - P_in`` on every propagation, so lowering
+        # it saturates the amplifier — the signature of a failing pump.
+        "p_max": AttrSpec(
+            py_type=float,
+            read_path="params.p_max",
+            write_paths=("params.p_max",),
+            min_value=0.0,
+            max_value=30.0,
+            unit="dBm",
+            coerce=float,
+            display=float,
+            description="Maximum total output power (saturation)",
+        ),
+        "pmd": AttrSpec(
+            py_type=float,
+            read_path="params.pmd",
+            write_paths=("params.pmd",),
+            min_value=0.0,
+            max_value=10.0,
+            unit="ps",
+            coerce=lambda v: float(v) * 1e-12,
+            display=lambda v: float(v) * 1e12,
+            description="Differential group delay added by the amplifier",
         ),
     },
     Roadm: {
         "target_pch_out_db": AttrSpec(
             py_type=float,
             read_path="params.target_pch_out_db",
-            write_paths=("params.target_pch_out_db", "target_pch_out_dbm"),
+            write_paths=(
+                "params.target_pch_out_db", "target_pch_out_dbm", "per_degree_pch_out_dbm",
+            ),
             min_value=-25.0,
             max_value=0.0,
             unit="dBm",
             coerce=float,
             display=float,
+            writer=_write_roadm_target,
+            description="Per-channel output power target (and that of every "
+                        "degree inheriting it)",
         ),
     },
 }
@@ -309,6 +473,50 @@ def write_attr(element: Any, attr: str, value: Any) -> Any:
     return coerced
 
 
+def capture_attr(element: Any, attr: str) -> Any:
+    """Snapshot an attribute's internal state, for :func:`restore_attr`.
+
+    The token is opaque. It holds the raw stored values (deep-copied, so a
+    later in-place change cannot reach it) rather than the user-facing value,
+    which is what lets a restore put back an attribute that was *unset* — an
+    amplifier tilt GNPy loaded as ``None`` cannot be written back through
+    :func:`write_attr`, which takes numbers only.
+    """
+    spec = specs_for(element).get(attr)
+    if spec is None:
+        raise ParamValidationError(
+            f"{type(element).__name__} {element.uid!r}: "
+            f"attribute {attr!r} is not exposed"
+        )
+    if not spec.write_paths:
+        # A derived attribute (nf_offset): its writer is its own inverse.
+        return ("value", spec.reader(element) if spec.reader else None)
+    values = []
+    for path in spec.write_paths:
+        parent, leaf = _walk(element, path)
+        values.append(copy.deepcopy(getattr(parent, leaf)))
+    return ("paths", tuple(values))
+
+
+def restore_attr(element: Any, attr: str, token: Any) -> None:
+    """Put back the state :func:`capture_attr` recorded. No validation."""
+    spec = specs_for(element)[attr]
+    kind, payload = token
+    if kind == "value":
+        assert spec.writer is not None
+        spec.writer(element, payload)
+        return
+    for path, value in zip(spec.write_paths, payload, strict=True):
+        parent, leaf = _walk(element, path)
+        current = getattr(parent, leaf, None)
+        if isinstance(current, dict) and isinstance(value, dict):
+            # In place, so objects sharing the dict see the restore too.
+            current.clear()
+            current.update(copy.deepcopy(value))
+        else:
+            setattr(parent, leaf, copy.deepcopy(value))
+
+
 def schema() -> dict[str, dict[str, dict[str, Any]]]:
     """Machine-readable description of the allow-list, for GET /config.
 
@@ -323,6 +531,7 @@ def schema() -> dict[str, dict[str, dict[str, Any]]]:
                 "unit": spec.unit,
                 "min": spec.min_value,
                 "max": spec.max_value,
+                "description": spec.description,
             }
             for attr, spec in attrs.items()
         }

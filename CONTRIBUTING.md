@@ -51,7 +51,7 @@ v2.6.0 — standard paths, standard hyphenated JSON keys, RESTCONF error bodies.
 
 Anything the standard does not cover (OPM readings, path metadata, admin
 utilities, diagram synthesis) belongs in a separate module on a separate URL
-prefix: `/internal/`, `/admin/`, `/config/`. Never mix a proprietary field into
+prefix: `/internal/`, `/admin/`, `/config/`, `/transparent/`. Never mix a proprietary field into
 a standard T-API response — a client that trusts the schema will break on it.
 
 "Standard" means *present in the v2.6.0 YANG*, not merely standard-looking.

@@ -94,5 +94,7 @@ spans. See [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir).
 | Event-driven simulation clock | The transient layer is evaluated at wall-clock time |
 | Soft failures in the web UI | Driven by the `twinlight-soft-failure` client only |
 | T-API notification, OAM, fault and virtual-network modules | Not implemented; see [TAPI_COMPLIANCE.md](TAPI_COMPLIANCE.md) |
-| gNMI `Get` and `Set` | Return `UNIMPLEMENTED`; `Subscribe` is supported |
+| gNMI `Get` and `Set` | Return `UNIMPLEMENTED`; `Subscribe` is supported. The transparent controller's tree (`/transparent`) is the natural model for them to serve |
+| Transparent controller: YANG module, locking, confirmed commit | The tree is described by a JSON schema (`/transparent/schema`), not YANG; the candidate is shared without a lock (use `If-Match`); there is no confirmed-commit rollback timer, since the twin keeps no clock for parameter changes |
+| Transparent controller in the web UI | Driven through REST, `twinlight-transparent` or `TransparentClient` only |
 | Authentication and TLS | None on any interface; see [SECURITY.md](../SECURITY.md) |

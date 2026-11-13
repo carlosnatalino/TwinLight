@@ -64,11 +64,11 @@ class ParameterPathError(ValueError):
 _GLOB_META = set("*?[")
 
 
-def _split_outside_quotes(text: str, sep: str) -> list[str]:
+def split_outside_quotes(text: str, sep: str) -> list[str]:
     """Split ``text`` on ``sep`` except inside double-quoted spans.
 
     Quote characters and escapes are preserved in the returned pieces;
-    ``_parse_term`` is what interprets them.
+    ``parse_term`` is what interprets them.
     """
     parts: list[str] = []
     buf: list[str] = []
@@ -113,7 +113,7 @@ def _unquote(raw: str) -> str:
     return "".join(out)
 
 
-def _quote(value: str) -> str:
+def quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
@@ -136,9 +136,9 @@ class Term:
 
     def __str__(self) -> str:
         if self.kind == "literal":
-            return _quote(self.pattern)
+            return quote(self.pattern)
         if self.kind == "regex":
-            return "~" + _quote(self.pattern)
+            return "~" + quote(self.pattern)
         return self.pattern
 
 
@@ -159,7 +159,7 @@ class Selector:
         return "|".join(str(t) for t in self.terms)
 
 
-def _parse_term(raw: str) -> Term:
+def parse_term(raw: str) -> Term:
     raw = raw.strip()
     if not raw:
         raise ParameterPathError("Empty selector term")
@@ -190,7 +190,7 @@ def _parse_term(raw: str) -> Term:
 
 
 def parse_selector(raw: str) -> Selector:
-    return Selector(tuple(_parse_term(t) for t in _split_outside_quotes(raw, "|")))
+    return Selector(tuple(parse_term(t) for t in split_outside_quotes(raw, "|")))
 
 
 # -- Paths -------------------------------------------------------------------
@@ -242,7 +242,7 @@ def parse(text: str) -> ParameterPath:
         raise ParameterPathError(
             f"A parameter path starts with '/', e.g. /Fiber/*/loss_coef: {text!r}"
         )
-    segments = _split_outside_quotes(text[1:], "/")
+    segments = split_outside_quotes(text[1:], "/")
     if any(not s.strip() for s in segments):
         raise ParameterPathError(f"Empty segment in parameter path {text!r}")
 
@@ -301,7 +301,7 @@ class ParameterRef:
     @property
     def path(self) -> str:
         """The fully-qualified path naming just this parameter."""
-        return f"/{self.kind}/{_quote(self.uid)}/{self.attribute}"
+        return f"/{self.kind}/{quote(self.uid)}/{self.attribute}"
 
 
 def _matching_services(ctx: TapiContext, sel: Selector) -> set[str]:

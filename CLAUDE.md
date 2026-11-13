@@ -14,6 +14,7 @@ repository.
 | Which paper does this equation come from? | [docs/PHYSICS.md](docs/PHYSICS.md) |
 | Is this endpoint T-API compliant? | [docs/TAPI_COMPLIANCE.md](docs/TAPI_COMPLIANCE.md) |
 | Is this a known issue, and is a fix planned? | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| How does the transparent controller (`/transparent`) work? | [docs/TRANSPARENT_CONTROLLER.md](docs/TRANSPARENT_CONTROLLER.md) |
 | How do I set up, test and submit a change? | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Orientation
@@ -22,7 +23,9 @@ TwinLight is an optical network digital twin: it loads a GNPy topology,
 computes a per-lightpath QoT baseline (GNPy split-step propagation or a
 closed-form GN/EGN kernel), layers four analytical models of time-varying
 impairments on top, and serves the result over T-API v2.6.0 REST, gNMI streaming
-and Prometheus.
+and Prometheus — and, as a *fully transparent* optical domain controller, exposes
+every element and parameter under `/transparent` (ns-3-style paths, RESTCONF-shaped
+datastores), independently of T-API objects.
 
 ```
 twinlight-ui (React SPA)          port 5173
@@ -36,7 +39,8 @@ gNMI gRPC server                  port 50051 ← stateless adapter
 
 Packages: `src/twinlight` (backend), `src/twinlight_client` (client library and
 CLIs), `twinlight-ui/` (React SPA). Console scripts: `twinlight`,
-`twinlight-client`, `twinlight-soft-failure`, `twinlight-fetch-examples`.
+`twinlight-client`, `twinlight-soft-failure`, `twinlight-transparent`,
+`twinlight-fetch-examples`.
 
 ## Hard constraints
 
@@ -46,8 +50,8 @@ These are the ones that are expensive to discover by breaking them.
    `api/connectivity.py`, `api/path_computation.py` and `api/equipment.py`
    must implement only T-API v2.6.0 — standard paths, standard hyphenated JSON
    keys. Anything proprietary (OPM, path metadata, admin, diagrams, runtime
-   config) goes in a separate module under `/internal/`, `/admin/` or
-   `/config/`. Never add a non-standard field to a `/data/` response.
+   config, the transparent controller) goes in a separate module under
+   `/internal/`, `/admin/`, `/config/` or `/transparent/`. Never add a non-standard field to a `/data/` response.
 
    "Standard" means *present in the v2.6.0 YANG*, not merely
    standard-looking. Check the module before adding a key: a plausible name
@@ -137,10 +141,18 @@ invalidate the right cache — `invalidate_baseline(uuid)` on service deletion,
 and the broader sweep on `/config/` parameter changes and link failure.
 Forgetting this produces stale OPM that looks plausible, which is the worst
 possible failure mode for a twin. Anything that changes element parameters at
-runtime — the `/config/parameters` batches included — must write through
-`apply_element_overrides` so it inherits that invalidation. The twin keeps no
-clock for parameter changes: gradual drift (soft failures) belongs in the
-`twinlight-soft-failure` client, which only sends concrete values.
+runtime — the `/config/parameters` batches and `/transparent` writes included —
+must write through `apply_element_overrides` so it inherits that invalidation.
+The same method bumps the running revision (the transparent controller's ETag)
+and captures the startup value its reverts restore; twin-config changes go
+through `apply_twin_overrides` for the same reasons.
+
+A new runtime-writable attribute needs a case in
+`tests/test_physics/test_element_params_propagation.py` proving that
+propagation reads it: a knob that is accepted but never read is worse than
+none. The twin keeps no clock for parameter changes: gradual drift (soft
+failures) belongs in the `twinlight-soft-failure` client, which only sends
+concrete values.
 
 ## SIP ↔ GNPy UID mapping
 

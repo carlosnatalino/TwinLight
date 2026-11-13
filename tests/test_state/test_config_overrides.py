@@ -224,3 +224,63 @@ class TestTwinOverridesModule:
 
         with pytest.raises(TwinOverrideError):
             validate({"transients.phase_noise.enabled": "yes"})
+
+
+class TestRuntimeSections:
+    """Every live-read field of transients, rmsa and fec is writable; the
+    constraints come from the pydantic model, not a restated copy."""
+
+    def test_allow_list_covers_the_runtime_sections(self) -> None:
+        from twinlight.state.twin_overrides import INERT, TWIN_ALLOWED, iter_leaves
+
+        runtime = {
+            key for key, _ in iter_leaves()
+            if key.split(".")[0] in ("transients", "rmsa", "fec")
+        }
+        assert set(TWIN_ALLOWED) == runtime - set(INERT)
+        assert not any(k.startswith(("gnpy.", "spectrum.", "physics.")) for k in TWIN_ALLOWED)
+
+    def test_transient_parameter_is_live(self, gnpy_context: TapiContext) -> None:
+        gnpy_context.apply_twin_overrides({"transients.polarization.pdl_per_roadm_db": 1.2})
+        assert gnpy_context._config.transients.polarization.pdl_per_roadm_db == 1.2
+
+    def test_field_constraint_from_the_model(self, gnpy_context: TapiContext) -> None:
+        with pytest.raises(TwinOverrideError, match=r"pmd_drift_amplitude=1\.5 must be <= 1"):
+            gnpy_context.apply_twin_overrides(
+                {"transients.polarization.pmd_drift_amplitude": 1.5}
+            )
+
+    def test_literal_choices_enforced(self, gnpy_context: TapiContext) -> None:
+        with pytest.raises(TwinOverrideError, match="ase_distribution"):
+            gnpy_context.apply_twin_overrides(
+                {"transients.polarization.ase_distribution": "sideways"}
+            )
+        gnpy_context.apply_twin_overrides({"transients.polarization.ase_distribution": "rx"})
+        assert gnpy_context._config.transients.polarization.ase_distribution == "rx"
+
+    def test_cross_field_rule_sees_the_whole_batch(
+        self, gnpy_context: TapiContext,
+    ) -> None:
+        """t=20 alone breaks the Singleton bound; with k=200 it does not."""
+        with pytest.raises(TwinOverrideError, match="Singleton"):
+            gnpy_context.apply_twin_overrides({"fec.hard_decision.t": 20})
+        assert gnpy_context._config.fec.hard_decision.t == 8  # nothing written
+        gnpy_context.apply_twin_overrides(
+            {"fec.hard_decision.k": 200, "fec.hard_decision.t": 20}
+        )
+        assert gnpy_context._config.fec.hard_decision.t == 20
+
+    def test_inert_field_is_refused_with_the_reason(
+        self, gnpy_context: TapiContext,
+    ) -> None:
+        with pytest.raises(TwinOverrideError, match="not read by any model"):
+            gnpy_context.apply_twin_overrides(
+                {"transients.edfa_reservoir.solver_method": "LSODA"}
+            )
+
+    def test_errors_are_collected_not_first_only(self) -> None:
+        from twinlight.state.twin_overrides import validate
+
+        with pytest.raises(TwinOverrideError) as exc:
+            validate({"rmsa.qot_margin_db": -1, "rmsa.k_shortest_paths": 0})
+        assert "qot_margin_db" in str(exc.value) and "k_shortest_paths" in str(exc.value)
