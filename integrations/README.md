@@ -6,6 +6,7 @@ subdirectory is self-contained: its own compose overlay, scripts and runbook.
 | Integration | What it does |
 |---|---|
 | [onos/](onos/) | ONOS as a hierarchical orchestrator over the twin, via ODTN / T-API. ONOS discovers the twin as an open line system, provisions lightpaths across it, and receives the twin's RMSA/QoT verdict — including refusals. |
+| [opendaylight/](opendaylight/) | *Investigation only, no code.* What OpenDaylight TransportPCE offers for an integration, why its T-API (northbound only, 2.4.0) cannot drive the twin the way ONOS does, and the viable options. |
 
 Nothing here is imported by `src/twinlight`, and nothing here may be. An
 integration adapts to the twin's published interfaces; when it needs the twin to
