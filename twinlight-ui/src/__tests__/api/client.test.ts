@@ -59,4 +59,21 @@ describe("TapiApiClient", () => {
     const result = await client.getAllOpm();
     expect(result.services).toEqual([]);
   });
+
+  it("computes ranked paths through the internal endpoint", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ path: [] }));
+    const input = {
+      "end-point": [
+        { "service-interface-point": { "service-interface-point-uuid": "a" } },
+        { "service-interface-point": { "service-interface-point-uuid": "z" } },
+      ],
+      "max-candidates": 2,
+    };
+    const result = await client.computePath(input);
+    expect(result.path).toEqual([]);
+    const [url, init] = mockFetch.mock.calls[0];
+    // T-API v2.6.0 has no compute-path RPC; the ranked view is internal.
+    expect(url).toBe("http://localhost:8080/internal/compute-path");
+    expect(JSON.parse(init.body)).toEqual(input);
+  });
 });

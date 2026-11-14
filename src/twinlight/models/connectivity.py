@@ -26,8 +26,21 @@ from __future__ import annotations
 import uuid as uuid_lib
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
+from twinlight.algorithms.path_constraints import (
+    ConstraintError,
+    PathConstraints,
+    parse_constraints,
+)
 from twinlight.models.common import (
     AdministrativeState,
     Direction,
@@ -137,12 +150,60 @@ class ConnectivityService(BaseModel):
     lifecycle_state: LifecycleState = Field(
         default=LifecycleState.PLANNED, alias="lifecycle-state"
     )
+    # T-API routing and topology constraints (tapi-path-computation
+    # groupings, used by tapi-connectivity). Kept as the JSON the client sent,
+    # so a GET echoes it verbatim; the supported subset is checked when the
+    # model is parsed and resolved against the topology at admission
+    # (algorithms/path_constraints.py).
+    routing_constraint: dict[str, Any] | None = Field(
+        default=None, alias="routing-constraint"
+    )
+    topology_constraint: list[dict[str, Any]] | None = Field(
+        default=None, alias="topology-constraint"
+    )
     # Internal only: RMSA, the physics backends and the Prometheus exporter
     # all read this, but it is never serialised under its own name. The
     # on-the-wire spelling is the end-point augment (see module docstring).
     modulation_format: ModulationFormat = Field(
         default=ModulationFormat.DP_QPSK, exclude=True
     )
+
+    @field_validator("topology_constraint", mode="before")
+    @classmethod
+    def _topology_constraint_as_list(cls, value: Any) -> Any:
+        """A one-entry list is also accepted spelled as a bare object."""
+        return [value] if isinstance(value, dict) else value
+
+    @model_validator(mode="after")
+    def _check_constraints(self) -> ConnectivityService:
+        """Refuse constraints the twin cannot honour when the request is parsed,
+        so an unsupported leaf is a validation error rather than ignored."""
+        try:
+            self.path_constraints()
+        except ConstraintError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    def path_constraints(self) -> PathConstraints:
+        """The supported subset of this service's constraints.
+
+        Raises:
+            ConstraintError: See :func:`parse_constraints`.
+        """
+        return parse_constraints(self.routing_constraint, self.topology_constraint)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_constraints(
+        self, handler: SerializerFunctionWrapHandler,
+    ) -> dict[str, Any]:
+        """Leave absent constraints out: a JSON ``null`` is not a valid
+        encoding of an absent YANG container or list (RFC 7951)."""
+        data: dict[str, Any] = handler(self)
+        for key in ("routing-constraint", "routing_constraint",
+                    "topology-constraint", "topology_constraint"):
+            if key in data and data[key] is None:
+                del data[key]
+        return data
 
     @model_validator(mode="before")
     @classmethod

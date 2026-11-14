@@ -106,6 +106,12 @@ Creation runs the full RMSA admission path — route, spectrum first-fit, QoT
 check against the format's required GSNR plus `rmsa.qot_margin_db`. A request
 that cannot be satisfied is refused rather than admitted with a warning.
 
+A service may carry the standard `routing-constraint` container and
+`topology-constraint` list; they constrain the route exactly as on a
+path-comp-service (see [Route constraints](#route-constraints)) and are echoed
+on reads. An unsupported constraint is a `422` naming the leaf; a constraint no
+route satisfies is a `409`.
+
 **Semantics of the mutating verbs:**
 
 | Verb | Behaviour |
@@ -156,11 +162,59 @@ all, rather than a zeroed one.
 | Method | Path |
 |--------|------|
 | GET | `/data/tapi-path-computation:path-computation-context` |
-| GET | `…/path-computation-service` |
-| POST | `…/path-computation-service/compute-path` |
+| GET | `…/path-comp-service` |
+| POST | `…/path-comp-service` |
+| GET | `…/path-comp-service={uuid}` |
+| DELETE | `…/path-comp-service={uuid}` |
+| GET | `…/path` |
+| GET | `…/path={uuid}` |
 
-Computes candidate paths without committing any state — useful for what-if
-analysis before creating a service.
+T-API v2.6.0 has no path-computation RPC: computation is a resource. Creating
+a `path-comp-service` computes up to `rmsa.k_shortest_paths` routes, best
+first, stores each as a `path` in the context and lists them in the service's
+`path` references. Nothing is allocated. Services and paths are what-if
+results: they are not part of snapshots, and a path keeps the route it had when
+it was computed.
+
+```json
+{
+  "tapi-path-computation:path-comp-service": [{
+    "end-point": [
+      {"local-id": "a", "service-interface-point": {"service-interface-point-uuid": "…"}},
+      {"local-id": "z", "service-interface-point": {"service-interface-point-uuid": "…"}}
+    ],
+    "routing-constraint": {"route-objective-function": "MIN_WORK_ROUTE_LATENCY"},
+    "topology-constraint": [
+      {"local-id": "1", "exclude-node": [{"topology-uuid": "…", "node-uuid": "…"}]}
+    ]
+  }]
+}
+```
+
+Each `path` carries its `link` and `node-edge-point` references in order and
+its fiber length as a `routing-constraint/cost-characteristic` named
+`fiber-length-km`. Paths are computed `UNIDIRECTIONAL`, from the first
+end-point to the second; `direction` defaults to that and other values are
+refused.
+
+#### Route constraints
+
+The same subset applies to `path-comp-service`, `connectivity-service` and
+`/internal/compute-path`. It is what GNPy's
+`gnpy.topology.request.compute_constrained_path` can express, plus exclusions,
+which are applied by searching a restricted view of the graph:
+
+| Leaf | Supported |
+|------|-----------|
+| `topology-constraint/include-node`, `include-link` | Yes — visited in the order given, all strict (GNPy `nodes_list`/`loose_list`). One of the two lists, in one entry |
+| `topology-constraint/exclude-node`, `exclude-link` | Yes — merged across entries; excluding an end-point's own node is refused |
+| `topology-constraint/explicit-route` | Yes — the includes must name every hop between the end-points' ROADMs; the route is not completed for you |
+| `routing-constraint/route-objective-function` | `MIN_WORK_ROUTE_LATENCY` only — routes are ranked by fiber length, and link latency is fiber length over a constant group velocity |
+| `routing-constraint/is-exclusive` | `true` only |
+| everything else (diversity, max-allowed-cost/hops/delay, cost/latency/risk characteristics, include/exclude topology, path and NEP, partitions, path sets) | Refused with a `422` naming the leaf |
+
+The ranked view with a candidate count, which T-API has no leaf for, is
+[`POST /internal/compute-path`](#internal--observation-and-metadata).
 
 ### Equipment and spectrum
 
@@ -259,6 +313,7 @@ bare `/data/…` paths and omits these three resources.
 | GET | `/internal/spectrum-grid` | Per-link slot occupancy, used by the UI heat map |
 | GET | `/internal/spectrum-context` | Grid parameters: `num-slots`, `slot-width-ghz`, `nominal-central-frequency-thz` |
 | GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service |
+| POST | `/internal/compute-path` | Up to `max-candidates` (1–10) ranked routes between two SIPs, each with its T-API links, nodes and `fiber-length-km`; same constraints as a path-comp-service |
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
 

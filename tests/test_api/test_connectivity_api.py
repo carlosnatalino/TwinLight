@@ -341,3 +341,48 @@ class TestGetAndDeleteConnectivityService:
         assert get_resp.status_code == 200
         restored = get_resp.json()["tapi-connectivity:connectivity-service"]
         assert restored["name"][0]["value"] == "test-link"
+
+
+class TestConstraints:
+    """routing-constraint / topology-constraint on a connectivity-service."""
+
+    def test_unsupported_constraint_is_refused_by_name(self, app: TestClient) -> None:
+        data = app.get("/data/tapi-common:context/service-interface-point").json()
+        sips = [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
+        body = {"tapi-connectivity:connectivity-service": [{
+            "end-point": [tapi_end_point("a", sips[0]), tapi_end_point("z", sips[1])],
+            "routing-constraint": {"diversity-policy": "SRLG"},
+        }]}
+        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        assert resp.status_code == 422
+        assert "diversity-policy" in resp.text
+
+    def test_constraints_are_echoed(self, mesh_app: TestClient) -> None:
+        from tests.conftest import MeshRefs
+
+        refs = MeshRefs(mesh_app.app.state.context)
+        constraint = [{"local-id": "1", "exclude-node": [refs.node("roadm B")]}]
+        body = {"tapi-connectivity:connectivity-service": [{
+            "end-point": [
+                tapi_end_point("a", refs.sip("trx A")),
+                tapi_end_point("z", refs.sip("trx C")),
+            ],
+            "topology-constraint": constraint,
+        }]}
+        resp = mesh_app.post(f"{_BASE}/connectivity-service", json=body)
+        assert resp.status_code == 201, resp.text
+        service = resp.json()["tapi-connectivity:connectivity-service"]
+        assert service["topology-constraint"] == constraint
+        assert "routing-constraint" not in service
+
+    def test_unresolvable_reference_is_422(self, mesh_app: TestClient) -> None:
+        from tests.conftest import MeshRefs
+
+        refs = MeshRefs(mesh_app.app.state.context)
+        body = {"end-point": [
+            tapi_end_point("a", refs.sip("trx A")), tapi_end_point("z", refs.sip("trx C")),
+        ], "topology-constraint": [{"exclude-link": [
+            {"topology-uuid": "x", "link-uuid": "y"}]}]}
+        resp = mesh_app.post(f"{_BASE}/connectivity-service", json=body)
+        assert resp.status_code == 422
+        assert "not found" in resp.text

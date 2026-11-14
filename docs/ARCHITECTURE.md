@@ -17,7 +17,7 @@ How TwinLight is put together, and why. For the endpoint catalogue see
 │  state/        TapiContext — the single owner of all state      │
 │  transparent/  transparent controller: paths, tree, datastores  │
 │  physics/      QoT baseline + four transient models             │
-│  algorithms/   routing (k-shortest) and spectrum assignment     │
+│  algorithms/   routing, constraints, spectrum assignment        │
 │  loader/       GNPy JSON → internal elements → T-API objects    │
 │  models/       Pydantic models of the T-API wire format         │
 └─────────────────────────────────────────────────────────────────┘
@@ -69,7 +69,7 @@ separate module:
 
 | Prefix | Module | Contents |
 |--------|--------|----------|
-| `/internal/` | `api/internal.py`, `api/diagrams.py` | OPM readings, service path metadata, path-info estimates, eye/constellation synthesis |
+| `/internal/` | `api/internal.py`, `api/diagrams.py` | OPM readings, service path metadata, path-info estimates, ranked candidate paths, eye/constellation synthesis |
 | `/admin/` | `api/admin.py` | Snapshot and restore |
 | `/config/` | `api/config.py`, `api/parameters.py` | Runtime parameter overrides (fiber loss, EDFA NF, link failure); path-addressed, all-or-nothing parameter batches |
 | `/transparent/` | `api/transparent.py` (logic in `transparent/`) | The fully transparent controller view: every element and parameter as one data tree, ns-3-style paths, RESTCONF-shaped datastores and operations — see [TRANSPARENT_CONTROLLER.md](TRANSPARENT_CONTROLLER.md) |
@@ -133,6 +133,7 @@ src/twinlight/
 
   algorithms/
     routing.py             k_shortest_paths() over the NetworkX graph
+    path_constraints.py    T-API routing/topology constraints → supported subset
     spectrum_assignment.py First-fit slot allocation with guard bands
 
   api/                   Routers (see the table above)
@@ -181,9 +182,14 @@ src/twinlight_client/    Companion client library and CLI
 1. Resolve both endpoint SIP UUIDs to GNPy element UIDs via
    `TapiContext._sip_to_gnpy_uid` (populated at build time — `TapiBuilder`
    stores each element's UID in the SIP's name list).
-2. Compute candidate paths: GNPy's `compute_constrained_path` when an equipment
-   library is loaded, otherwise `algorithms/routing.py:k_shortest_paths`.
-   Results are memoised in `_route_cache`.
+2. Compute candidate paths under the service's `routing-constraint` and
+   `topology-constraint` (`TapiContext.candidate_paths`;
+   `algorithms/path_constraints.py` decides what is supported). With a GNPy
+   network, GNPy's `compute_constrained_path` gives the best route —
+   includes become its strict `nodes_list` — on a `networkx.restricted_view`
+   that hides excluded nodes and links; otherwise
+   `algorithms/routing.py:k_shortest_paths` searches the parsed topology. The
+   unconstrained best route is memoised in `_route_cache`.
 3. For each candidate, in order: assign spectrum first-fit
    (`algorithms/spectrum_assignment.py`), propagate the path through the active
    backend to obtain an `OpmBaseline`, and check

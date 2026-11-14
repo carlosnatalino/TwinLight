@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import ValidationError
 
+from twinlight.algorithms.path_constraints import ConstraintError
 from twinlight.models.connectivity import (
     MCG_CSEP_SPEC,
     ConnectivityService,
@@ -96,6 +97,11 @@ async def create_service(body: dict, request: Request) -> dict:
 
     try:
         await ctx.add_service(svc)
+    except ConstraintError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from e
     except NoPathError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -200,11 +206,15 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     ctx.delete_service(uuid)
     try:
         await ctx.add_service(svc)
-    except RmsaError as e:
+    except (RmsaError, ConstraintError) as e:
         if old_svc is not None:
             await ctx.add_service(old_svc)
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+                if isinstance(e, ConstraintError)
+                else status.HTTP_409_CONFLICT
+            ),
             detail=str(e),
         ) from e
     return {

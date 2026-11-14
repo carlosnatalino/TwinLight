@@ -233,11 +233,10 @@ export class TapiApiClient {
     );
   }
 
+  // Ranked candidates with a count: not expressible in T-API v2.6.0, whose
+  // path computation is the path-comp-service resource, so it is internal.
   computePath(input: ComputePathInput): Promise<ComputePathResponse> {
-    return this.post<ComputePathResponse>(
-      "/data/tapi-path-computation:path-computation-context/path-computation-service/compute-path",
-      { "tapi-path-computation:input": input }
-    );
+    return this.post<ComputePathResponse>("/internal/compute-path", input);
   }
 
   getPathInfo(

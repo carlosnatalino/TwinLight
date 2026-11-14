@@ -12,7 +12,9 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from twinlight.algorithms.path_constraints import ConstraintError, parse_constraints
 from twinlight.config import FecConfig
 
 # ---------------------------------------------------------------------------
@@ -309,6 +311,91 @@ async def get_path_info(
         "total-fiber-km": total_fiber_km,
         "measurements": measurements,
     }
+
+
+# ---------------------------------------------------------------------------
+# Ranked candidate paths (what the T-API path-comp-service cannot say)
+# ---------------------------------------------------------------------------
+
+
+class _SipRef(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    service_interface_point_uuid: str = Field(..., alias="service-interface-point-uuid")
+
+
+class _EndPoint(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    service_interface_point: _SipRef = Field(..., alias="service-interface-point")
+
+
+class ComputePathRequest(BaseModel):
+    """Body of ``POST /internal/compute-path``.
+
+    The constraint containers use the T-API spellings and the same supported
+    subset as a path-comp-service (``algorithms/path_constraints.py``).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    end_point: list[_EndPoint] = Field(..., alias="end-point", min_length=2, max_length=2)
+    max_candidates: int = Field(default=1, alias="max-candidates", ge=1, le=10)
+    routing_constraint: dict[str, Any] | None = Field(default=None, alias="routing-constraint")
+    topology_constraint: list[dict[str, Any]] | None = Field(
+        default=None, alias="topology-constraint"
+    )
+
+    @field_validator("topology_constraint", mode="before")
+    @classmethod
+    def _as_list(cls, value: Any) -> Any:
+        return [value] if isinstance(value, dict) else value
+
+
+@router.post("/compute-path")
+async def compute_path(body: dict, request: Request) -> dict:
+    """Up to ``max-candidates`` ranked routes between two SIPs, nothing committed.
+
+    The same search connectivity-service admission walks, so candidate *n*
+    here is candidate *n* there. Each path lists its T-API links and nodes in
+    order and its fiber length. Not T-API: v2.6.0 has no candidate-count leaf
+    and no node list on a path; the standard view is the path-comp-service.
+    """
+    try:
+        req = ComputePathRequest.model_validate(body)
+        constraints = parse_constraints(req.routing_constraint, req.topology_constraint)
+    except (ValidationError, ConstraintError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    ctx = request.app.state.context
+    sips = [ep.service_interface_point.service_interface_point_uuid for ep in req.end_point]
+    for sip in sips:
+        if ctx.get_sip(sip) is None:
+            raise HTTPException(status_code=422, detail=f"SIP {sip!r} not found")
+    src, dst = (ctx.get_gnpy_uid(sip) for sip in sips)
+    try:
+        routes = (
+            ctx.candidate_paths(src, dst, constraints, req.max_candidates)
+            if src and dst else []
+        )
+    except ConstraintError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not routes:
+        raise HTTPException(
+            status_code=404,
+            detail="No path found between the specified end-points"
+            + ("" if constraints.is_empty else " that satisfies the constraints"),
+        )
+
+    paths = []
+    for route in routes:
+        refs = ctx.route_refs(route)
+        paths.append({
+            "link": [{"topology-uuid": t, "link-uuid": lk} for t, lk in refs["link"]],
+            "node": [{"topology-uuid": t, "node-uuid": n} for t, n in refs["node"]],
+            "fiber-length-km": round(ctx.path_fiber_km(route), 3),
+        })
+    return {"path": paths}
 
 
 # ---------------------------------------------------------------------------

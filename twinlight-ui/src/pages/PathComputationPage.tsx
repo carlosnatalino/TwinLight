@@ -63,7 +63,7 @@ export default function PathComputationPage() {
         ],
         "max-candidates": maxCandidates,
       });
-      const pathList = res["tapi-path-computation:output"].path ?? [];
+      const pathList = res.path ?? [];
       setPaths(pathList);
       if (pathList.length > 0) {
         setPathInfoLoading(true);
@@ -93,7 +93,7 @@ export default function PathComputationPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Path Computation</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Compute path(s) between two service interface points (T-API path computation API).
+          Ranked candidate paths between two service interface points, best first.
         </p>
       </div>
 
@@ -380,6 +380,8 @@ export default function PathComputationPage() {
                   <p className="text-xs text-gray-500 mt-2">
                     Links: {(path.link ?? []).length} · Nodes:{" "}
                     {(path.node ?? []).length}
+                    {path["fiber-length-km"] != null &&
+                      ` · Fiber: ${path["fiber-length-km"].toFixed(1)} km`}
                   </p>
                 </div>
               ))}

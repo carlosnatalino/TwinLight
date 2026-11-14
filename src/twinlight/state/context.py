@@ -15,17 +15,28 @@ algorithms/spectrum_assignment.py).
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
+import uuid as uuid_lib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from twinlight.algorithms.path_constraints import (
+    NO_CONSTRAINTS,
+    ConstraintError,
+    LinkRef,
+    NodeRef,
+    PathConstraints,
+)
 from twinlight.config import TwinConfig
 from twinlight.loader.gnpy_topology import load_gnpy_topology
 from twinlight.loader.tapi_builder import TapiBuilder
 from twinlight.models.common import ServiceInterfacePoint
 from twinlight.models.connectivity import ConnectivityService
+from twinlight.models.path_computation import PathCompService
 from twinlight.models.topology import (
     Link,
     Node,
@@ -60,6 +71,18 @@ class InsufficientSpectrumError(RmsaError):
 
 class InsufficientQoTError(RmsaError):
     """Path GSNR below the format's required threshold plus the system margin."""
+
+
+@dataclass(frozen=True)
+class _RouteQuery:
+    """Constraints resolved to element UIDs of the route graph."""
+
+    include: tuple[str, ...]                 # visited in this order
+    hidden_nodes: frozenset[str]             # removed from the search
+    hidden_edges: frozenset[tuple[str, str]]
+    # explicit-route: the terminal-to-terminal hops the request allows,
+    # or None when the route is free between includes.
+    explicit_pairs: frozenset[tuple[str, str]] | None
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +232,8 @@ class TapiContext:
         self._gnpy_uid_to_node_ref: dict[str, tuple[str, str]] = {}
         # (src_gnpy_uid, dst_gnpy_uid) -> (topology_uuid, link_uuid)
         self._gnpy_pair_to_link_ref: dict[tuple[str, str], tuple[str, str]] = {}
+        # and back: resolves the link refs of topology constraints
+        self._link_ref_to_pair: dict[tuple[str, str], tuple[str, str]] = {}
         self._build_gnpy_topology_ref_indexes()
 
         # -- /config plane runtime overrides --------------------------------
@@ -265,6 +290,13 @@ class TapiContext:
         # startup, exactly as the engine stored it (an unset value included).
         self._element_startup: dict[tuple[str, str], tuple[Any, Any]] = {}
 
+        # -- T-API path computation (path-comp-service and path lists) -------
+        # Results of what-if path computations. They commit no resources and
+        # are not part of snapshots: a computed path is a function of the
+        # topology at the time it was asked for.
+        self._path_comp_services: dict[str, PathCompService] = {}
+        self._paths: dict[str, dict[str, Any]] = {}
+
         # -- Transparent controller: candidate datastore ---------------------
         from twinlight.transparent.datastore import CandidateDatastore
 
@@ -320,20 +352,34 @@ class TapiContext:
     async def add_service(self, svc: ConnectivityService) -> None:
         """Add a connectivity service with RMSA: path, spectrum, and QoT check.
 
-        Order: resolve path (k-shortest from NetworkX; GNPy does not provide
-        path computation), first-fit spectrum assignment, optional GSNR
-        check via GNPy propagation. Raises NoPathError, InsufficientSpectrumError,
-        or InsufficientQoTError on admission failure.
+        Order: route under the service's routing and topology constraints
+        (:meth:`candidate_paths`), first-fit spectrum assignment, then the
+        GSNR check against the active backend's propagation.
+
+        Raises:
+            ConstraintError: A constraint that does not resolve against the
+                topology (unsupported leaves are refused when the model is
+                parsed).
+            NoPathError, InsufficientSpectrumError, InsufficientQoTError:
+                Admission failed.
         """
         endpoints = svc.end_point
         if len(endpoints) < 2:
             raise NoPathError("Connectivity service requires two end-points")
         sip_a = endpoints[0].service_interface_point.service_interface_point_uuid
         sip_z = endpoints[1].service_interface_point.service_interface_point_uuid
-
-        path = self.get_service_path(sip_a, sip_z)
-        if not path:
+        src, dst = self.get_gnpy_uid(sip_a), self.get_gnpy_uid(sip_z)
+        if not src or not dst:
             raise NoPathError(f"No path between SIPs {sip_a!r} and {sip_z!r}")
+
+        constraints = svc.path_constraints()
+        paths = self.candidate_paths(src, dst, constraints)
+        if not paths:
+            raise NoPathError(
+                f"No path between SIPs {sip_a!r} and {sip_z!r}"
+                + ("" if constraints.is_empty else " satisfies the constraints")
+            )
+        path = paths[0]
 
         from twinlight.algorithms.spectrum_assignment import (
             first_fit,
@@ -619,43 +665,227 @@ class TapiContext:
         """Return the GNPy element UID for a given SIP UUID, or None."""
         return self._sip_to_gnpy_uid.get(sip_uuid)
 
-    def _get_path_via_gnpy(self, src_uid: str, dst_uid: str) -> list[str] | None:
-        """Use GNPy's compute_constrained_path for weighted shortest path.
+    # -- Route search ------------------------------------------------------
+    #
+    # Candidates come from the GNPy network when one is loaded:
+    # ``compute_constrained_path`` gives the best route, honouring ordered
+    # includes, and Yen's algorithm over the same graph gives the rest.
+    # Exclusions are applied by searching a restricted view of the graph,
+    # which GNPy's search accepts like any other DiGraph. Without a GNPy
+    # network (the EGN backend) the same search runs over the parsed
+    # topology graph. See algorithms/path_constraints.py for which T-API
+    # constraints map onto this.
 
-        Returns list of element UIDs or None if GNPy path computation is
-        unavailable or finds no path. Uses fiber length as weight
-        (see https://gnpy.readthedocs.io/).
+    def _element_kind(self, uid: str) -> str:
+        """"Roadm"/"Transceiver"/"Fiber"/"Edfa"/… for an element UID."""
+        el = self._gnpy_uid_map.get(uid) if self._gnpy_uid_map else None
+        if el is not None:
+            return _kind_name(el)
+        parsed = self._topo_graph._gnpy_topo.elements_by_uid.get(uid)
+        return getattr(parsed, "type", "") if parsed else ""
+
+    def _terminals(self, path: list[str]) -> list[str]:
+        """The ROADMs and transceivers of a path, in order."""
+        return [
+            uid for uid in path
+            if self._element_kind(uid) in ("Roadm", "Transceiver")
+        ]
+
+    def _resolve_node(self, ref: NodeRef, where: str) -> str:
+        node = self.get_node(ref.topology_uuid, ref.node_uuid)
+        uid = next(
+            (n.value for n in node.name if n.value_name == "node-name"), None,
+        ) if node is not None else None
+        if uid is None:
+            raise ConstraintError(
+                f"{where}: node {ref.node_uuid} not found in topology "
+                f"{ref.topology_uuid}"
+            )
+        return uid
+
+    def _resolve_link(self, ref: LinkRef, where: str) -> tuple[str, str]:
+        pair = self._link_ref_to_pair.get((ref.topology_uuid, ref.link_uuid))
+        if pair is None:
+            raise ConstraintError(
+                f"{where}: link {ref.link_uuid} not found in topology "
+                f"{ref.topology_uuid}"
+            )
+        return pair
+
+    def _route_graph(self) -> tuple[Any, Any]:
+        """(graph searched for routes, node key of an element UID)."""
+        net = self._gnpy_network
+        if net is not None:
+            uid_map = self._gnpy_uid_map
+            return net, uid_map.get
+        graph = self._topo_graph.graph
+        return graph, lambda uid: uid if uid in graph else None
+
+    def _link_inline_elements(self, pair: tuple[str, str]) -> list[str]:
+        """Inline elements (fibers, amplifiers) of a terminal-to-terminal link,
+        in propagation order, as they appear in the route graph."""
+        return list(self._link_elements.get(pair, []))
+
+    def _resolve_route_query(
+        self, constraints: PathConstraints, src: str, dst: str,
+    ) -> _RouteQuery:
+        """Translate T-API refs to element UIDs of the route graph.
+
+        Raises:
+            ConstraintError: A reference that does not resolve, or an exclusion
+                that removes one of the request's own end-points.
         """
-        if self._gnpy_network is None:
-            return None
-        try:
-            from gnpy.topology.request import PathRequest, compute_constrained_path
+        include: list[str] = []
+        for ref in constraints.include_nodes:
+            include.append(self._resolve_node(ref, "include-node"))
+        for link_ref in constraints.include_links:
+            pair = self._resolve_link(link_ref, "include-link")
+            inline = self._link_inline_elements(pair)
+            # Any inline element pins the route to this link: each one belongs
+            # to exactly one directed link. A link with none (a transceiver's
+            # access link) is pinned by its two terminals.
+            include.extend(inline[:1] or [pair[0], pair[1]])
 
-            req = PathRequest(
-                source=src_uid,
-                destination=dst_uid,
-                nodes_list=[dst_uid],
-                loose_list=["STRICT"],
+        hidden_nodes: set[str] = set()
+        for ref in constraints.exclude_nodes:
+            uid = self._resolve_node(ref, "exclude-node")
+            if uid in (src, dst):
+                raise ConstraintError(
+                    f"exclude-node {ref.node_uuid} is an end-point of the request"
+                )
+            hidden_nodes.add(uid)
+        hidden_edges: set[tuple[str, str]] = set()
+        for link_ref in constraints.exclude_links:
+            pair = self._resolve_link(link_ref, "exclude-link")
+            inline = self._link_inline_elements(pair)
+            if inline:
+                hidden_nodes.update(inline)
+            else:
+                hidden_edges.add(pair)
+
+        explicit_pairs: frozenset[tuple[str, str]] | None = None
+        if constraints.explicit_route:
+            if constraints.include_links:
+                explicit_pairs = frozenset(
+                    self._resolve_link(r, "include-link")
+                    for r in constraints.include_links
+                )
+            else:
+                nodes = [src, *include, dst]
+                explicit_pairs = frozenset(itertools.pairwise(nodes))
+        return _RouteQuery(
+            include=tuple(include),
+            hidden_nodes=frozenset(hidden_nodes),
+            hidden_edges=frozenset(hidden_edges),
+            explicit_pairs=explicit_pairs,
+        )
+
+    def _satisfies_explicit_route(
+        self, path: list[str], query: _RouteQuery, src: str, dst: str,
+    ) -> bool:
+        """With ``explicit-route``, every hop between terminals must be one the
+        request named. A transceiver's access link to its own ROADM need not
+        be listed: the end-points already fix it."""
+        if query.explicit_pairs is None:
+            return True
+        terminals = self._terminals(path)
+        for hop in itertools.pairwise(terminals):
+            if hop in query.explicit_pairs or src in hop or dst in hop:
+                continue
+            return False
+        return True
+
+    def _gnpy_best_path(
+        self, graph: Any, src: str, dst: str, include: tuple[str, ...],
+    ) -> list[str] | None:
+        """``gnpy.topology.request.compute_constrained_path`` on ``graph``.
+
+        Every include is ``STRICT``: a T-API include is a requirement. GNPy
+        treats an all-``LOOSE`` list it cannot satisfy by dropping the
+        constraints and returning the unconstrained route, which would be
+        exactly the silent relaxation this twin refuses to make.
+        """
+        from gnpy.topology.request import PathRequest, compute_constrained_path
+
+        req = PathRequest(
+            request_id=f"{src} -> {dst}",
+            source=src,
+            destination=dst,
+            nodes_list=[*include, dst],
+            loose_list=["STRICT"] * (len(include) + 1),
+        )
+        try:
+            elements = compute_constrained_path(graph, req)
+        except StopIteration:  # an include GNPy cannot find in this view
+            return None
+        if not elements or req.blocking_reason is not None:
+            return None
+        return [el.uid for el in elements]
+
+    def candidate_paths(
+        self,
+        src: str,
+        dst: str,
+        constraints: PathConstraints = NO_CONSTRAINTS,
+        k: int = 1,
+    ) -> list[list[str]]:
+        """Up to ``k`` candidate routes between two transceivers, best first.
+
+        Each route is the ordered list of element UIDs. Every candidate
+        satisfies ``constraints``; an empty list means none exists.
+
+        Raises:
+            ConstraintError: See :meth:`_resolve_route_query`.
+        """
+        import networkx as nx
+
+        from twinlight.algorithms.routing import k_shortest_paths
+
+        query = self._resolve_route_query(constraints, src, dst)
+        graph, key_of = self._route_graph()
+        if key_of(src) is None or key_of(dst) is None:
+            return []
+        view = nx.restricted_view(
+            graph,
+            [n for uid in query.hidden_nodes if (n := key_of(uid)) is not None],
+            [
+                (a, b) for u, v in query.hidden_edges
+                if (a := key_of(u)) is not None and (b := key_of(v)) is not None
+            ],
+        )
+        include_keys = [key_of(uid) for uid in query.include]
+        if any(key is None for key in include_keys):
+            return []  # an include the route graph does not contain
+
+        candidates: list[list[str]] = []
+        if self._gnpy_network is not None:
+            best = self._gnpy_best_path(view, src, dst, query.include)
+            if best is not None:
+                candidates.append(best)
+        if len(candidates) < k:
+            more = k_shortest_paths(
+                view, key_of(src), key_of(dst), k + len(candidates),
+                include=include_keys,
             )
-            path_elements = compute_constrained_path(self._gnpy_network, req)
-            if path_elements and getattr(req, "blocking_reason", None) is None:
-                return [el.uid for el in path_elements]
-        except Exception:
-            logger.debug(
-                "GNPy path computation failed for %s -> %s; falling back to "
-                "the NetworkX k-shortest search",
-                src_uid, dst_uid, exc_info=True,
-            )
-        return None
+            for path in more:
+                uids = [getattr(n, "uid", n) for n in path]
+                if uids not in candidates:
+                    candidates.append(uids)
+
+        hidden = query.hidden_nodes
+        return [
+            path for path in candidates
+            if not hidden.intersection(path)
+            and self._satisfies_explicit_route(path, query, src, dst)
+        ][:k]
 
     def get_service_path(
         self, sip_a_uuid: str, sip_z_uuid: str
     ) -> list[str] | None:
-        """Return ordered GNPy UIDs for the shortest path between two SIPs.
+        """Return the best unconstrained route between two SIPs, or None.
 
-        When GNPy is loaded, uses GNPy's path computation (weighted by fiber
-        length). Otherwise uses NetworkX k-shortest paths. Results are cached.
-        Returns None if either SIP has no GNPy UID or no path exists.
+        Cached per (source, destination) in ``_route_cache``, which link
+        failure clears.
         """
         src = self.get_gnpy_uid(sip_a_uuid)
         dst = self.get_gnpy_uid(sip_z_uuid)
@@ -664,28 +894,121 @@ class TapiContext:
 
         cache_key = (src, dst)
         if cache_key in self._route_cache:
-            return self._route_cache[cache_key]
+            return self._route_cache[cache_key] or None
 
-        # Prefer GNPy path computation when available (weighted shortest path by
-        # fiber length; see gnpy.topology.request.compute_constrained_path).
-        path_uids = self._get_path_via_gnpy(src, dst)
-        if path_uids is not None:
-            self._route_cache[cache_key] = path_uids
-            return path_uids
-
-        from twinlight.algorithms.routing import k_shortest_paths
-
-        paths = k_shortest_paths(
-            self._topo_graph.graph, src, dst, self._config.rmsa.k_shortest_paths
-        )
+        paths = self.candidate_paths(src, dst)
         if not paths:
             logger.warning("No path found between %s and %s", src, dst)
-            self._route_cache[cache_key] = []
-            return None
+        self._route_cache[cache_key] = paths[0] if paths else []
+        return paths[0] if paths else None
 
-        best = paths[0]
-        self._route_cache[cache_key] = best
-        return best
+    def path_fiber_km(self, path_uids: list[str]) -> float:
+        """Total fiber length of a route [km], spans of unknown length skipped."""
+        elements_by_uid = self._topo_graph._gnpy_topo.elements_by_uid
+        total = 0.0
+        for uid in path_uids:
+            if self._element_kind(uid) != "Fiber":
+                continue
+            km = _fiber_length_km(
+                self._gnpy_uid_map.get(uid) if self._gnpy_uid_map else None,
+                elements_by_uid.get(uid),
+            )
+            total += km or 0.0
+        return total
+
+    # -- T-API path computation -------------------------------------------
+
+    def create_path_comp_service(self, service: PathCompService) -> PathCompService:
+        """Compute up to ``rmsa.k_shortest_paths`` routes and record them.
+
+        The service and its ``path`` objects are stored in the
+        path-computation context, best route first. Nothing is allocated.
+
+        Raises:
+            KeyError: An end-point SIP does not exist.
+            ConstraintError: A constraint does not resolve against the topology.
+            NoPathError: No route satisfies the request. T-API requires at
+                least one path per service, so none is recorded.
+            ValueError: The UUID is already in use.
+        """
+        if service.uuid in self._path_comp_services:
+            raise ValueError(f"path-comp-service {service.uuid} already exists")
+        sip_a, sip_z = service.sip_uuids
+        for sip in (sip_a, sip_z):
+            if self.get_sip(sip) is None:
+                raise KeyError(f"SIP {sip!r} not found")
+        src, dst = self.get_gnpy_uid(sip_a), self.get_gnpy_uid(sip_z)
+        constraints = service.path_constraints()
+        routes = (
+            self.candidate_paths(
+                src, dst, constraints, self._config.rmsa.k_shortest_paths,
+            )
+            if src and dst else []
+        )
+        if not routes:
+            raise NoPathError(
+                f"No path between SIPs {sip_a!r} and {sip_z!r}"
+                + ("" if constraints.is_empty else " satisfies the constraints")
+            )
+
+        refs: list[dict[str, str]] = []
+        for rank, route in enumerate(routes, start=1):
+            path = self._tapi_path(route, rank)
+            self._paths[path["uuid"]] = path
+            refs.append({"path-uuid": path["uuid"]})
+        service.path = refs
+        self._path_comp_services[service.uuid] = service
+        return service
+
+    def _tapi_path(self, route: list[str], rank: int) -> dict[str, Any]:
+        """A ``tapi-path-computation:path`` for a route.
+
+        Fiber length is reported as a ``cost-characteristic`` of the path's
+        ``routing-constraint`` — the v2.6.0 place for a path's cost, and the
+        quantity the candidates are ranked by.
+        """
+        refs = self.route_refs(route)
+        return {
+            "uuid": str(uuid_lib.uuid4()),
+            "name": [{"value-name": "path-rank", "value": str(rank)}],
+            "layer-protocol-name": "PHOTONIC_MEDIA",
+            "direction": "UNIDIRECTIONAL",
+            "link": [
+                {"topology-uuid": t, "link-uuid": lk} for t, lk in refs["link"]
+            ],
+            "node-edge-point": [
+                {"topology-uuid": t, "node-uuid": n, "node-edge-point-uuid": e}
+                for t, n, e in refs["node-edge-point"]
+            ],
+            "routing-constraint": {
+                "cost-characteristic": [{
+                    "cost-name": "fiber-length-km",
+                    "cost-value": f"{self.path_fiber_km(route):.3f}",
+                    "cost-algorithm": "sum of the fiber span lengths on the path",
+                }],
+            },
+        }
+
+    def get_path_comp_services(self) -> list[PathCompService]:
+        return list(self._path_comp_services.values())
+
+    def get_path_comp_service(self, uuid: str) -> PathCompService | None:
+        return self._path_comp_services.get(uuid)
+
+    def delete_path_comp_service(self, uuid: str) -> bool:
+        """Remove a path-comp-service and the paths it owns."""
+        service = self._path_comp_services.pop(uuid, None)
+        if service is None:
+            return False
+        for ref in service.path:
+            self._paths.pop(ref["path-uuid"], None)
+        return True
+
+    def get_paths(self) -> list[dict[str, Any]]:
+        return list(self._paths.values())
+
+    def get_path(self, uuid: str) -> dict[str, Any] | None:
+        return self._paths.get(uuid)
 
     async def get_or_compute_baseline(
         self, svc: ConnectivityService
@@ -1466,13 +1789,19 @@ class TapiContext:
               float | None           or None for the last hop
 
         Returns None if no path exists.
+
+        The route is the one recorded at admission. Re-deriving it from the
+        SIPs would show the unconstrained shortest route, which is not the
+        one a constrained or second-candidate service actually took.
         """
         endpoints = svc.end_point
         if len(endpoints) < 2:
             return None
         sip_a = endpoints[0].service_interface_point.service_interface_point_uuid
         sip_z = endpoints[1].service_interface_point.service_interface_point_uuid
-        path_uids = self.get_service_path(sip_a, sip_z)
+        path_uids = self._allocated_path_uids(svc.uuid) or self.get_service_path(
+            sip_a, sip_z
+        )
         if not path_uids:
             return None
         return self._path_uids_to_hops(path_uids)
@@ -1522,73 +1851,34 @@ class TapiContext:
                     g1, g2 = node_to_gnpy.get(n1.node_uuid), node_to_gnpy.get(n2.node_uuid)
                     if g1 and g2:
                         self._gnpy_pair_to_link_ref[(g1, g2)] = (topo.uuid, link.uuid)
+                        self._link_ref_to_pair[(topo.uuid, link.uuid)] = (g1, g2)
 
-    def get_path_candidates(
-        self,
-        sip_a_uuid: str,
-        sip_z_uuid: str,
-        max_candidates: int = 1,
-    ) -> list[tuple[list[tuple[str, str]], list[tuple[str, str]]]]:
-        """Return up to max_candidates path candidates as (link_refs, node_refs).
+    def route_refs(self, path_uids: list[str]) -> dict[str, list[tuple[str, ...]]]:
+        """T-API references for a route given as element UIDs.
 
-        Each link_ref is (topology_uuid, link_uuid); each node_ref is (topology_uuid, node_uuid).
-        Uses GNPy path computation when available, else NetworkX k-shortest paths.
-        Returns empty list if no path exists.
+        Returns ``{"link": [(topology, link)], "node": [(topology, node)],
+        "node-edge-point": [(topology, node, nep)]}``, each in path order.
+        The links and NEPs are what a T-API ``path`` carries; the node list
+        is for the internal compute-path view.
         """
-        src = self.get_gnpy_uid(sip_a_uuid)
-        dst = self.get_gnpy_uid(sip_z_uuid)
-        if not src or not dst:
-            return []
-
-        paths_gnpy: list[list[str]] = []
-        if max_candidates == 1:
-            single = self.get_service_path(sip_a_uuid, sip_z_uuid)
-            if single:
-                paths_gnpy.append(single)
-        else:
-            from twinlight.algorithms.routing import k_shortest_paths
-
-            paths_gnpy = k_shortest_paths(
-                self._topo_graph.graph,
-                src,
-                dst,
-                min(max_candidates, self._config.rmsa.k_shortest_paths),
-            )
-
-        TERMINAL_TYPES = {"Transceiver", "Roadm"}
-        elements_by_uid = getattr(
-            self._topo_graph._gnpy_topo, "elements_by_uid", {}
-        )
-        results: list[tuple[list[tuple[str, str]], list[tuple[str, str]]]] = []
-
-        for path_uids in paths_gnpy:
-            node_refs: list[tuple[str, str]] = []
-            link_refs: list[tuple[str, str]] = []
-            terminals: list[str] = []
-
-            for uid in path_uids:
-                el = self._gnpy_uid_map.get(uid) if self._gnpy_uid_map else None
-                if el is not None:
-                    el_type = _kind_name(el)
-                else:
-                    parsed = elements_by_uid.get(uid)
-                    el_type = getattr(parsed, "type", "") if parsed else ""
-                if el_type in TERMINAL_TYPES:
-                    terminals.append(uid)
-                    ref = self._gnpy_uid_to_node_ref.get(uid)
-                    if ref:
-                        node_refs.append(ref)
-
-            for i in range(len(terminals) - 1):
-                key = (terminals[i], terminals[i + 1])
-                ref = self._gnpy_pair_to_link_ref.get(key)
-                if ref:
-                    link_refs.append(ref)
-
-            if node_refs and (len(link_refs) == len(terminals) - 1 or link_refs):
-                results.append((link_refs, node_refs))
-
-        return results
+        terminals = self._terminals(path_uids)
+        nodes = [
+            ref for uid in terminals
+            if (ref := self._gnpy_uid_to_node_ref.get(uid)) is not None
+        ]
+        links: list[tuple[str, ...]] = []
+        neps: list[tuple[str, ...]] = []
+        for hop in itertools.pairwise(terminals):
+            ref = self._gnpy_pair_to_link_ref.get(hop)
+            if ref is None:
+                continue
+            links.append(ref)
+            link = self.get_link(*ref)
+            for nep in link.node_edge_point if link is not None else []:
+                key = (nep.topology_uuid, nep.node_uuid, nep.node_edge_point_uuid)
+                if not neps or neps[-1] != key:
+                    neps.append(key)
+        return {"link": links, "node": list(nodes), "node-edge-point": neps}
 
     def get_equipment_list(self) -> list[dict]:
         """Return equipment inventory from GNPy elements or parsed topology.

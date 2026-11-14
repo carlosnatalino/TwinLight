@@ -56,8 +56,10 @@ For the endpoint catalogue itself see [API.md](API.md).
 
 | Aspect | Status | Notes |
 |--------|--------|------|
-| **Path computation context** | ✓ | `GET /data/tapi-path-computation:path-computation-context`, `.../path-computation-service` |
-| **Compute-path RPC** | ✓ | `POST .../path-computation-service/compute-path` returns candidate paths without committing state |
+| **Path computation context** | ✓ | `GET /data/tapi-path-computation:path-computation-context` lists `path-comp-service` and `path`, the v2.6.0 names |
+| **path-comp-service** | ✓ | `POST`/`GET`/`DELETE .../path-comp-service[={uuid}]`; creating one computes up to `rmsa.k_shortest_paths` ranked routes. v2.6.0 has no RPC, so the earlier `compute-path` RPC (and its non-standard `max-candidates`) is gone; the ranked view with a count is `POST /internal/compute-path` |
+| **path** | ✓ | `GET .../path[={uuid}]` with `link` and `node-edge-point` references and the fiber length as a `cost-characteristic` |
+| **Route constraints** | ◐ | `topology-constraint` include/exclude node and link and `explicit-route`; `routing-constraint` `route-objective-function: MIN_WORK_ROUTE_LATENCY` and `is-exclusive: true`. Every other constraint leaf is refused with a 422 naming it, on path-comp-service and connectivity-service alike |
 | **Equipment context** | ✓ | `GET /data/tapi-equipment:equipment-context`, `.../equipment`, `.../equipment={uuid}` |
 | **Spectrum capability** | ✓ | Per-SIP `spectrum-capability-pac` — supportable / available / occupied spectrum-bands in uint64 Hz, from live occupancy |
 | **Assigned spectrum** | ✓ | Per-service `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac` on the end-point |
@@ -72,7 +74,7 @@ T-API 2.6 defines several modules beyond Common, Topology, and Connectivity. Cov
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| **Path Computation Service** | Request candidate paths (A–Z, constraints, diversity) | ✓ Implemented — `GET /data/tapi-path-computation:path-computation-context`, `.../path-computation-service`, and `POST .../compute-path`. Constraint support is limited to A–Z endpoints and a candidate count; no diversity, inclusion/exclusion or cost constraints. |
+| **Path Computation Service** | Request candidate paths (A–Z, constraints, diversity) | ✓ Implemented — the `path-comp-service` and `path` lists of the path-computation context. Constraints: include/exclude node and link, explicit route, latency objective; no diversity, maximum cost/hops/delay, path sets or NEP/topology inclusion, which are refused by name. |
 | **Equipment** | Physical / logical equipment inventory | ✓ Implemented — `GET /data/tapi-equipment:equipment-context`, `.../equipment`, `.../equipment={uuid}`. Inventory is derived from the GNPy element list; holder/physical-position modelling is not represented. |
 | **Photonic Media** | SIP spectrum capability, OTSi config, media channels | ◐ Partial — the SIP augment `photonic-media-service-interface-point-spec/spectrum-capability-pac` and the connectivity-service end-point augments `otsia-connectivity-service-end-point-spec/otsi-config/modulation` and `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac` are implemented. Standalone media-channel resources and the rest of `otsi-config` are not. |
 | **Virtual Network Service** | Virtual network (slicing / abstraction) | ✗ No `tapi-virtual-network:*` endpoints. |
@@ -98,7 +100,7 @@ So: **Common, Topology, Connectivity, Path Computation and Equipment** are imple
 
 **Connectivity**
 
-- **ConnectivityService**: Minimal set of attributes. Standard T-API may include, for example: `connection`, `connectivity-service-end-point` refinements, `routing-constraint`, `resilience-constraint`, `cost-characteristic`, other QoS/route constraints. Only name, end-point and states are supported, plus the end-point's `layer-protocol-constraint` carrying modulation.
+- **ConnectivityService**: Minimal set of attributes. Standard T-API may include, for example: `connection`, `connectivity-service-end-point` refinements, `resilience-constraint`, `connectivity-constraint`, other QoS constraints. Supported: name, end-point, states, the end-point's `layer-protocol-constraint` augments, and `routing-constraint` / `topology-constraint` with the subset described under path computation. `connectivity-constraint` and `resilience-constraint` are still not interpreted.
 - **Connection**: T-API often models a “Connection” (actual path/route) separate from “ConnectivityService”. This twin does not expose a separate Connection resource; path is internal (and exposed only via `/internal/services/{uuid}`).
 - **Modulation**: ✓ Carried where T-API 2.6 puts it — `end-point/layer-protocol-constraint/tapi-photonic-media:otsia-connectivity-service-end-point-spec/otsi-config/modulation/standard-modulation-technique`, with `MT_*` identities. `tapi-connectivity.yang` has no modulation leaf of its own.
 - **Spectrum / L0**: ✓ Assigned spectrum is carried where T-API 2.6 puts it — `end-point/layer-protocol-constraint/tapi-photonic-media:mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac/spectrum`, in uint64 Hz. Available and occupied spectrum per port is the SIP's `spectrum-capability-pac`. The grid parameters themselves are twin configuration rather than T-API and are served from `/internal/spectrum-context`. Spectrum assignment remains first-fit at create time; no client-specified slot in POST.

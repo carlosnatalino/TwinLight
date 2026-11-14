@@ -420,19 +420,21 @@ export interface PathNodeRef {
 export interface PathCandidate {
   link: PathLinkRef[];
   node: PathNodeRef[];
+  "fiber-length-km": number;
 }
 
+// POST /internal/compute-path (constraints use the T-API spellings)
 export interface ComputePathInput {
   "end-point": Array<{
     "service-interface-point": { "service-interface-point-uuid": string };
   }>;
   "max-candidates"?: number;
+  "routing-constraint"?: Record<string, unknown>;
+  "topology-constraint"?: Array<Record<string, unknown>>;
 }
 
 export interface ComputePathResponse {
-  "tapi-path-computation:output": {
-    path: PathCandidate[];
-  };
+  path: PathCandidate[];
 }
 
 // Derived / enriched types used by the UI
