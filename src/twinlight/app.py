@@ -22,6 +22,7 @@ from twinlight.api import (
     oam,
     parameters,
     path_computation,
+    streaming,
     topology,
     transparent,
 )
@@ -38,6 +39,7 @@ from twinlight.api.middleware import (
 )
 from twinlight.config import TwinConfig
 from twinlight.state.context import TapiContext
+from twinlight.streaming.measurement_stream import MeasurementStream
 
 
 def _restconf_error_response(
@@ -143,6 +145,10 @@ def create_app(config: TwinConfig) -> FastAPI:
     # State — TapiContext loads topology and builds TAPI models
     app.state.context = TapiContext(config)
     app.state.config = config
+    # The T-API measurement stream (TR-548 §6). Built here so REST discovery
+    # can report its state; its sampler is started by main.py, beside the
+    # gRPC server that delivers it.
+    app.state.measurement_stream = MeasurementStream(app.state.context, config)
 
     # Routers
     # The T-API modules are mounted twice: under the RESTCONF root
@@ -165,6 +171,7 @@ def create_app(config: TwinConfig) -> FastAPI:
         path_computation.router,
         equipment.router,
         oam.router,
+        streaming.router,
     ):
         if root:
             app.include_router(tapi_router, prefix=root)
