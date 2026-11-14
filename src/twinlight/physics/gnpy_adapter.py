@@ -32,6 +32,8 @@ from twinlight.physics.modulation import ModulationFormat, get_params
 if TYPE_CHECKING:
     import networkx as nx
 
+    from twinlight.physics.channel_plan import SpectralDefaults
+
 _logger = logging.getLogger(__name__)
 
 # C-band reference comb for propagation: 88 channels on the 50 GHz grid,
@@ -120,16 +122,32 @@ def compute_path_baseline(
     uid_map: dict[str, object],
     path_uids: list[str],
     modulation_format: str | ModulationFormat,
+    *,
+    defaults: SpectralDefaults,
+    centre_frequency_hz: float,
+    launch_power_dbm: float,
 ) -> OpmBaseline:
     """Compute the static QoT baseline for a path expressed as a UID sequence.
 
     The path must start and end with Transceiver elements.  Intermediate
     elements (Fiber, Edfa, Roadm) are propagated in order.
 
+    Launch power: the comb's transmitters emit SI ``tx_power_dbm``; the
+    service channel — the comb channel nearest ``centre_frequency_hz`` —
+    emits ``launch_power_dbm`` and carries an offset
+    ``delta_pdb = launch_power_dbm - SI power_dbm``. GNPy's ROADMs set every
+    channel to their per-channel target plus its ``delta_pdb``
+    (``gnpy.core.elements.Roadm``), so the offset — not the transmitter
+    power, which the first ROADM re-equalises — is what keeps the channel
+    that many dB above or below its neighbours along the line.
+
     Args:
         uid_map: Mapping from UID to gnpy element object (from ``build_uid_map``).
         path_uids: Ordered list of GNPy element UIDs from source to destination.
         modulation_format: Modulation format string or enum.
+        defaults: The equipment library's SI defaults.
+        centre_frequency_hz: The service channel's central frequency.
+        launch_power_dbm: The service channel's launch power.
 
     Returns:
         OpmBaseline with worst-channel metrics.
@@ -139,11 +157,10 @@ def compute_path_baseline(
         RuntimeError: If propagation fails.
     """
     from gnpy.core.elements import Roadm, Transceiver
-    from gnpy.core.info import create_input_spectral_information
+    from gnpy.core.info import create_arbitrary_spectral_information
     from gnpy.core.parameters import TransceiverRole
 
     params = get_params(modulation_format)
-    tx_power_w = 10 ** (params.tx_power_dbm / 10.0) * 1e-3  # dBm → W
 
     # Deep-copy only the path elements (not the whole network) to avoid
     # mutating cached element state during propagation.
@@ -151,16 +168,24 @@ def compute_path_baseline(
         (uid, copy.deepcopy(uid_map[uid])) for uid in path_uids
     ]
 
-    # Create a full C-band spectral information object.
-    si = create_input_spectral_information(
-        f_min=_F_MIN_HZ,
-        f_max=_F_MAX_HZ,
-        roll_off=0.15,
-        baud_rate=params.baud_rate_hz,
-        spacing=_SPACING_HZ,
-        tx_osnr=100.0,   # ideal Tx — transmitter is never the bottleneck
+    # A full C-band comb; the channel nearest the service's frequency is the
+    # service's, launched at its own power.
+    frequency = _F_MIN_HZ + _SPACING_HZ * np.arange(_NB_CHANNELS)
+    service = int(np.argmin(np.abs(frequency - centre_frequency_hz)))
+    tx_power_dbm = np.full(_NB_CHANNELS, defaults.tx_power_dbm)
+    tx_power_dbm[service] = launch_power_dbm
+    delta_pdb = np.zeros(_NB_CHANNELS)
+    delta_pdb[service] = launch_power_dbm - defaults.power_dbm
+    tx_power_w = 10 ** (tx_power_dbm / 10.0) * 1e-3  # dBm → W
+    si = create_arbitrary_spectral_information(
+        frequency,
+        pch=tx_power_w,
         tx_power=tx_power_w,
-        delta_pdb=0.0,
+        baud_rate=params.baud_rate_hz,
+        slot_width=_SPACING_HZ,
+        roll_off=0.15,
+        tx_osnr=100.0,   # ideal Tx — transmitter is never the bottleneck
+        delta_pdb_per_channel=delta_pdb,
     )
 
     # Propagate element by element.  ROADMs need their degree context;

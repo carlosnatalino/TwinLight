@@ -36,8 +36,8 @@ into it). Baseline before any change: 752 tests passed.
 | 2 | Modulation selection over k candidates | done | see git log |
 | 3 | Candidate ranking (GNPy shortest_simple_paths) | done | see git log |
 | 4 | Spectrum request / band restriction | done | see git log |
-| 5 | Launch power | next | |
-| 6 | Startup log of effective RMSA settings | todo | |
+| 5 | Launch power | done | see git log |
+| 6 | Startup log of effective RMSA settings | next | |
 | 7 | Channel-accurate QoT | todo | |
 | — | Docs, quality gates, PR | todo | |
 
@@ -61,3 +61,9 @@ into it). Baseline before any change: 752 tests passed.
   `spectral_defaults` / `amplifier_bands()`; EGN keeps designed EDFA bands.
   Without physics (mock) the whole grid is assignable. Requested-spectrum
   errors: `SpectrumRequestError` (422); band/occupancy conflicts 409.
+- Item 5: `ModulationParams.tx_power_dbm` removed; `ctx.default_launch_power_dbm`
+  = SI power_dbm; `_service_launch_power` (snapshot key `launch_power_dbm`);
+  `compute_baseline(path, fmt, *, centre_frequency_hz, launch_power_dbm)`.
+  GNPy still reports the worst comb channel until item 7. Transparent tree keeps
+  `ModulationList/*/tx_power_dbm` (now the SI default) + new service leaf
+  `launch_power_dbm`.

@@ -163,7 +163,10 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
 Frequencies are uint64 Hz. A service with no allocation carries no MCG spec at
 all, rather than a zeroed one. The `spectrum` is the media channel — the
 channel's slots plus `rmsa.default_guardband_slots` — and `central-frequency`
-is its centre, where the carrier sits.
+is its centre, where the carrier sits. `channel-output-power` is the launch
+power in effect, in the leaf's YANG unit of **0.01 dBm** (`0` = 0 dBm): the
+requested value, or the equipment library's SI `power_dbm` when none was
+requested.
 
 **Requesting spectrum.** Both leaves are optional on create (and on PUT):
 send `mc-spectrum-config-pac/spectrum`, `otsi-config/central-frequency`, or
@@ -186,6 +189,10 @@ slot with GNPy's `is_in_band` test, since an EDFA drops any carrier outside
 it. The example above is the first such block under GNPy's default EDFA band
 (from 191.275 THz). Without a physics backend there is no amplifier model and
 the whole grid is assignable.
+
+**Requesting launch power.** `otsi-config/channel-output-power` is optional,
+in 0.01 dBm, as a number or decimal string; end-points that carry it must
+agree. A malformed value is a `422`.
 
 ### Path computation
 
@@ -339,11 +346,11 @@ bare `/data/…` paths and omits these three resources.
 |--------|------|---------|
 | GET | `/internal/opm` | Live OPM for every service |
 | GET | `/internal/opm/{service_uuid}` | Live OPM for one service |
-| GET | `/internal/services/{service_uuid}` | Name, modulation format, path hops, total fiber km |
+| GET | `/internal/services/{service_uuid}` | Name, modulation format, central frequency, launch power, path hops, total fiber km |
 | GET | `/internal/links` | Link inventory with per-link state, used by the UI |
 | GET | `/internal/spectrum-grid` | Per-link slot occupancy, used by the UI heat map |
 | GET | `/internal/spectrum-context` | Grid parameters: `num-slots`, `slot-width-ghz`, `nominal-central-frequency-thz` |
-| GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service |
+| GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service, evaluated on the channel admission would assign (reported as `central-frequency-thz` and `launch-power-dbm`) |
 | POST | `/internal/compute-path` | Up to `max-candidates` (1–10) routes ranked by fiber length between two SIPs, each with its T-API links, nodes and `fiber-length-km`; same constraints as a path-comp-service |
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |

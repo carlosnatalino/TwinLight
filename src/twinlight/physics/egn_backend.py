@@ -209,6 +209,9 @@ class EgnBackend:
         self,
         path_uids: list[str],
         modulation_format: str,
+        *,
+        centre_frequency_hz: float,
+        launch_power_dbm: float,
     ) -> OpmBaseline | None:
         # Resolve the path to its spans (in propagation order) and bail
         # with a link-failed sentinel if any fiber on the path is failed.
@@ -235,17 +238,18 @@ class EgnBackend:
         ]
 
         params = get_params(modulation_format)
-        launch_power_w = (10.0 ** (params.tx_power_dbm / 10.0)) * 1e-3
+        # The span launch power of the service channel: the GN model has no
+        # ROADM equalisation, so the requested power is the power per span.
+        launch_power_w = (10.0 ** (launch_power_dbm / 10.0)) * 1e-3
         bandwidth_hz = params.baud_rate_hz
-        # Centre-of-C-band default; M5+ may thread the per-service
-        # spectrum allocation through to use the actual centre frequency.
-        centre_frequency_hz = 193.1e12
+        # ASE photon energy evaluated at the C-band centre.
+        ase_reference_hz = 193.1e12
 
         qot: PathQoT = accumulate_path_noise(
             span_inputs,
             launch_power_w=launch_power_w,
             bandwidth_hz=bandwidth_hz,
-            centre_frequency_hz=centre_frequency_hz,
+            centre_frequency_hz=ase_reference_hz,
         )
         # Treat infinite GSNR (empty-span path) as a saturated 60 dB so
         # the BER calculation downstream stays finite.

@@ -236,6 +236,8 @@ class TapiContext:
         self._spectrum_state = SpectrumState(config.spectrum.num_slots)
         # service_uuid -> (path_edges, start_slot, block_width) for release on delete
         self._service_allocation: dict[str, tuple[list[tuple[str, str]], int, int]] = {}
+        # service_uuid -> launch power in effect [dBm] (requested or SI default)
+        self._service_launch_power: dict[str, float] = {}
 
         # -- Path computation: GNPy UID <-> TAPI topology refs -------------
         # gnpy_uid -> (topology_uuid, node_uuid)
@@ -397,7 +399,9 @@ class TapiContext:
         self._spectrum_state.allocate(path_edges, start, block_width)
         self._service_allocation[svc.uuid] = (path_edges, start, block_width)
         lower, upper = self._slot_range_hz(start, block_width)
-        svc.assign_channel(fmt, (lower + upper) // 2)
+        power_dbm = self._launch_power_for(svc)
+        self._service_launch_power[svc.uuid] = power_dbm
+        svc.assign_channel(fmt, (lower + upper) // 2, power_dbm)
         self._services[svc.uuid] = svc
         if baseline is not None:
             # The admission propagation is the service's baseline: same path,
@@ -474,6 +478,7 @@ class TapiContext:
 
         guard_slots = self._config.rmsa.default_guardband_slots
         margin = self._config.rmsa.qot_margin_db
+        power_dbm = self._launch_power_for(svc)
         memo: dict[tuple[tuple[str, ...], int, float, float], OpmBaseline | None] = {}
         attempts: list[str] = []
         spectrum_found = False
@@ -507,12 +512,13 @@ class TapiContext:
                     return path, fmt, start, block, None
 
                 lower, upper = self._slot_range_hz(start, block)
-                key = (tuple(path), (lower + upper) // 2, params.tx_power_dbm,
-                       params.baud_rate_hz)
+                centre_hz = (lower + upper) // 2
+                key = (tuple(path), centre_hz, power_dbm, params.baud_rate_hz)
                 if key not in memo:
                     async with self._propagation_lock:
                         memo[key] = await self._backend.compute_baseline(
                             path, fmt.value,
+                            centre_frequency_hz=centre_hz, launch_power_dbm=power_dbm,
                         )
                 baseline = memo[key]
                 if baseline is None:
@@ -531,6 +537,12 @@ class TapiContext:
 
         error_type = InsufficientQoTError if spectrum_found else InsufficientSpectrumError
         raise error_type("; ".join(attempts))
+
+    def _launch_power_for(self, svc: ConnectivityService) -> float:
+        """The requested launch power, else the line default (SI power_dbm)."""
+        if svc.requested_launch_power_dbm is not None:
+            return svc.requested_launch_power_dbm
+        return self.default_launch_power_dbm
 
     # -- Spectrum: grid, amplifier band, requested blocks ------------------
 
@@ -863,6 +875,7 @@ class TapiContext:
     def delete_service(self, uuid: str) -> bool:
         """Remove service and release its spectrum allocation."""
         allocation = self._service_allocation.pop(uuid, None)
+        self._service_launch_power.pop(uuid, None)
         if allocation is not None:
             path_edges, start, block_width = allocation
             self._spectrum_state.release(path_edges, start, block_width)
@@ -1298,8 +1311,10 @@ class TapiContext:
             if svc.uuid in self._baseline_cache:
                 return self._baseline_cache[svc.uuid]
 
+            centre_hz, power_dbm = self._service_channel(svc, path)
             baseline = await self._backend.compute_baseline(
                 path, svc.modulation_format.value,
+                centre_frequency_hz=centre_hz, launch_power_dbm=power_dbm,
             )
             if baseline is None:
                 return None
@@ -1675,8 +1690,10 @@ class TapiContext:
                             status="link-failed",
                         )
                     else:
+                        centre_hz, power_dbm = self._service_channel(svc, path)
                         predicted[svc.uuid] = await self._backend.compute_baseline(
                             path, svc.modulation_format.value,
+                            centre_frequency_hz=centre_hz, launch_power_dbm=power_dbm,
                         )
             finally:
                 for uid, attr, token in reversed(tokens):
@@ -2056,19 +2073,70 @@ class TapiContext:
 
     async def get_path_baseline(
         self, sip_a: str, sip_z: str, modulation_format: str
-    ) -> OpmBaseline | None:
-        """Compute OpmBaseline for path between two SIPs (no service, no cache).
+    ) -> tuple[OpmBaseline, int, float] | None:
+        """QoT of the best route between two SIPs, without a service or cache.
 
-        Uses same GNPy propagation as get_or_compute_baseline. Returns None if
-        GNPy unavailable or path not found.
+        Evaluated on the channel admission would give a new service of this
+        format on that route — the first free block inside the amplifier band,
+        at the default launch power — so the estimate matches what creating
+        the service would see.
+
+        Returns ``(baseline, central frequency [Hz], launch power [dBm])``, or
+        None when the backend is unavailable or there is no route.
         """
         if not self._backend.available:
             return None
         path = self.get_service_path(sip_a, sip_z)
         if not path:
             return None
+        centre_hz = self._preview_centre_frequency(path, ModulationFormat(modulation_format))
+        power_dbm = self.default_launch_power_dbm
         async with self._propagation_lock:
-            return await self._backend.compute_baseline(path, modulation_format)
+            baseline = await self._backend.compute_baseline(
+                path, modulation_format,
+                centre_frequency_hz=centre_hz, launch_power_dbm=power_dbm,
+            )
+        return None if baseline is None else (baseline, centre_hz, power_dbm)
+
+    def _preview_centre_frequency(self, path: list[str], fmt: ModulationFormat) -> int:
+        """Centre of the block admission would assign ``fmt`` on ``path``.
+
+        The first free block inside the amplifier band; when the band is full,
+        the first block inside it regardless of occupancy (the physics is
+        still meaningful, though admission would refuse).
+        """
+        width = self._block_width(fmt)
+        guard = self._config.rmsa.default_guardband_slots
+        assignable = self._assignable_slots(path)
+        edges = path_uids_to_edges(path)
+        start = first_fit(self._spectrum_state, edges, width - guard, guard, assignable)
+        if start is None:
+            start = first_fit(SpectrumState(self._config.spectrum.num_slots),
+                              edges, width - guard, guard, assignable) or 0
+        lower, upper = self._slot_range_hz(start, width)
+        return (lower + upper) // 2
+
+    @property
+    def default_launch_power_dbm(self) -> float:
+        """Launch power of a channel that requests none: the equipment
+        library's SI ``power_dbm``, the per-channel power the line is
+        designed for."""
+        return self._backend.spectral_defaults.power_dbm
+
+    def _service_channel(self, svc: ConnectivityService, path: list[str]) -> tuple[int, float]:
+        """(central frequency [Hz], launch power [dBm]) the service runs at.
+
+        Taken from its allocation; a service without one (only possible for
+        state built outside admission) is evaluated where admission would
+        put it.
+        """
+        power_dbm = self._service_launch_power.get(svc.uuid, self.default_launch_power_dbm)
+        allocation = self._service_allocation.get(svc.uuid)
+        if allocation is None:
+            return self._preview_centre_frequency(path, svc.modulation_format), power_dbm
+        _edges, start, width = allocation
+        lower, upper = self._slot_range_hz(start, width)
+        return (lower + upper) // 2, power_dbm
 
     def _build_gnpy_topology_ref_indexes(self) -> None:
         """Build gnpy_uid -> (topo_uuid, node_uuid) and (src,dst) -> (topo_uuid, link_uuid)."""
@@ -2173,6 +2241,7 @@ class TapiContext:
                 "path_edges": [list(e) for e in path_edges],
                 "start": start,
                 "block_width": block_width,
+                "launch_power_dbm": self._service_launch_power.get(uuid),
             }
         data = {
             "version": 1,
@@ -2226,6 +2295,7 @@ class TapiContext:
         # then re-apply whatever the snapshot recorded.
         self._services.clear()
         self._service_allocation.clear()
+        self._service_launch_power.clear()
         self._baseline_cache.clear()
         self._element_to_services.clear()
         # Revert, not just forget: dropping the override records alone would
@@ -2248,6 +2318,12 @@ class TapiContext:
                 path_edges,
                 int(alloc["start"]),
                 int(alloc["block_width"]),
+            )
+            # Snapshots taken before launch power was tracked ran every
+            # channel at the line default.
+            power = alloc.get("launch_power_dbm")
+            self._service_launch_power[uuid] = (
+                float(power) if power is not None else self.default_launch_power_dbm
             )
             # Rebuild the /config reverse index from path_edges (each edge is
             # (uid_a, uid_b) for consecutive GNPy elements, so we get all UIDs

@@ -84,6 +84,9 @@ class GnpyBackend:
         self,
         path_uids: list[str],
         modulation_format: str,
+        *,
+        centre_frequency_hz: float,
+        launch_power_dbm: float,
     ) -> OpmBaseline | None:
         if not self.available:
             return None
@@ -92,6 +95,9 @@ class GnpyBackend:
         try:
             return compute_path_baseline(
                 self.uid_map, path_uids, modulation_format,
+                defaults=self.spectral_defaults,
+                centre_frequency_hz=centre_frequency_hz,
+                launch_power_dbm=launch_power_dbm,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("GNPy baseline computation failed: %s", exc)

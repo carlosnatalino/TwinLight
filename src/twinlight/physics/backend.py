@@ -58,10 +58,16 @@ class PhysicalBackend(Protocol):
         self,
         path_uids: list[str],
         modulation_format: str,
+        *,
+        centre_frequency_hz: float,
+        launch_power_dbm: float,
     ) -> OpmBaseline | None:
         """Return a static QoT baseline for the path, or ``None`` if
         propagation is not possible (engine unavailable, missing element).
         Returning ``None`` puts the OPM endpoint into mock-data fallback.
+
+        The service channel sits at ``centre_frequency_hz`` and is launched
+        at ``launch_power_dbm``; the rest of the line at the SI defaults.
         """
 
     def amplifier_bands(self, path_uids: list[str]) -> list[tuple[float, float]] | None:

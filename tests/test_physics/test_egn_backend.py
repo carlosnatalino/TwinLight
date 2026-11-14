@@ -315,7 +315,10 @@ class TestEgnAmplifierDesign:
             path = ctx.get_service_path(a, z)
             if not path:
                 continue
-            baseline = await ctx._backend.compute_baseline(path, "DP-QPSK")
+            baseline = await ctx._backend.compute_baseline(
+                path, "DP-QPSK", centre_frequency_hz=193.1e12,
+                launch_power_dbm=ctx.default_launch_power_dbm,
+            )
             if baseline is not None and baseline.total_fiber_km > 500:
                 assert -5.0 < baseline.gsnr_db < 30.0
                 return

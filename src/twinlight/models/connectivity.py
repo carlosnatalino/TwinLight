@@ -23,6 +23,7 @@ standard").
 
 from __future__ import annotations
 
+import math
 import uuid as uuid_lib
 from typing import Any
 
@@ -91,6 +92,12 @@ class OtsiConfig(BaseModel):
     local_id: str = Field(default="1", alias="local-id")
     # uint64, Hz ("The central frequency of the laser … Measured in Hz.").
     central_frequency: int | None = Field(default=None, alias="central-frequency")
+    # decimal64, in units of 0.01 dBm: tapi-photonic-media.yang has no
+    # ``units`` statement here, only the description "The output power for
+    # this interface in .01 dBm". 150 means 1.5 dBm.
+    channel_output_power: float | None = Field(
+        default=None, alias="channel-output-power"
+    )
     modulation: ModulationTechnique
 
     @model_serializer(mode="wrap")
@@ -186,8 +193,14 @@ class ConnectivityService(BaseModel):
     requested_edge_frequency_constraint: dict[str, Any] | None = Field(
         default=None, exclude=True
     )
-    # Central frequency of the admitted channel [Hz]; reported in otsi-config.
+    # Launch power the client asked for [dBm], from otsi-config/
+    # channel-output-power (0.01 dBm on the wire). None = the line default
+    # (the equipment library's SI power_dbm).
+    requested_launch_power_dbm: float | None = Field(default=None, exclude=True)
+    # Central frequency [Hz] and launch power [dBm] of the admitted channel,
+    # i.e. what propagation uses; reported in otsi-config.
     central_frequency_hz: int | None = Field(default=None, exclude=True)
+    launch_power_dbm: float | None = Field(default=None, exclude=True)
 
     @field_validator("topology_constraint", mode="before")
     @classmethod
@@ -300,6 +313,7 @@ class ConnectivityService(BaseModel):
             return data
         spectra: set[tuple[int, int]] = set()
         centres: set[int] = set()
+        powers: set[float] = set()
         edges: list[dict[str, Any]] = []
         for end_point in data.get("end-point") or []:
             for constraint in (end_point or {}).get("layer-protocol-constraint") or []:
@@ -310,6 +324,8 @@ class ConnectivityService(BaseModel):
                         centres.add(_uint64(
                             cfg["central-frequency"], "otsi-config/central-frequency",
                         ))
+                    if isinstance(cfg, dict) and cfg.get("channel-output-power") is not None:
+                        powers.add(_centi_dbm_to_dbm(cfg["channel-output-power"]))
                 mcg = constraint.get(MCG_CSEP_SPEC)
                 if mcg is None:
                     continue
@@ -318,7 +334,7 @@ class ConnectivityService(BaseModel):
                     spectra.add(spectrum)
                 if edge is not None:
                     edges.append(edge)
-        if len(spectra) > 1 or len(centres) > 1:
+        if len(spectra) > 1 or len(centres) > 1 or len(powers) > 1:
             raise ValueError(
                 "the end-points request different spectrum; a lightpath has one "
                 "channel, so every end-point must carry the same values"
@@ -327,6 +343,8 @@ class ConnectivityService(BaseModel):
             data["requested_spectrum_hz"] = spectra.pop()
         if centres:
             data["requested_central_frequency_hz"] = centres.pop()
+        if powers:
+            data["requested_launch_power_dbm"] = powers.pop()
         if edges:
             data["requested_edge_frequency_constraint"] = edges[0]
         return data
@@ -342,13 +360,16 @@ class ConnectivityService(BaseModel):
         self._stamp()
         return self
 
-    def assign_channel(self, fmt: ModulationFormat, central_frequency_hz: int) -> None:
+    def assign_channel(
+        self, fmt: ModulationFormat, central_frequency_hz: int, launch_power_dbm: float,
+    ) -> None:
         """Record the channel admission put in effect, on the model and on the
-        wire: a GET reports the format and central frequency the lightpath
-        runs, not just what the client asked for (which may have been
-        nothing)."""
+        wire: a GET reports the format, central frequency and launch power the
+        lightpath runs — the values propagation used — not just what the
+        client asked for (which may have been nothing)."""
         self.modulation_format = fmt
         self.central_frequency_hz = central_frequency_hz
+        self.launch_power_dbm = launch_power_dbm
         self._stamp()
 
     def _stamp(self) -> None:
@@ -359,6 +380,11 @@ class ConnectivityService(BaseModel):
                         self.central_frequency_hz
                         if self.central_frequency_hz is not None
                         else self.requested_central_frequency_hz
+                    ),
+                    channel_output_power=_dbm_to_centi_dbm(
+                        self.launch_power_dbm
+                        if self.launch_power_dbm is not None
+                        else self.requested_launch_power_dbm
                     ),
                     modulation=ModulationTechnique(
                         standard_modulation_technique=MODULATION_TO_MT[
@@ -409,6 +435,28 @@ def _uint64(value: Any, where: str) -> int:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     raise ValueError(f"{where} must be a uint64, got {value!r}")
+
+
+def _centi_dbm_to_dbm(value: Any) -> float:
+    """otsi-config/channel-output-power (decimal64, 0.01 dBm) → dBm.
+
+    Accepted as a JSON number or, per RFC 7951 §6.1, a decimal string.
+    """
+    where = "otsi-config/channel-output-power"
+    if isinstance(value, bool):
+        raise ValueError(f"{where} must be a decimal64, got {value!r}")  # noqa: TRY004
+    try:
+        centi = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{where} must be a decimal64, got {value!r}") from None
+    if not math.isfinite(centi):
+        raise ValueError(f"{where} must be finite, got {value!r}")
+    return centi / 100.0
+
+
+def _dbm_to_centi_dbm(dbm: float | None) -> float | None:
+    """dBm → the 0.01 dBm units of otsi-config/channel-output-power."""
+    return None if dbm is None else round(dbm * 100.0, 7)
 
 
 def _requested_media_channel(

@@ -221,6 +221,13 @@ rmsa:
 | `qot_margin_db` | `1.5` | System margin added to the format's required GSNR before admission |
 | `default_guardband_slots` | `1` | Guard band in 6.25 GHz slots on each side of an allocation |
 
+There is no launch-power key here. The default launch power is a property of
+the line and comes from the equipment library's `SI` entry (`power_dbm`, the
+per-channel power the amplifiers are designed for; GNPy's bundled library when
+`gnpy.equipment` is unset). A service can ask for its own through the T-API
+`otsi-config/channel-output-power` leaf, in 0.01 dBm — see
+[PHYSICS.md § Launch power](PHYSICS.md#launch-power).
+
 `qot_margin_db` is the main admission-strictness knob, and is also exposed at
 run time — through `POST /config/set` or `/transparent/data/Config/rmsa` — so a
 single process can sweep it. All three fields are runtime-mutable; they affect

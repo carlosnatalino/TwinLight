@@ -242,6 +242,10 @@ async def get_service_info(service_uuid: str, request: Request) -> dict:
         "service-uuid": service_uuid,
         "name": name,
         "modulation-format": svc.modulation_format.value,
+        "central-frequency-thz": (ctx.get_service_spectrum(service_uuid) or {}).get(
+            "nominal-central-frequency"
+        ),
+        "launch-power-dbm": ctx._service_launch_power.get(service_uuid),
         "hops": hops,
         "total-fiber-km": total_fiber_km,
     }
@@ -286,9 +290,24 @@ async def get_path_info(
         ]
         total_fiber_km = round(sum(distances), 2) if distances else None
 
+    from twinlight.physics.modulation import ModulationFormat
+
+    try:
+        ModulationFormat(modulation)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown modulation {modulation!r}; "
+            f"expected one of {[f.value for f in ModulationFormat]}",
+        ) from None
+
     measurements = None
-    baseline = await ctx.get_path_baseline(sip_a, sip_z, modulation)
-    if baseline is not None:
+    centre_thz: float | None = None
+    launch_power_dbm: float | None = None
+    estimate = await ctx.get_path_baseline(sip_a, sip_z, modulation)
+    if estimate is not None:
+        baseline, centre_hz, launch_power_dbm = estimate
+        centre_thz = round(centre_hz * 1e-12, 6)
         cfg = request.app.state.config
         t = time.time()
         from twinlight.physics.transients.cascade import apply_all_transients
@@ -307,6 +326,10 @@ async def get_path_info(
         "sip-a": sip_a,
         "sip-z": sip_z,
         "modulation-format": modulation,
+        # The channel the estimate was evaluated on: the block admission
+        # would assign this format on the route, at the default launch power.
+        "central-frequency-thz": centre_thz,
+        "launch-power-dbm": launch_power_dbm,
         "hops": hops or [],
         "total-fiber-km": total_fiber_km,
         "measurements": measurements,

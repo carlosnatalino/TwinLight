@@ -26,7 +26,12 @@ def baseline(gnpy_context):
     sip_a, sip_z = (sip.uuid for sip in gnpy_context.get_sips()[:2])
     path = gnpy_context.get_service_path(sip_a, sip_z)
     assert path, "fixture topology should have a path between its two SIPs"
-    return compute_path_baseline(gnpy_context._gnpy_uid_map, path, "DP-QPSK")
+    return compute_path_baseline(
+        gnpy_context._gnpy_uid_map, path, "DP-QPSK",
+        defaults=gnpy_context._backend.spectral_defaults,
+        centre_frequency_hz=193.1e12,
+        launch_power_dbm=gnpy_context.default_launch_power_dbm,
+    )
 
 
 class TestBaselineUnits:

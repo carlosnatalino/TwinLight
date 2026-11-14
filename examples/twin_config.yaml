@@ -106,6 +106,9 @@ rmsa:
   k_shortest_paths: 3
   qot_margin_db: 1.5                  # system margin [dB]
   default_guardband_slots: 1           # guard band in 6.25 GHz slots
+  # Launch power is not set here: the default is the equipment library's
+  # SI power_dbm, and a service may request its own (otsi-config/
+  # channel-output-power, in 0.01 dBm).
 
 # ---------------------------------------------------------------------------
 # Spectrum grid

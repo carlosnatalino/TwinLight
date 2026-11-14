@@ -28,7 +28,10 @@ def _baseline(ctx: TapiContext) -> Any:
     by_trx = {ctx.get_gnpy_uid(s.uuid): s.uuid for s in ctx.sips}
     path = ctx.get_service_path(by_trx["trx Brest_1"], by_trx["trx Morlaix_1"])
     assert path and FWD_FIBER in path and EAST_AMP in path
-    baseline = asyncio.run(ctx._backend.compute_baseline(path, "DP-QPSK"))
+    baseline = asyncio.run(ctx._backend.compute_baseline(
+        path, "DP-QPSK", centre_frequency_hz=193.1e12,
+        launch_power_dbm=ctx.default_launch_power_dbm,
+    ))
     assert baseline is not None
     return baseline
 

@@ -23,7 +23,10 @@ class ModulationFormat(str, Enum):
 class ModulationParams:
     baud_rate_hz: float   # Symbol rate [Hz]
     spacing_hz: float     # Channel spacing [Hz]
-    tx_power_dbm: float   # Launch power per channel [dBm]
+    # No launch power here: it is a property of the line, not the format.
+    # The default is the equipment library's SI power_dbm
+    # (physics/channel_plan.py); a service may request its own through
+    # otsi-config/channel-output-power.
     # Required GSNR for admission [dB]. Not at one common BER: QPSK sits at
     # the 7% HD-FEC limit (3.8e-3), 16QAM and 64QAM at ~6.6e-3 and ~6.1e-3,
     # which need 15.2 and 21.1 dB to reach 3.8e-3 — see PHYSICS.md § 3.
@@ -36,21 +39,18 @@ MODULATION_TABLE: dict[str, ModulationParams] = {
     ModulationFormat.DP_QPSK: ModulationParams(
         baud_rate_hz=32e9,
         spacing_hz=50e9,
-        tx_power_dbm=0.0,
         req_gsnr_db=8.5,
         bits_per_symbol=2,
     ),
     ModulationFormat.DP_16QAM: ModulationParams(
         baud_rate_hz=32e9,
         spacing_hz=50e9,
-        tx_power_dbm=0.0,
         req_gsnr_db=14.5,
         bits_per_symbol=4,
     ),
     ModulationFormat.DP_64QAM: ModulationParams(
         baud_rate_hz=32e9,
         spacing_hz=50e9,
-        tx_power_dbm=0.0,
         req_gsnr_db=20.5,
         bits_per_symbol=6,
     ),

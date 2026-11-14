@@ -53,6 +53,28 @@ Split-step propagation through the designed network using the `gnpy` library
   element state and the cached network must not drift.
 - `si.pmd` and `si.latency` are per-channel arrays, not scalars.
 
+### Launch power
+
+A channel's launch power is a property of the line, not of the modulation
+format, so it comes from the equipment library: SI `power_dbm`, the
+per-channel power the amplifiers are designed for (GNPy's bundled
+`eqpt_config.json` when no library is configured — 0 dBm). A service may ask
+for its own through `otsi-config/channel-output-power`, which
+`tapi-photonic-media.yang` gives in **0.01 dBm** (a decimal64 with no `units`
+statement; the description reads "The output power for this interface in .01
+dBm"), so `150` is 1.5 dBm. The power in effect is what the end-point reports
+and what propagation uses.
+
+- **GNPy.** The comb's transmitters emit SI `tx_power_dbm`. The service
+  channel's transmitter emits P and the channel carries an offset
+  `delta_pdb = P − SI power_dbm`. GNPy's ROADMs set every channel to their
+  per-channel target plus its `delta_pdb` (`gnpy.core.elements.Roadm`), so a
+  transmitter power alone would be erased at the first ROADM; the offset
+  survives, and the channel runs that many dB above or below its neighbours
+  along the line, whose absolute level stays the one the design chose.
+- **EGN.** The GN model has no ROADM equalisation: P is the channel's launch
+  power into every span.
+
 ### EGN backend
 
 A closed-form Gaussian-Noise model implemented directly in
@@ -416,6 +438,7 @@ used for research.
 | **Post-FEC BER, hard-decision model** | Sklar's decoded symbol error rate, converted to bits at the channel ratio p/p_s | Sklar Ch. 8 converts at 2^(m−1)/(2^m − 1), treating wrong output symbols as random | Low — the channel ratio matches the published RS(255,239) coding gain; both ignore miscorrection and burst errors, and neither describes concatenated or soft-decision codes (CFEC, oFEC) |
 | **Soft-decision post-FEC BER** | GMI and NGMI are reported but not mapped to a post-FEC BER | Per-code NGMI threshold or waterfall (Alvarado *et al.* 2015) | Known gap — needs per-code NGMI data, which specifications rarely publish |
 | **Admission thresholds** | Required GSNRs sit at pre-FEC BERs of 3.9e-3 (QPSK), 6.6e-3 (16QAM), 6.1e-3 (64QAM) | One FEC limit for every format: 8.5 / 15.2 / 21.1 dB at 3.8e-3 | **Moderate** — 16QAM and 64QAM admission is 0.6–0.7 dB optimistic against the 7% HD-FEC limit, absorbed by the default 1.5 dB `qot_margin_db`. The values are unchanged so admission behaves as before |
+| **Launch power** | GNPy: a per-channel offset (`delta_pdb`) against a line designed for SI `power_dbm`. EGN: the absolute power into every span, equal for all spans | Per-span launch power from the amplifier design, which GNPy may vary span by span (`delta_p`) | Low — the backends agree when the design runs every span at SI `power_dbm`; where GNPy's design sets per-span offsets, EGN does not see them |
 | **Spectral scope** | C-band only | C+L, multi-band | Known gap — the grid is parameterised but the physics is not |
 | **Filtering / ROADM penalties** | Not modelled beyond PDL | Cascaded filter narrowing penalties | Known gap |
 | **BER conversion** | Textbook Gaussian approximation per format | Curri 2022 uses measured back-to-back thresholds | Low — standard practice |
