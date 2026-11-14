@@ -131,6 +131,15 @@ Details that are easy to get wrong and cost a debugging cycle:
   THz), so 81 of the 88 channels reach the receiver.
 - `si.pmd` and `si.latency` are per-channel arrays, not scalars.
 - Deep-copy path elements before propagating; propagation mutates element state.
+- GNPy has no k-shortest-path function. `compute_constrained_path` runs
+  `networkx.shortest_simple_paths(network, weight="weight")`, where an edge's
+  weight is the length (m) of the fiber it leaves and 0.01 otherwise
+  (`gnpy/tools/json_io.py`, `gnpy/core/network.py`). The twin's k-list is that
+  same search; its `TopologyGraph` fallback carries the same weights.
+  `tests/test_state/test_candidate_ranking.py` pins candidate 1 to GNPy's route.
+- With an all-`LOOSE` `loose_list` it cannot satisfy, `compute_constrained_path`
+  drops the constraints and returns the unconstrained route. The twin passes
+  `STRICT` for every include.
 
 ## Caches and invalidation
 

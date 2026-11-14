@@ -175,8 +175,9 @@ all, rather than a zeroed one.
 | GET | `…/path={uuid}` |
 
 T-API v2.6.0 has no path-computation RPC: computation is a resource. Creating
-a `path-comp-service` computes up to `rmsa.k_shortest_paths` routes, best
-first, stores each as a `path` in the context and lists them in the service's
+a `path-comp-service` computes up to `rmsa.k_shortest_paths` routes, shortest
+fiber length first (GNPy's ranking, see
+[ARCHITECTURE.md](ARCHITECTURE.md#creating-a-connectivity-service)), stores each as a `path` in the context and lists them in the service's
 `path` references. Nothing is allocated. Services and paths are what-if
 results: they are not part of snapshots, and a path keeps the route it had when
 it was computed.
@@ -318,7 +319,7 @@ bare `/data/…` paths and omits these three resources.
 | GET | `/internal/spectrum-grid` | Per-link slot occupancy, used by the UI heat map |
 | GET | `/internal/spectrum-context` | Grid parameters: `num-slots`, `slot-width-ghz`, `nominal-central-frequency-thz` |
 | GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service |
-| POST | `/internal/compute-path` | Up to `max-candidates` (1–10) ranked routes between two SIPs, each with its T-API links, nodes and `fiber-length-km`; same constraints as a path-comp-service |
+| POST | `/internal/compute-path` | Up to `max-candidates` (1–10) routes ranked by fiber length between two SIPs, each with its T-API links, nodes and `fiber-length-km`; same constraints as a path-comp-service |
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
 

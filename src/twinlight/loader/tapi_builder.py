@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import uuid as uuid_lib
 
-from twinlight.loader.gnpy_topology import GnpyTopology
+from twinlight.loader.gnpy_topology import GnpyTopology, fiber_length_m
 from twinlight.models.common import (
     LayerProtocolName,
     NameAndValue,
@@ -37,22 +37,6 @@ from twinlight.state.topology_state import TopologyGraph
 logger = logging.getLogger(__name__)
 
 TERMINAL_TYPES = {"Transceiver", "Roadm"}
-
-# GNPy ``params.length`` unit spellings → metres multiplier.
-# Missing ``length_units`` defaults to km (GNPy's own default).
-_LENGTH_TO_METRES: dict[str, float] = {
-    "km": 1_000.0,
-    "kilometer": 1_000.0,
-    "kilometre": 1_000.0,
-    "kilometers": 1_000.0,
-    "kilometres": 1_000.0,
-    "m": 1.0,
-    "meter": 1.0,
-    "metre": 1.0,
-    "meters": 1.0,
-    "metres": 1.0,
-}
-
 
 class TapiBuilder:
     """Builds TAPI topology from a GNPy topology graph."""
@@ -160,29 +144,20 @@ class TapiBuilder:
 
     @staticmethod
     def _fiber_params_length_m(params: dict, *, uid: str = "") -> float:
-        """Convert a Fiber element's ``params.length`` to metres.
+        """A Fiber element's ``params.length`` in metres, 0 when unknown.
 
-        GNPy stores the numeric length in the unit named by
-        ``params["length_units"]``; when that key is absent the value is
-        kilometres (GNPy's default). Unknown units are skipped with a
-        warning rather than guessed — a wrong scale silently poisons every
-        ``propagation-delay`` on the link.
+        Unknown units are skipped with a warning rather than guessed — a wrong
+        scale silently poisons every ``propagation-delay`` on the link.
         """
-        try:
-            length = float(params.get("length", 0))
-        except (TypeError, ValueError):
-            return 0.0
-        units = str(params.get("length_units") or "km").strip().lower()
-        scale = _LENGTH_TO_METRES.get(units)
-        if scale is None:
+        length_m = fiber_length_m(params)
+        if length_m is None:
             logger.warning(
-                "Fiber %s: unknown length_units %r; omitting from "
-                "propagation-delay",
-                uid or "?",
-                params.get("length_units"),
+                "Fiber %s: unknown length_units %r or unreadable length %r; "
+                "omitting from propagation-delay",
+                uid or "?", params.get("length_units"), params.get("length"),
             )
             return 0.0
-        return length * scale
+        return length_m
 
     def _span_fiber_length_m(self, intermediates: list[str]) -> float:
         """Total fiber length [m] along a span (Fiber elements only)."""

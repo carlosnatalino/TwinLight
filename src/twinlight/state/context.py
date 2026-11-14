@@ -726,14 +726,19 @@ class TapiContext:
 
     # -- Route search ------------------------------------------------------
     #
-    # Candidates come from the GNPy network when one is loaded:
-    # ``compute_constrained_path`` gives the best route, honouring ordered
-    # includes, and Yen's algorithm over the same graph gives the rest.
-    # Exclusions are applied by searching a restricted view of the graph,
-    # which GNPy's search accepts like any other DiGraph. Without a GNPy
-    # network (the EGN backend) the same search runs over the parsed
-    # topology graph. See algorithms/path_constraints.py for which T-API
-    # constraints map onto this.
+    # GNPy has no k-shortest-path function. Its compute_constrained_path runs
+    # networkx.shortest_simple_paths(network, weight="weight") over the GNPy
+    # network, where an edge's weight is the length of the fiber it leaves
+    # (gnpy/tools/json_io.py, network_from_json; 0.01 for other edges, as
+    # gnpy/core/network.py also sets on the edges it adds). The k-list is
+    # built the same way: compute_constrained_path gives candidate 1,
+    # honouring ordered includes, and the same weighted Yen search over the
+    # same graph gives the rest. Exclusions are applied by searching a
+    # restricted view of the graph, which GNPy's search accepts like any
+    # other DiGraph. Without a GNPy network (the EGN backend) the search
+    # falls back to the parsed topology graph, weighted the same way
+    # (state/topology_state.py). See algorithms/path_constraints.py for which
+    # T-API constraints map onto this.
 
     def _element_kind(self, uid: str) -> str:
         """"Roadm"/"Transceiver"/"Fiber"/"Edfa"/… for an element UID."""
@@ -922,9 +927,13 @@ class TapiContext:
             if best is not None:
                 candidates.append(best)
         if len(candidates) < k:
+            # Ranked as GNPy ranks: Yen's algorithm on the edge ``weight`` —
+            # fiber length (gnpy.tools.json_io.network_from_json) on both
+            # graphs — which is the search compute_constrained_path itself
+            # runs, so the best candidate above is also first here.
             more = k_shortest_paths(
                 view, key_of(src), key_of(dst), k + len(candidates),
-                include=include_keys,
+                include=include_keys, weight="weight",
             )
             for path in more:
                 uids = [getattr(n, "uid", n) for n in path]

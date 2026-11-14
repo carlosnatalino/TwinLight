@@ -34,8 +34,8 @@ into it). Baseline before any change: 752 tests passed.
 |---|------|--------|--------|
 | 1 | Path-computation constraints + T-API path-comp-service | done | see git log |
 | 2 | Modulation selection over k candidates | done | see git log |
-| 3 | Candidate ranking (GNPy shortest_simple_paths) | next | |
-| 4 | Spectrum request / band restriction | todo | |
+| 3 | Candidate ranking (GNPy shortest_simple_paths) | done | see git log |
+| 4 | Spectrum request / band restriction | next | |
 | 5 | Launch power | todo | |
 | 6 | Startup log of effective RMSA settings | todo | |
 | 7 | Channel-accurate QoT | todo | |
@@ -49,8 +49,6 @@ into it). Baseline before any change: 752 tests passed.
   explicit-route; routing-constraint route-objective-function
   MIN_WORK_ROUTE_LATENCY (fiber-length ranking is latency ranking) and
   is-exclusive=true. Everything else is refused by name.
-- Item 1 interim: k>1 candidates after GNPy's best route are ranked by hop
-  count (Yen over the same restricted view); item 3 switches to fiber length.
 - Mesh fixture `tests/fixtures/mesh_network.json` + `MeshRefs`, `mesh_context`
   (both backends), `mesh_gnpy_context`, `mesh_app` in `tests/conftest.py`.
 - Pre-existing finding for the PR (not fixed): topology link

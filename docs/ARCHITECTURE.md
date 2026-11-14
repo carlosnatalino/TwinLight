@@ -187,8 +187,13 @@ src/twinlight_client/    Companion client library and CLI
    `algorithms/path_constraints.py` decides what is supported). With a GNPy
    network, GNPy's `compute_constrained_path` gives the best route —
    includes become its strict `nodes_list` — on a `networkx.restricted_view`
-   that hides excluded nodes and links; otherwise
-   `algorithms/routing.py:k_shortest_paths` searches the parsed topology. The
+   that hides excluded nodes and links. GNPy has no k-shortest function, so
+   the other candidates come from the search `compute_constrained_path` itself
+   runs — `networkx.shortest_simple_paths(network, weight="weight")`, the
+   weight being the length of the fiber an edge leaves — over the same view,
+   and candidate 1 is therefore GNPy's route. Without a GNPy network (the EGN
+   backend), `algorithms/routing.py:k_shortest_paths` searches the parsed
+   topology graph, whose edges carry the same fiber-length weight. The
    unconstrained best route is memoised in `_route_cache`.
 3. For each of the `rmsa.k_shortest_paths` candidates, in order, and on each
    for the requested format — or every format from the highest spectral

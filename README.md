@@ -84,9 +84,10 @@ way a deployed coherent receiver's telemetry moves.
 - **Four time-varying impairment models** — EDFA gain-reservoir transients,
   polarization (PMD drift + PDL hinge model), equalization-enhanced phase noise,
   and environmental/thermal drift, each traceable to a published formulation.
-- **QoT-aware RMSA** — k-shortest-path routing, first-fit spectrum assignment on
-  a 6.25 GHz flexi-grid, and admission control against the required GSNR of the
-  requested modulation format.
+- **QoT-aware RMSA** — k-shortest-path routing ranked by fiber length as GNPy
+  ranks it, first-fit spectrum assignment on a 6.25 GHz flexi-grid, and
+  admission control against the required GSNR of the modulation format,
+  choosing the densest format that closes the link when none is requested.
 - **Streaming telemetry** — gNMI `Subscribe` in ONCE / STREAM / POLL modes over
   gRPC, served by a stateless adapter that calls the FastAPI app in-process.
 - **Observability out of the box** — Prometheus `/metrics` plus a provisioned
