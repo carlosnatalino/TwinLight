@@ -270,6 +270,12 @@ spectrum:
 Defaults describe the standard C-band: 768 × 6.25 GHz = 4.8 THz centred on the
 ITU-T G.694.1 anchor at 193.1 THz.
 
+The grid is the spectrum the twin *accounts* for; what it *assigns* on a route
+is further limited to the band every amplifier on the route passes, which comes
+from the equipment library (each EDFA type's `f_min`/`f_max`, GNPy's
+`find_elements_common_range`). With GNPy's reference EDFAs that band starts at
+191.275 THz, so the lowest ~90 slots of the default grid are never assigned.
+
 ## `logging`
 
 ```yaml

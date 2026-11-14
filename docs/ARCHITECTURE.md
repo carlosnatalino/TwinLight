@@ -118,6 +118,7 @@ src/twinlight/
     gnpy_adapter.py        build_gnpy_network(), compute_path_baseline(), OpmBaseline
     element_params.py      Per-element parameter read/write for the /config plane
     modulation.py          ModulationFormat enum and per-format parameters
+    channel_plan.py        SI defaults and amplifier bands from the GNPy equipment library
     ber_conversion.py      GSNR → pre-FEC BER → Q-factor (Gaussian approximation)
     fec.py                 Pre-FEC → post-FEC BER: threshold and hard-decision models
     gmi.py                 GSNR → GMI / NGMI (Gauss–Hermite quadrature)
@@ -134,7 +135,8 @@ src/twinlight/
   algorithms/
     routing.py             k_shortest_paths() over the NetworkX graph
     path_constraints.py    T-API routing/topology constraints → supported subset
-    spectrum_assignment.py First-fit slot allocation with guard bands
+    spectrum_assignment.py First-fit slot allocation with guard bands, within an
+                           assignable-slot mask (the amplifier band)
 
   api/                   Routers (see the table above)
   streaming/
@@ -198,7 +200,11 @@ src/twinlight_client/    Companion client library and CLI
 3. For each of the `rmsa.k_shortest_paths` candidates, in order, and on each
    for the requested format — or every format from the highest spectral
    efficiency down when none is requested (`TapiContext._admit`): find a
-   first-fit block (`algorithms/spectrum_assignment.py`), propagate the path
+   block — the requested one, checked against the grid once and against the
+   path's amplifier band and occupancy per candidate, or else first-fit
+   (`algorithms/spectrum_assignment.py`) restricted to the slots inside the
+   band every amplifier on the path passes (`backend.amplifier_bands`,
+   GNPy's `find_elements_common_range`) — propagate the path
    through the active backend to obtain an `OpmBaseline`, and check
    `GSNR ≥ required_gsnr(format) + rmsa.qot_margin_db`. Propagations are
    memoised for the duration of one admission, keyed by path, central

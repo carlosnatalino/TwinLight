@@ -84,12 +84,19 @@ class ModulationTechnique(BaseModel):
 
 
 class OtsiConfig(BaseModel):
-    """tapi-photonic-media.otsi-config-pac (modulation subset)."""
+    """tapi-photonic-media.otsi-config-pac (the subset the twin acts on)."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     local_id: str = Field(default="1", alias="local-id")
+    # uint64, Hz ("The central frequency of the laser … Measured in Hz.").
+    central_frequency: int | None = Field(default=None, alias="central-frequency")
     modulation: ModulationTechnique
+
+    @model_serializer(mode="wrap")
+    def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        return {k: v for k, v in data.items() if v is not None}
 
 
 class OtsiaCsepSpec(BaseModel):
@@ -172,6 +179,15 @@ class ConnectivityService(BaseModel):
     # efficiency down (TapiContext.add_service). ``modulation_format`` is the
     # format in effect: the requested one, or the one admission chose.
     requested_modulation: ModulationFormat | None = Field(default=None, exclude=True)
+    # Spectrum the client asked for, lifted from the end-points (see
+    # _channel_from_end_points). None = first-fit at admission.
+    requested_spectrum_hz: tuple[int, int] | None = Field(default=None, exclude=True)
+    requested_central_frequency_hz: int | None = Field(default=None, exclude=True)
+    requested_edge_frequency_constraint: dict[str, Any] | None = Field(
+        default=None, exclude=True
+    )
+    # Central frequency of the admitted channel [Hz]; reported in otsi-config.
+    central_frequency_hz: int | None = Field(default=None, exclude=True)
 
     @field_validator("topology_constraint", mode="before")
     @classmethod
@@ -260,6 +276,61 @@ class ConnectivityService(BaseModel):
                         return data
         return data
 
+    @model_validator(mode="before")
+    @classmethod
+    def _channel_from_end_points(cls, data: Any) -> Any:
+        """Lift a requested spectrum and central frequency from the end-points.
+
+        T-API v2.6.0 has two places for them, both optional:
+
+        * ``…/mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac/
+          spectrum`` — the media channel's ``lower-frequency`` and
+          ``upper-frequency``, uint64 Hz;
+        * ``…/otsia-connectivity-service-end-point-spec/otsi-config/
+          central-frequency`` — the carrier's frequency, uint64 Hz.
+
+        Each end-point may carry them; when several do, they must agree, since
+        a lightpath has one channel. A service holds one media channel, so
+        more than one ``mc-spectrum-config-pac``, and the MCG leaves the twin
+        does not act on, are refused by name rather than ignored. Grid
+        alignment, width and availability depend on the grid and the route,
+        and are checked at admission.
+        """
+        if not isinstance(data, dict):
+            return data
+        spectra: set[tuple[int, int]] = set()
+        centres: set[int] = set()
+        edges: list[dict[str, Any]] = []
+        for end_point in data.get("end-point") or []:
+            for constraint in (end_point or {}).get("layer-protocol-constraint") or []:
+                if not isinstance(constraint, dict):
+                    continue
+                for cfg in (constraint.get(OTSIA_CSEP_SPEC) or {}).get("otsi-config") or []:
+                    if isinstance(cfg, dict) and cfg.get("central-frequency") is not None:
+                        centres.add(_uint64(
+                            cfg["central-frequency"], "otsi-config/central-frequency",
+                        ))
+                mcg = constraint.get(MCG_CSEP_SPEC)
+                if mcg is None:
+                    continue
+                spectrum, edge = _requested_media_channel(mcg)
+                if spectrum is not None:
+                    spectra.add(spectrum)
+                if edge is not None:
+                    edges.append(edge)
+        if len(spectra) > 1 or len(centres) > 1:
+            raise ValueError(
+                "the end-points request different spectrum; a lightpath has one "
+                "channel, so every end-point must carry the same values"
+            )
+        if spectra:
+            data["requested_spectrum_hz"] = spectra.pop()
+        if centres:
+            data["requested_central_frequency_hz"] = centres.pop()
+        if edges:
+            data["requested_edge_frequency_constraint"] = edges[0]
+        return data
+
     @model_validator(mode="after")
     def _stamp_modulation_on_end_points(self) -> ConnectivityService:
         """Give every end-point the photonic augment for this service.
@@ -271,17 +342,24 @@ class ConnectivityService(BaseModel):
         self._stamp()
         return self
 
-    def assign_modulation(self, fmt: ModulationFormat) -> None:
-        """Record the format admission put in effect, on the model and on the
-        wire: a GET reports the format the lightpath runs, not just the one
-        the client asked for (which may have been none)."""
+    def assign_channel(self, fmt: ModulationFormat, central_frequency_hz: int) -> None:
+        """Record the channel admission put in effect, on the model and on the
+        wire: a GET reports the format and central frequency the lightpath
+        runs, not just what the client asked for (which may have been
+        nothing)."""
         self.modulation_format = fmt
+        self.central_frequency_hz = central_frequency_hz
         self._stamp()
 
     def _stamp(self) -> None:
         spec = OtsiaCsepSpec(
             otsi_config=[
                 OtsiConfig(
+                    central_frequency=(
+                        self.central_frequency_hz
+                        if self.central_frequency_hz is not None
+                        else self.requested_central_frequency_hz
+                    ),
                     modulation=ModulationTechnique(
                         standard_modulation_technique=MODULATION_TO_MT[
                             self.modulation_format
@@ -308,3 +386,68 @@ class UpdateConnectivityServiceRequest(BaseModel):
     lifecycle_state: LifecycleState | None = Field(
         default=None, alias="lifecycle-state"
     )
+
+
+# MCG leaves the twin acts on. mc-bandwidth-config-pac and
+# mc-flexi-grid-config-pac would constrain the channel in ways the twin does
+# not implement, so a request carrying them is refused rather than ignored.
+_MCG_KEYS = frozenset({"number-of-mc", "mc-spectrum-config-pac"})
+_MC_SPECTRUM_KEYS = frozenset({"local-id", "name", "spectrum", "edge-frequency-constraint"})
+
+
+# These helpers run inside pydantic validators, which turn only ValueError into
+# a validation error (a 422); a TypeError would escape as a 500. Hence the
+# TRY004 suppressions below.
+
+
+def _uint64(value: Any, where: str) -> int:
+    """A YANG uint64: a JSON number or, per RFC 7951 §6.1, a decimal string."""
+    if isinstance(value, bool):
+        raise ValueError(f"{where} must be a uint64, got {value!r}")  # noqa: TRY004
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    raise ValueError(f"{where} must be a uint64, got {value!r}")
+
+
+def _requested_media_channel(
+    mcg: Any,
+) -> tuple[tuple[int, int] | None, dict[str, Any] | None]:
+    """(lower, upper) Hz and edge-frequency-constraint of a requested MC."""
+    where = MCG_CSEP_SPEC
+    if not isinstance(mcg, dict):
+        raise ValueError(f"{where} must be an object")  # noqa: TRY004
+    unknown = sorted(set(mcg) - _MCG_KEYS)
+    if unknown:
+        raise ValueError(f"{where}/{unknown[0]} is not supported")
+    pacs = mcg.get("mc-spectrum-config-pac") or []
+    number = mcg.get("number-of-mc", 1)
+    if number != 1 or len(pacs) > 1:
+        raise ValueError(
+            f"{where}: a connectivity-service holds one media channel; "
+            "number-of-mc and mc-spectrum-config-pac must describe one"
+        )
+    if not pacs:
+        return None, None
+    pac = pacs[0]
+    if not isinstance(pac, dict):
+        raise ValueError(  # noqa: TRY004
+            f"{where}/mc-spectrum-config-pac entries must be objects"
+        )
+    unknown = sorted(set(pac) - _MC_SPECTRUM_KEYS)
+    if unknown:
+        raise ValueError(f"{where}/mc-spectrum-config-pac/{unknown[0]} is not supported")
+    spectrum = pac.get("spectrum")
+    band: tuple[int, int] | None = None
+    if spectrum is not None:
+        lower = _uint64(spectrum.get("lower-frequency"), "spectrum/lower-frequency")
+        upper = _uint64(spectrum.get("upper-frequency"), "spectrum/upper-frequency")
+        if lower >= upper:
+            raise ValueError(
+                f"spectrum/lower-frequency {lower} must be below upper-frequency {upper}"
+            )
+        band = (lower, upper)
+    edge = pac.get("edge-frequency-constraint")
+    return band, edge if isinstance(edge, dict) else None
+

@@ -16,6 +16,11 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from twinlight.config import TwinConfig
+from twinlight.physics.channel_plan import (
+    SpectralDefaults,
+    load_spectral_defaults,
+    spectral_defaults_from_equipment,
+)
 
 if TYPE_CHECKING:
     import networkx as nx
@@ -38,9 +43,11 @@ class GnpyBackend:
         # Retained for ``redesign()`` so we don't re-read the equipment
         # JSON from disk on every override.
         self.equipment: Any = None
+        self.spectral_defaults: SpectralDefaults
 
         if config.gnpy.equipment is None:
             logger.info("No GNPy equipment file configured — using mock OPM data")
+            self.spectral_defaults = load_spectral_defaults(None)
             return
 
         try:
@@ -55,8 +62,12 @@ class GnpyBackend:
             self.network = network
             self.equipment = equipment
             self.uid_map = build_uid_map(network)
+            self.spectral_defaults = spectral_defaults_from_equipment(
+                equipment, str(config.gnpy.equipment),
+            )
             self.available = True
             logger.info("GNPy network loaded: %d elements", len(self.uid_map))
+            return
         except ImportError:
             logger.warning(
                 "gnpy package not found — OPM will use sinusoidal mock data"
@@ -65,6 +76,7 @@ class GnpyBackend:
             logger.warning(
                 "GNPy network load failed (%s) — using mock data", exc
             )
+        self.spectral_defaults = load_spectral_defaults(config.gnpy.equipment)
 
     # -- QoT propagation -------------------------------------------------
 
@@ -84,6 +96,20 @@ class GnpyBackend:
         except Exception as exc:  # noqa: BLE001
             logger.warning("GNPy baseline computation failed: %s", exc)
             return None
+
+    def amplifier_bands(self, path_uids: list[str]) -> list[tuple[float, float]] | None:
+        """``gnpy.topology.request.find_elements_common_range`` over the path:
+        the bands every EDFA on it passes, as GNPy filters a request's
+        spectrum before propagating it."""
+        if not self.available:
+            return None
+        from gnpy.topology.request import find_elements_common_range
+
+        elements = [self.uid_map[uid] for uid in path_uids if uid in self.uid_map]
+        return [
+            (float(r["f_min"]), float(r["f_max"]))
+            for r in find_elements_common_range(elements, self.equipment)
+        ]
 
     # -- /config plane: per-element parameter reads/writes ---------------
 

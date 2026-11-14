@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     import networkx as nx
 
+    from twinlight.physics.channel_plan import SpectralDefaults
     from twinlight.physics.gnpy_adapter import OpmBaseline
 
 
@@ -49,6 +50,9 @@ class PhysicalBackend(Protocol):
     # computation; the EGN backend leaves this ``None`` (path computation
     # falls back to the TopologyGraph-based NetworkX k-shortest).
     network: nx.DiGraph | None
+    # The equipment library's SI.default: reference comb, symbol rate, design
+    # launch power (physics/channel_plan.py).
+    spectral_defaults: SpectralDefaults
 
     async def compute_baseline(
         self,
@@ -58,6 +62,12 @@ class PhysicalBackend(Protocol):
         """Return a static QoT baseline for the path, or ``None`` if
         propagation is not possible (engine unavailable, missing element).
         Returning ``None`` puts the OPM endpoint into mock-data fallback.
+        """
+
+    def amplifier_bands(self, path_uids: list[str]) -> list[tuple[float, float]] | None:
+        """Frequency ranges [Hz] every amplifier on the path passes, or None
+        when the backend has no amplifier model (then nothing is excluded).
+        Spectrum outside them is dropped by an EDFA, so it is not assignable.
         """
 
     def read_attribute(self, uid: str, attr: str) -> Any:

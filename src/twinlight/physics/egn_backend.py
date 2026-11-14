@@ -39,6 +39,7 @@ from twinlight.physics.analytical_metrics import (
     latency_ms,
     pmd_ps,
 )
+from twinlight.physics.channel_plan import common_band, load_spectral_defaults
 from twinlight.physics.egn_kernel import (
     PathQoT,
     SpanInputs,
@@ -59,7 +60,11 @@ logger = logging.getLogger(__name__)
 # Amplifier placement
 # ---------------------------------------------------------------------------
 
-def _load_topology_with_amplifiers(config: TwinConfig) -> GnpyTopology:
+# EDFA UID → the bands it passes (``Edfa.params.bands`` of the designed network).
+EdfaBands = dict[str, list[dict[str, Any]]]
+
+
+def _load_topology_with_amplifiers(config: TwinConfig) -> tuple[GnpyTopology, EdfaBands]:
     """Parse the topology, applying GNPy's amplifier design when possible.
 
     The GN model charges ASE *per span*, on the assumption that each span
@@ -81,6 +86,10 @@ def _load_topology_with_amplifiers(config: TwinConfig) -> GnpyTopology:
     unset) the topology is used exactly as written, which stays correct
     for topologies that already carry their own amplifiers and keeps the
     EGN backend usable with no equipment file at all.
+
+    Also returns the band each designed EDFA passes, which bounds the
+    assignable spectrum exactly as under the GNPy backend; empty when the
+    topology was not designed.
     """
     if config.gnpy.equipment is None:
         logger.info(
@@ -88,10 +97,10 @@ def _load_topology_with_amplifiers(config: TwinConfig) -> GnpyTopology:
             "written. Bare fiber spans will each be modelled as one amplified "
             "span, which understates GSNR on long spans."
         )
-        return load_gnpy_topology(config.gnpy.topology)
+        return load_gnpy_topology(config.gnpy.topology), {}
 
     try:
-        designed = _designed_topology_json(
+        designed, edfa_bands = _designed_topology_json(
             config.gnpy.topology, config.gnpy.equipment
         )
     except Exception:
@@ -102,18 +111,21 @@ def _load_topology_with_amplifiers(config: TwinConfig) -> GnpyTopology:
             "topology as written. QoT on bare-fiber spans will be pessimistic.",
             exc_info=True,
         )
-        return load_gnpy_topology(config.gnpy.topology)
+        return load_gnpy_topology(config.gnpy.topology), {}
 
     topo = parse_gnpy_topology_dict(designed, name=config.gnpy.topology.stem)
     logger.info(
         "EGN backend: applied GNPy amplifier design (%d elements)",
         len(topo.elements),
     )
-    return topo
+    return topo, edfa_bands
 
 
-def _designed_topology_json(topology_path: Path, equipment_path: Path) -> dict:
-    """Return the GNPy-designed network, serialised back to GNPy JSON."""
+def _designed_topology_json(
+    topology_path: Path, equipment_path: Path,
+) -> tuple[dict, EdfaBands]:
+    """Return the GNPy-designed network, serialised back to GNPy JSON, and
+    the bands of its EDFAs (which the JSON does not carry)."""
     from gnpy.tools.json_io import load_equipment, network_from_json, network_to_json
     from gnpy.tools.worker_utils import designed_network
 
@@ -123,7 +135,12 @@ def _designed_topology_json(topology_path: Path, equipment_path: Path) -> dict:
     network = network_from_json(json.loads(topology_path.read_text()), equipment)
     network, _ref_req, _ref_chan = designed_network(equipment, network)
     result: dict = network_to_json(network)
-    return result
+    bands = {
+        el.uid: list(el.params.bands)
+        for el in network.nodes()
+        if type(el).__name__ == "Edfa"
+    }
+    return result, bands
 
 
 # Per-attribute writable contract — mirrors physics/element_params.py
@@ -145,7 +162,10 @@ class EgnBackend:
         # equipment library is available the topology is first run through
         # GNPy's design step, so both backends see the same amplifier
         # placement (see _load_topology_with_amplifiers).
-        gnpy_topo = _load_topology_with_amplifiers(config)
+        gnpy_topo, self._edfa_bands = _load_topology_with_amplifiers(config)
+        # The reference channel and design launch power: the configured
+        # equipment library's SI, else GNPy's bundled one (channel_plan.py).
+        self.spectral_defaults = load_spectral_defaults(config.gnpy.equipment)
         self._egn_topo: EgnTopologyData = convert_to_egn(gnpy_topo)
 
         # Build a uid_map mirror so the PhysicalBackend Protocol's
@@ -248,6 +268,16 @@ class EgnBackend:
                 (uid, "Edfa") for uid in edfa_uids
             ],
         )
+
+    def amplifier_bands(self, path_uids: list[str]) -> list[tuple[float, float]] | None:
+        """The bands common to the path's EDFAs, as GNPy computes them
+        (``find_common_range``). Without a designed topology the EDFAs' bands
+        are unknown and the SI comb range applies, as GNPy does for a path
+        with no amplifier."""
+        resolved = self._spans_for_path(path_uids)
+        edfa_uids = resolved[2] if resolved is not None else []
+        bands = [self._edfa_bands[uid] for uid in edfa_uids if uid in self._edfa_bands]
+        return common_band(bands, self.spectral_defaults)
 
     # -- /config plane: per-element parameter reads/writes ---------------
 

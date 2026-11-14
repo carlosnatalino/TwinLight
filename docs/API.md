@@ -137,6 +137,7 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
     "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
       "otsi-config": [
         { "local-id": "1",
+          "central-frequency": 191306250000000,
           "modulation": { "standard-modulation-technique": "MT_DP-QPSK" } }
       ],
       "number-of-otsi": 1
@@ -146,8 +147,8 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
       "mc-spectrum-config-pac": [
         { "local-id": "1",
           "spectrum": {
-            "lower-frequency": 190696875000000,
-            "upper-frequency": 190753125000000
+            "lower-frequency": 191278125000000,
+            "upper-frequency": 191334375000000
           },
           "edge-frequency-constraint": {
             "grid-type": "GRID_TYPE_FLEX",
@@ -160,7 +161,31 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
 ```
 
 Frequencies are uint64 Hz. A service with no allocation carries no MCG spec at
-all, rather than a zeroed one.
+all, rather than a zeroed one. The `spectrum` is the media channel — the
+channel's slots plus `rmsa.default_guardband_slots` — and `central-frequency`
+is its centre, where the carrier sits.
+
+**Requesting spectrum.** Both leaves are optional on create (and on PUT):
+send `mc-spectrum-config-pac/spectrum`, `otsi-config/central-frequency`, or
+both, on one or both end-points (they must agree). The request must be on the
+grid — edges on slot edges, a central frequency at the centre of a block — and
+exactly one media channel wide for the format, the width a GET reports, so a
+fetched service can be sent back unchanged; numbers or RFC 7951 decimal
+strings are accepted. An `edge-frequency-constraint`, if sent, must be this
+twin's grid. These are `422`s naming the problem, as are
+`mc-bandwidth-config-pac`, `mc-flexi-grid-config-pac`, more than one media
+channel, and end-points that disagree. On each candidate route the requested
+block must lie in the band every amplifier on the route passes and be free on
+every link; otherwise the next candidate is tried, and if none fits the
+request is a `409` naming each conflict — the band, or the service holding
+the spectrum and where.
+
+Without a request, the block is first-fit, restricted to slots inside the band
+the route's amplifiers pass — GNPy's `find_elements_common_range`, slot by
+slot with GNPy's `is_in_band` test, since an EDFA drops any carrier outside
+it. The example above is the first such block under GNPy's default EDFA band
+(from 191.275 THz). Without a physics backend there is no amplifier model and
+the whole grid is assignable.
 
 ### Path computation
 

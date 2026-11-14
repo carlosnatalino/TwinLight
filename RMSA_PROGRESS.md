@@ -35,8 +35,8 @@ into it). Baseline before any change: 752 tests passed.
 | 1 | Path-computation constraints + T-API path-comp-service | done | see git log |
 | 2 | Modulation selection over k candidates | done | see git log |
 | 3 | Candidate ranking (GNPy shortest_simple_paths) | done | see git log |
-| 4 | Spectrum request / band restriction | next | |
-| 5 | Launch power | todo | |
+| 4 | Spectrum request / band restriction | done | see git log |
+| 5 | Launch power | next | |
 | 6 | Startup log of effective RMSA settings | todo | |
 | 7 | Channel-accurate QoT | todo | |
 | — | Docs, quality gates, PR | todo | |
@@ -57,3 +57,7 @@ into it). Baseline before any change: 752 tests passed.
   chooses) vs `modulation_format` (in effect). Without a physics backend an
   unspecified format resolves to DP-QPSK (no QoT to justify a denser one) —
   call this out in the PR. Admission memo is per call (`TapiContext._admit`).
+- Item 4: `physics/channel_plan.py` (SI defaults + `common_band`), backend
+  `spectral_defaults` / `amplifier_bands()`; EGN keeps designed EDFA bands.
+  Without physics (mock) the whole grid is assignable. Requested-spectrum
+  errors: `SpectrumRequestError` (422); band/occupancy conflicts 409.

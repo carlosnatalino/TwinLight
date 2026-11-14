@@ -21,6 +21,7 @@ from twinlight.state.context import (
     InsufficientSpectrumError,
     NoPathError,
     RmsaError,
+    SpectrumRequestError,
 )
 
 router = APIRouter(prefix="/data", tags=["tapi-connectivity"])
@@ -97,7 +98,7 @@ async def create_service(body: dict, request: Request) -> dict:
 
     try:
         await ctx.add_service(svc)
-    except ConstraintError as e:
+    except (ConstraintError, SpectrumRequestError) as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
@@ -206,13 +207,13 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     ctx.delete_service(uuid)
     try:
         await ctx.add_service(svc)
-    except (RmsaError, ConstraintError) as e:
+    except (RmsaError, ConstraintError, SpectrumRequestError) as e:
         if old_svc is not None:
             await ctx.add_service(old_svc)
         raise HTTPException(
             status_code=(
                 status.HTTP_422_UNPROCESSABLE_ENTITY
-                if isinstance(e, ConstraintError)
+                if isinstance(e, (ConstraintError, SpectrumRequestError))
                 else status.HTTP_409_CONFLICT
             ),
             detail=str(e),

@@ -24,6 +24,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from twinlight.algorithms.path_constraints import (
     NO_CONSTRAINTS,
     ConstraintError,
@@ -73,6 +75,12 @@ class InsufficientSpectrumError(RmsaError):
 
 class InsufficientQoTError(RmsaError):
     """Path GSNR below the format's required threshold plus the system margin."""
+
+
+class SpectrumRequestError(ValueError):
+    """A requested spectrum or central frequency that cannot be on the grid at
+    all (misaligned, outside it, the wrong width). A client error (422),
+    unlike a conflict with spectrum in use or the amplifier band (409)."""
 
 
 @dataclass(frozen=True)
@@ -388,7 +396,8 @@ class TapiContext:
         path_edges = path_uids_to_edges(path)
         self._spectrum_state.allocate(path_edges, start, block_width)
         self._service_allocation[svc.uuid] = (path_edges, start, block_width)
-        svc.assign_modulation(fmt)
+        lower, upper = self._slot_range_hz(start, block_width)
+        svc.assign_channel(fmt, (lower + upper) // 2)
         self._services[svc.uuid] = svc
         if baseline is not None:
             # The admission propagation is the service's baseline: same path,
@@ -421,6 +430,12 @@ class TapiContext:
         link and, with a physics backend loaded, the propagated GSNR reaches
         the format's requirement plus ``rmsa.qot_margin_db``.
 
+        A requested spectrum (or central frequency) is checked against the
+        grid once, then used as is on each candidate: it must lie in the band
+        the path's amplifiers pass and be free on every link, or the
+        candidate is skipped with the conflict named. Without a request, the
+        block is first-fit within that band.
+
         Without a physics backend there is no QoT to check, so a request that
         names no format gets the most robust one rather than the densest:
         the twin cannot know a denser format would close the link.
@@ -434,15 +449,16 @@ class TapiContext:
         Returns ``(path, format, start slot, block width, baseline)``.
 
         Raises:
-            InsufficientSpectrumError: No candidate had a free block for any
-                format tried.
+            SpectrumRequestError: The requested spectrum does not fit the grid
+                or any format's width.
+            InsufficientSpectrumError: No candidate had a usable block for any
+                format tried. The message names each conflict.
             InsufficientQoTError: Spectrum was found, but no (path, format)
                 reached its GSNR requirement. The message lists every attempt.
         """
         from twinlight.physics.modulation import (
             formats_by_spectral_efficiency,
             get_params,
-            slots_required_for_modulation,
         )
 
         qot_available = self._gnpy_available
@@ -452,8 +468,10 @@ class TapiContext:
             formats = formats_by_spectral_efficiency()
         else:
             formats = formats_by_spectral_efficiency()[-1:]
+        requested = self._requested_starts(svc, formats)
+        if requested is not None:
+            formats = [f for f in formats if f in requested]
 
-        slot_width_hz = self._config.spectrum.slot_width_ghz * 1e9
         guard_slots = self._config.rmsa.default_guardband_slots
         margin = self._config.rmsa.qot_margin_db
         memo: dict[tuple[tuple[str, ...], int, float, float], OpmBaseline | None] = {}
@@ -462,14 +480,28 @@ class TapiContext:
 
         for rank, path in enumerate(paths, start=1):
             edges = path_uids_to_edges(path)
+            assignable = self._assignable_slots(path)
             label = f"candidate {rank} ({' > '.join(self._terminals(path))})"
             for fmt in formats:
                 params = get_params(fmt)
-                block = slots_required_for_modulation(fmt, slot_width_hz) + guard_slots
-                start = first_fit(self._spectrum_state, edges, block - guard_slots, guard_slots)
-                if start is None:
-                    attempts.append(f"{label} {fmt.value}: no free {block}-slot block")
-                    continue
+                block = self._block_width(fmt)
+                if requested is None:
+                    start = first_fit(
+                        self._spectrum_state, edges, block - guard_slots,
+                        guard_slots, assignable,
+                    )
+                    if start is None:
+                        attempts.append(
+                            f"{label} {fmt.value}: no free {block}-slot block "
+                            "inside the amplifier band"
+                        )
+                        continue
+                else:
+                    start = requested[fmt]
+                    conflict = self._block_conflict(path, edges, start, block, assignable)
+                    if conflict is not None:
+                        attempts.append(f"{label} {fmt.value}: {conflict}")
+                        continue
                 spectrum_found = True
                 if not qot_available:
                     return path, fmt, start, block, None
@@ -499,6 +531,145 @@ class TapiContext:
 
         error_type = InsufficientQoTError if spectrum_found else InsufficientSpectrumError
         raise error_type("; ".join(attempts))
+
+    # -- Spectrum: grid, amplifier band, requested blocks ------------------
+
+    def _slot_hz(self) -> int:
+        return round(self._config.spectrum.slot_width_ghz * 1e9)
+
+    def _block_width(self, fmt: ModulationFormat) -> int:
+        """Slots of one media channel for ``fmt``: the channel plus guard."""
+        from twinlight.physics.modulation import slots_required_for_modulation
+
+        return (
+            slots_required_for_modulation(fmt, self._slot_hz())
+            + self._config.rmsa.default_guardband_slots
+        )
+
+    def _assignable_slots(self, path: list[str]) -> np.ndarray | None:
+        """Slots whose whole width lies in a band every amplifier on ``path``
+        passes — GNPy's ``is_in_band`` test, which is how an EDFA decides
+        which carriers to drop. None when the backend has no amplifier model.
+        """
+        bands = self._backend.amplifier_bands(path)
+        if bands is None:
+            return None
+        n = self._config.spectrum.num_slots
+        grid_lower, _ = self._slot_range_hz(0, n)
+        lower = grid_lower + np.arange(n) * self._slot_hz()
+        upper = lower + self._slot_hz()
+        mask = np.zeros(n, dtype=bool)
+        for f_min, f_max in bands:
+            mask |= (lower >= f_min) & (upper <= f_max)
+        return mask
+
+    def _requested_starts(
+        self, svc: ConnectivityService, formats: list[ModulationFormat],
+    ) -> dict[ModulationFormat, int] | None:
+        """Start slot of the requested media channel for each format it fits.
+
+        None when the request names no spectrum. The spectrum must sit on the
+        grid (edges on slot edges, a central frequency at a block centre),
+        inside it, and be exactly one media channel wide for the format —
+        the width the twin reports for an admitted service, so a GET's
+        spectrum can be sent back unchanged.
+
+        Raises:
+            SpectrumRequestError: Off-grid, outside the grid, a central
+                frequency that is not the spectrum's centre, a frequency
+                constraint other than the twin's grid, or no format of that
+                width.
+        """
+        edge = svc.requested_edge_frequency_constraint
+        if edge is not None:
+            ours = self._frequency_constraint()
+            for leaf, value in edge.items():
+                if ours.get(leaf) != value:
+                    raise SpectrumRequestError(
+                        f"edge-frequency-constraint/{leaf}={value!r} is not this "
+                        f"twin's grid ({leaf}={ours.get(leaf)!r})"
+                    )
+        spectrum = svc.requested_spectrum_hz
+        centre = svc.requested_central_frequency_hz
+        if spectrum is None and centre is None:
+            return None
+
+        slot = self._slot_hz()
+        n = self._config.spectrum.num_slots
+        grid_lower, grid_upper = self._slot_range_hz(0, n)
+        thz = 1e-12
+        starts: dict[ModulationFormat, int] = {}
+        widths: list[str] = []
+        for fmt in formats:
+            width = self._block_width(fmt)
+            widths.append(f"{fmt.value} {width} slots ({width * slot * 1e-9:g} GHz)")
+            start: int | None = None
+            if spectrum is not None:
+                lower, upper = spectrum
+                if (lower - grid_lower) % slot or (upper - lower) % slot:
+                    raise SpectrumRequestError(
+                        f"spectrum {lower}-{upper} Hz is not aligned to the "
+                        f"{slot * 1e-9:g} GHz grid: edges must sit at "
+                        f"{grid_lower} Hz + n x {slot} Hz"
+                    )
+                if (upper - lower) // slot != width:
+                    continue
+                start = (lower - grid_lower) // slot
+            if centre is not None:
+                twice = 2 * (centre - grid_lower) - width * slot
+                on_grid = twice % (2 * slot) == 0
+                if spectrum is not None and (not on_grid or start != twice // (2 * slot)):
+                    raise SpectrumRequestError(
+                        f"central-frequency {centre} Hz is not the centre of the "
+                        f"requested spectrum {spectrum[0]}-{spectrum[1]} Hz"
+                    )
+                if not on_grid:
+                    raise SpectrumRequestError(
+                        f"central-frequency {centre} Hz is not the centre of "
+                        f"any {width}-slot block on the {slot * 1e-9:g} GHz grid"
+                    )
+                start = twice // (2 * slot)
+            assert start is not None
+            if start < 0 or start + width > n:
+                lo, hi = self._slot_range_hz(start, width)
+                raise SpectrumRequestError(
+                    f"requested spectrum {lo * thz:.6f}-{hi * thz:.6f} THz lies "
+                    f"outside the grid {grid_lower * thz:.6f}-{grid_upper * thz:.6f} THz"
+                )
+            starts[fmt] = start
+        if not starts:
+            raise SpectrumRequestError(
+                f"requested spectrum is {(spectrum[1] - spectrum[0]) // slot} slots "
+                f"wide; a media channel is {', '.join(widths)} "
+                f"(channel plus {self._config.rmsa.default_guardband_slots} guard)"
+                if spectrum is not None else "no format fits the requested spectrum"
+            )
+        return starts
+
+    def _block_conflict(
+        self, path: list[str], edges: list[tuple[str, str]], start: int, width: int,
+        assignable: np.ndarray | None,
+    ) -> str | None:
+        """Why a requested block cannot be used on ``path``, or None if it can."""
+        lower, upper = self._slot_range_hz(start, width)
+        thz = 1e-12
+        where = f"requested {lower * thz:.6f}-{upper * thz:.6f} THz"
+        if assignable is not None and not assignable[start:start + width].all():
+            bands = self._backend.amplifier_bands(path) or []
+            passed = ", ".join(f"{lo * thz:.6f}-{hi * thz:.6f} THz" for lo, hi in bands)
+            return (
+                f"{where} is outside the band every amplifier on the path passes "
+                f"({passed or 'none'})"
+            )
+        if self._spectrum_state.is_available(edges, start, width):
+            return None
+        for uuid, (other_edges, other_start, other_width) in self._service_allocation.items():
+            overlaps = other_start < start + width and start < other_start + other_width
+            shared = set(edges).intersection(other_edges)
+            if overlaps and shared:
+                a, b = next(e for e in edges if e in shared)
+                return f"{where} is occupied by service {uuid} on {a} -> {b}"
+        return f"{where} is occupied on the path"
 
     def get_services(self) -> list[ConnectivityService]:
         return list(self._services.values())

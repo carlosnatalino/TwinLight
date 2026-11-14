@@ -261,9 +261,10 @@ The modulation format is carried where T-API v2.6.0 puts it: a
 densest format whose QoT passes (DP-QPSK when no physics backend is loaded). A bare top-level `modulation-format` key is not part of T-API and is
 rejected with a `422` that names the standard location.
 
-The twin computes candidate paths, assigns spectrum first-fit, and admits the
-request only if the propagated GSNR clears the format's required GSNR plus the
-configured system margin.
+The twin computes candidate paths, assigns the requested spectrum or else
+first-fit inside the amplifier band, and admits the request only if the
+propagated GSNR clears the format's required GSNR plus the configured system
+margin.
 
 ### Populate the twin with demo services
 
