@@ -115,6 +115,11 @@ the format in effect. Without a physics backend there is no QoT to check, so a
 request that names no format gets DP-QPSK. A request that cannot be satisfied
 is a `409` listing every attempt, rather than an admission with a warning.
 
+The standard `connectivity-constraint` and `resilience-constraint` containers
+are not implemented: a create or PUT carrying either fails with `501`
+(`operation-not-supported`) naming them, rather than admitting a service that
+ignores them.
+
 A service may carry the standard `routing-constraint` container and
 `topology-constraint` list; they constrain the route exactly as on a
 path-comp-service (see [Route constraints](#route-constraints)) and are echoed
@@ -352,6 +357,14 @@ Errors under `/data/` use the RESTCONF format of
   }
 }
 ```
+
+| HTTP status | `error-tag` | Used for |
+|-------------|-------------|----------|
+| 400 | `bad-element` | A malformed envelope (e.g. a list of more than one entry) |
+| 404 | `data-missing` | An unknown resource |
+| 409 | `resource-denied` | Admission refused: no route, spectrum or QoT |
+| 422 | `invalid-value` | A body that does not validate, or a constraint or value the twin cannot honour |
+| 501 | `operation-not-supported` | A standard container the twin does not implement (`connectivity-constraint`, `resilience-constraint`) |
 
 ### A note on percent-encoded colons
 

@@ -57,6 +57,13 @@ def _single_service(body: dict) -> dict:
     return raw
 
 
+# Containers of tapi-connectivity:connectivity-service (v2.6.0) that the twin
+# does not implement. They are standard, so a client may legitimately send
+# them; admitting the service while ignoring them would hand the client a
+# lightpath that does not honour what it asked for, so the request fails.
+_NOT_IMPLEMENTED = ("connectivity-constraint", "resilience-constraint")
+
+
 def _parse_service(body: dict) -> ConnectivityService:
     """Unwrap and validate a connectivity-service request body.
 
@@ -64,9 +71,26 @@ def _parse_service(body: dict) -> ConnectivityService:
     annotation (the envelope key and the list-or-object spelling both have
     to be resolved first), so pydantic's error has to be mapped to a 422
     here — otherwise a malformed payload surfaces as a 500.
+
+    Raises:
+        HTTPException: 501 (``operation-not-supported``) when the body
+            carries a container listed in ``_NOT_IMPLEMENTED``; 422 when it
+            does not validate.
     """
+    raw = _single_service(body)
+    present = [key for key in _NOT_IMPLEMENTED if key in raw]
+    if present:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                f"{', '.join(present)} {'is' if len(present) == 1 else 'are'} "
+                "not implemented by this twin; remove "
+                f"{'it' if len(present) == 1 else 'them'} from the "
+                "connectivity-service request"
+            ),
+        )
     try:
-        return ConnectivityService.model_validate(_single_service(body))
+        return ConnectivityService.model_validate(raw)
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

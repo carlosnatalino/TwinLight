@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import tapi_end_point
@@ -386,3 +387,47 @@ class TestConstraints:
         resp = mesh_app.post(f"{_BASE}/connectivity-service", json=body)
         assert resp.status_code == 422
         assert "not found" in resp.text
+
+
+class TestNotImplementedContainers:
+    """connectivity-constraint and resilience-constraint are standard
+    v2.6.0 containers the twin does not implement: a request carrying either
+    fails rather than being admitted with them ignored."""
+
+    def _body(self, app: TestClient, **extra) -> dict:
+        data = app.get("/data/tapi-common:context/service-interface-point").json()
+        sips = [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
+        return {"tapi-connectivity:connectivity-service": [{
+            "end-point": [tapi_end_point("a", sips[0]), tapi_end_point("z", sips[1])],
+            **extra,
+        }]}
+
+    @pytest.mark.parametrize("container", ["connectivity-constraint", "resilience-constraint"])
+    def test_create_is_refused(self, app: TestClient, container: str) -> None:
+        resp = app.post(f"{_BASE}/connectivity-service", json=self._body(app, **{container: {}}))
+        assert resp.status_code == 501
+        error = resp.json()["ietf-restconf:errors"]["error"][0]
+        assert error["error-tag"] == "operation-not-supported"
+        assert container in error["error-message"]
+        assert "not implemented" in error["error-message"]
+        listed = app.get(f"{_BASE}/connectivity-service").json()
+        assert listed["tapi-connectivity:connectivity-context"]["connectivity-service"] == []
+
+    def test_both_are_named(self, app: TestClient) -> None:
+        body = self._body(app, **{
+            "connectivity-constraint": {"service-type": "POINT_TO_POINT_CONNECTIVITY"},
+            "resilience-constraint": {},
+        })
+        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        message = resp.json()["ietf-restconf:errors"]["error"][0]["error-message"]
+        assert resp.status_code == 501
+        assert "connectivity-constraint, resilience-constraint are not implemented" in message
+
+    def test_replace_is_refused_and_keeps_the_service(self, app: TestClient) -> None:
+        created = app.post(f"{_BASE}/connectivity-service", json=self._body(app))
+        service = created.json()["tapi-connectivity:connectivity-service"]
+        replacement = {**service, "resilience-constraint": {}}
+        resp = app.put(f"{_BASE}/connectivity-service={service['uuid']}",
+                       json={"tapi-connectivity:connectivity-service": replacement})
+        assert resp.status_code == 501
+        assert app.get(f"{_BASE}/connectivity-service={service['uuid']}").status_code == 200
