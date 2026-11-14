@@ -169,6 +169,5 @@ endpoint reference resolves to a physical element.
 
 Soft-decision post-FEC BER (GMI/NGMI are reported, but not mapped through a
 per-code NGMI threshold); multi-band (C-band only); XPM/FWM in the EGN kernel (self-channel
-NLI only); eye and constellation *rendering* in the UI (the backend synthesis
-exists); an event-driven simulation clock; T-API notification, OAM, fault and
+NLI only); an event-driven simulation clock; T-API notification, OAM, fault and
 virtual-network modules; gNMI Get/Set; authentication on any interface.
