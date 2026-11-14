@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,3 +112,75 @@ def common_band(
 
     ranges = find_common_range(amp_bands, si.f_min_hz, si.f_max_hz, si.spacing_hz)
     return [(float(r["f_min"]), float(r["f_max"])) for r in ranges]
+
+
+@dataclass(frozen=True)
+class LineComb:
+    """The channels launched on a path: the SI comb with the service inserted.
+
+    Arrays are per channel, sorted by frequency; ``service_index`` is the
+    service channel's position.
+    """
+
+    frequency_hz: np.ndarray
+    baud_rate_hz: np.ndarray
+    slot_width_hz: np.ndarray
+    launch_power_dbm: np.ndarray
+    service_index: int
+
+    @property
+    def neighbours(self) -> np.ndarray:
+        """Indices of every channel but the service's."""
+        return np.delete(np.arange(self.frequency_hz.size), self.service_index)
+
+
+def line_comb(
+    defaults: SpectralDefaults,
+    *,
+    centre_frequency_hz: float,
+    media_channel_width_hz: float,
+    baud_rate_hz: float,
+    launch_power_dbm: float,
+    bands: list[tuple[float, float]] | None,
+) -> LineComb:
+    """A fully loaded line around one service channel.
+
+    The rest of the line is the equipment library's SI comb (channel centres
+    ``f_min`` … ``f_max`` every ``spacing``, at ``power_dbm``), which is the
+    loading GNPy designs the line for. SI channels whose slot overlaps the
+    service's media channel are removed, the service channel is inserted at
+    its own frequency, width and power, and — as GNPy's ``filter_si`` does
+    before propagating a request — comb channels outside the band common to
+    the path's amplifiers (``bands``; None = no amplifier model) are left out,
+    since the first EDFA would drop them. The service channel itself is kept:
+    admission only assigns in-band spectrum.
+    """
+    count = round((defaults.f_max_hz - defaults.f_min_hz) / defaults.spacing_hz) + 1
+    si_frequency = defaults.f_min_hz + defaults.spacing_hz * np.arange(count)
+    clear = (
+        np.abs(si_frequency - centre_frequency_hz)
+        >= (defaults.spacing_hz + media_channel_width_hz) / 2
+    )
+    if bands is not None:
+        lower = si_frequency - defaults.spacing_hz / 2
+        upper = si_frequency + defaults.spacing_hz / 2
+        in_band = np.zeros(count, dtype=bool)
+        for f_min, f_max in bands:
+            in_band |= (lower >= f_min) & (upper <= f_max)
+        clear &= in_band
+    kept = si_frequency[clear]
+
+    frequency = np.append(kept, centre_frequency_hz)
+    order = np.argsort(frequency, kind="stable")
+    n = kept.size
+    return LineComb(
+        frequency_hz=frequency[order],
+        baud_rate_hz=np.append(np.full(n, defaults.baud_rate_hz), baud_rate_hz)[order],
+        slot_width_hz=np.append(
+            np.full(n, defaults.spacing_hz), media_channel_width_hz,
+        )[order],
+        launch_power_dbm=np.append(
+            np.full(n, defaults.power_dbm), launch_power_dbm,
+        )[order],
+        service_index=int(np.flatnonzero(order == n)[0]),
+    )

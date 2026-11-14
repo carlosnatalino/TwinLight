@@ -39,8 +39,13 @@ from twinlight.physics.analytical_metrics import (
     latency_ms,
     pmd_ps,
 )
-from twinlight.physics.channel_plan import common_band, load_spectral_defaults
+from twinlight.physics.channel_plan import (
+    common_band,
+    line_comb,
+    load_spectral_defaults,
+)
 from twinlight.physics.egn_kernel import (
+    Neighbour,
     PathQoT,
     SpanInputs,
     accumulate_path_noise,
@@ -211,6 +216,7 @@ class EgnBackend:
         modulation_format: str,
         *,
         centre_frequency_hz: float,
+        media_channel_width_hz: float,
         launch_power_dbm: float,
     ) -> OpmBaseline | None:
         # Resolve the path to its spans (in propagation order) and bail
@@ -242,14 +248,32 @@ class EgnBackend:
         # ROADM equalisation, so the requested power is the power per span.
         launch_power_w = (10.0 ** (launch_power_dbm / 10.0)) * 1e-3
         bandwidth_hz = params.baud_rate_hz
-        # ASE photon energy evaluated at the C-band centre.
-        ase_reference_hz = 193.1e12
+        # The rest of the line: the SI comb around the service channel, each
+        # neighbour launched at the SI power into every span. Their NLI on
+        # the service channel is the GN model's cross-channel term.
+        comb = line_comb(
+            self.spectral_defaults,
+            centre_frequency_hz=centre_frequency_hz,
+            media_channel_width_hz=media_channel_width_hz,
+            baud_rate_hz=bandwidth_hz,
+            launch_power_dbm=launch_power_dbm,
+            bands=self.amplifier_bands(path_uids),
+        )
+        neighbours = [
+            Neighbour(
+                offset_hz=float(comb.frequency_hz[i] - centre_frequency_hz),
+                power_w=float(10.0 ** (comb.launch_power_dbm[i] / 10.0) * 1e-3),
+                bandwidth_hz=float(comb.baud_rate_hz[i]),
+            )
+            for i in comb.neighbours
+        ]
 
         qot: PathQoT = accumulate_path_noise(
             span_inputs,
             launch_power_w=launch_power_w,
             bandwidth_hz=bandwidth_hz,
-            centre_frequency_hz=ase_reference_hz,
+            centre_frequency_hz=centre_frequency_hz,
+            neighbours=neighbours,
         )
         # Treat infinite GSNR (empty-span path) as a saturated 60 dB so
         # the BER calculation downstream stays finite.

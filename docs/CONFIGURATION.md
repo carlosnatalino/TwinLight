@@ -52,7 +52,7 @@ physics:
 
 | Backend | Method | Requires |
 |---------|--------|----------|
-| `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | `gnpy.equipment` |
+| `gnpy` (default) | Split-step propagation over the designed network; the service channel on the equipment library's SI comb | `gnpy.equipment` |
 | `egn` | Closed-form GN/EGN kernel (`physics/egn_kernel.py`) | nothing beyond the topology |
 
 This is a **startup choice**: all baselines in a process come from one backend,

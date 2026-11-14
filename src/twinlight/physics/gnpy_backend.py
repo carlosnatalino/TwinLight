@@ -86,6 +86,7 @@ class GnpyBackend:
         modulation_format: str,
         *,
         centre_frequency_hz: float,
+        media_channel_width_hz: float,
         launch_power_dbm: float,
     ) -> OpmBaseline | None:
         if not self.available:
@@ -96,7 +97,9 @@ class GnpyBackend:
             return compute_path_baseline(
                 self.uid_map, path_uids, modulation_format,
                 defaults=self.spectral_defaults,
+                bands=self.amplifier_bands(path_uids),
                 centre_frequency_hz=centre_frequency_hz,
+                media_channel_width_hz=media_channel_width_hz,
                 launch_power_dbm=launch_power_dbm,
             )
         except Exception as exc:  # noqa: BLE001

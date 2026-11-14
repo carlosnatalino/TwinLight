@@ -433,8 +433,8 @@ available, selected by `physics.backend` or `--physics-backend`:
 
 | Backend | Method | Notes |
 |---------|--------|-------|
-| `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | Needs a GNPy equipment library; the reference implementation of the GN/EGN model [[10]](#ref-10) |
-| `egn` | Closed-form GN/EGN kernel in `physics/egn_kernel.py` | Follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9). Reuses GNPy's amplifier design when an equipment library is configured, so both backends propagate over the same spans; works without one too |
+| `gnpy` (default) | Split-step propagation over the designed network; the service channel on the equipment library's SI comb | Needs a GNPy equipment library; the reference implementation of the GN/EGN model [[10]](#ref-10) |
+| `egn` | Closed-form GN/EGN kernel in `physics/egn_kernel.py` | Follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9), with cross-channel NLI from Poggiolini *et al.* [[33]](#ref-33). Reuses GNPy's amplifier design when an equipment library is configured, so both backends propagate over the same spans; works without one too |
 
 Both produce a backend-agnostic `OpmBaseline` that the transient layer perturbs,
 so results stay comparable across backends.
@@ -651,6 +651,7 @@ implement. Citation keys used in code comments are shown in brackets.
 30. <a id="ref-30"></a>B. P. Smith, A. Farhood, A. Hunt, F. R. Kschischang, and J. Lodge, "Staircase codes: FEC for 100 Gb/s OTN," *IEEE/OSA Journal of Lightwave Technology*, vol. 30, no. 1, pp. 110–117, 2012. — the 6.2 dB net coding gain of RS(255,239) at 1e-15 that the hard-decision model is validated against.
 31. <a id="ref-31"></a>A. Alvarado, E. Agrell, D. Lavery, R. Maher, and P. Bayvel, "Replacing the soft-decision FEC limit paradigm in the design of optical communication systems," *IEEE/OSA Journal of Lightwave Technology*, vol. 33, no. 20, pp. 4338–4352, 2015. — GMI as the predictor of post-FEC BER for soft-decision decoding.
 32. <a id="ref-32"></a>ITU-T Recommendation G.709, *Interfaces for the optical transport network*. — the RS(255,239) GFEC, default code of the hard-decision model.
+33. <a id="ref-33"></a>P. Poggiolini, G. Bosco, A. Carena, V. Curri, Y. Jiang, and F. Forghieri, "The GN-model of fiber non-linear propagation and its applications," *IEEE/OSA Journal of Lightwave Technology*, vol. 32, no. 4, pp. 694–721, 2014 (arXiv:1209.0394). `[Poggiolini_2014]` — incoherent closed form (Eq. 120/123) for the EGN kernel's cross-channel NLI, as GNPy's `gn_model_analytic` implements it.
 
 ## License and acknowledgements
 

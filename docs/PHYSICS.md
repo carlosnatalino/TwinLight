@@ -42,11 +42,19 @@ Split-step propagation through the designed network using the `gnpy` library
 
 - Amplifier placement and power design happen once at startup via
   `designed_network(equipment, network)`.
-- Propagation launches an **88-channel comb** on the 50 GHz grid, 190.95–195.30
-  THz, so the worst-channel NLI reflects a fully loaded line. Each EDFA drops
-  the carriers outside its band, and GNPy's default C-band starts at 191.3 THz,
-  so on an amplified path **81 channels** (191.30–195.30 THz) reach the
-  receiver. The reported worst-channel metrics are taken over those 81.
+- **The reported channel is the service's own**, at its assigned central
+  frequency, launch power and media-channel width, on a fully loaded line —
+  not the worst channel of a comb. The rest of the line is the equipment
+  library's **SI comb** (`physics/channel_plan.py:line_comb`; with GNPy's
+  bundled library, 76 channels on the 50 GHz grid, 191.35–195.10 THz, at SI
+  `power_dbm`): the SI channels whose slot overlaps the service's media
+  channel are removed, the service channel is inserted, and — as GNPy's
+  `filter_si` does for a request — channels outside the band common to the
+  path's amplifiers are left out, since the first EDFA would drop them.
+  Metrics are read at the service channel's frequency after propagation.
+- The same channel is evaluated everywhere: at admission, for the cached
+  baseline, in the QoT what-if, and for the `/internal/path-info` estimate
+  (the block admission would assign that format on that route).
 - Transceivers are called with a role: the first element of the path emits,
   the last receives.
 - Path elements are deep-copied before propagation, because propagation mutates
@@ -98,10 +106,14 @@ The kernel's structure derives from the Cython QoT kernel in
 [optical-networking-gym][ong] [[18]](../README.md#ref-18), a project by the same
 author.
 
-**Scope limit:** the current kernel models **self-channel NLI only**. Cross-channel
-XPM/FWM contributions from neighbouring services are not included, so on a
-densely loaded link the EGN backend is optimistic — typically by a few dB of
-GSNR relative to the GNPy backend on the bundled scenarios.
+**Loaded line.** The service channel sees the same SI comb as under GNPy
+(`line_comb`). Its own NLI is Carena 2012's self-channel closed form; the
+other channels add the incoherent GN model's cross-channel term, Poggiolini
+*et al.* 2014 `[Poggiolini_2014]` [[33]](../README.md#ref-33), Eq. 120 with ψ
+from Eq. 123 of the arXiv version — the expression GNPy's `gn_model_analytic`
+evaluates, here with the kernel's field attenuation (α_power = 2α), and
+checked against `gnpy.core.science_utils.NliSolver._psi` in the tests. ASE
+is evaluated at the channel's own frequency (the photon energy hν).
 
 **Shared amplifier placement.** The GN model charges ASE *per span*, on the
 assumption that each span ends in an amplifier that restores the launch power.
@@ -429,7 +441,7 @@ used for research.
 | **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop, linear dB cascade | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events |
 | **EDFA excursion visibility** | τ_e is 10–100 µs, so a wall-clock poll essentially always samples the relaxed state and the model reads ~0 dB between events | Same physics — this *is* what AGC does | Low, but easy to mistake for an inactive model: to see the excursion you must sample near an add/drop, which the twin only produces on service create/delete |
 | **EDFA excursion magnitude** | Excursion scales with the absolute load step, `gain_per_channel_db × \|Δchannels\|` | Sun 1997 scales it with the *fraction* of channels added or dropped, so one channel added to a full C-band perturbs far less than one added to an empty one | Low at the loadings the bundled scenarios reach; refine before claiming excursion magnitudes on heavily loaded spans |
-| **EGN kernel** | Self-channel NLI only | Full GN/EGN including XPM/FWM from neighbouring channels | **Moderate** — optimistic by a few dB on densely loaded links; on the bundled CORONET scenario EGN GSNR runs ~2–4 dB above the GNPy backend on the same designed spans. Use the GNPy backend when spectral loading matters |
+| **EGN kernel** | Self-channel NLI in Carena 2012's closed form (asinh argument π²/4·\|β₂\|·B²·L_a, L_eff in place of L_eff²/L_a) plus the incoherent GN cross-channel term of Poggiolini 2014 Eq. 120/123; no EGN correction on the cross-channel term; no ROADM add/drop or transceiver noise | GNPy evaluates every channel pair, SCI included, with the Eq. 120/123 ψ, and adds ROADM and transceiver noise | **Moderate** — the two NLI terms come from slightly different normalisations of the same model. EGN GSNR runs ~1.2–1.8 dB above the GNPy backend on CORONET routes of 2.4–3.2 Mm on the same designed spans, and ~4 dB above on 80–160 km mesh routes, where ROADM noise dominates. Use the GNPy backend for absolute GSNR |
 | **Phase noise (EEPN)** | Shieh & Ho Eq. 33–41, contributing ≈ −0.1 dB at 2150 km on CORONET | Same | None — implemented per the reference; the penalty scales with accumulated dispersion as Shieh & Ho predict |
 | **PMD drift** | Sinusoidal, 10 % amplitude, 90 s period | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — magnitude and quadrature accumulation are right; the trajectory shape is an approximation |
 | **PDL ensemble** | Deterministic incommensurate drift covers the alignment ensemble over time | Explicit Monte-Carlo over hinge alignments | Low — equivalent in the long run, and reproducible, but a short window is not a fair ensemble sample |

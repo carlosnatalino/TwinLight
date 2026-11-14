@@ -8,8 +8,9 @@ Key design notes:
     Fiber, Edfa, Roadm).  The UID is accessed via ``element.uid``.
   - ``designed_network()`` must be called after ``network_from_json()`` to
     set ROADM equalization targets and EDFA operating points.
-  - Propagation uses a full C-band comb, so the worst-channel NLI reflects a
-    fully loaded line.
+  - Propagation launches the service channel at its own frequency, width and
+    power inside the equipment library's SI comb, so its NLI reflects a fully
+    loaded line, and reports that channel (physics/channel_plan.py).
   - A Transceiver is called with its ``TransceiverRole``: the path's first
     element emits, its last receives.
   - Each propagation deep-copies only the path elements, not the whole
@@ -36,27 +37,19 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-# C-band reference comb for propagation: 88 channels on the 50 GHz grid,
-# 190.95-195.30 THz. gnpy 3 treats f_min and f_max as the first and last
-# channel centres; gnpy 2 put the first channel one slot above f_min, so the
-# same comb then needed f_min = _F_CENTER_HZ - 44 * _SPACING_HZ.
-# The first EDFA on a path drops carriers outside its band (gnpy's default
-# C-band starts at 191.3 THz), so 81 of the 88 reach the receiver.
-_F_CENTER_HZ = 193.1e12   # ITU-T centre frequency [Hz]
-_NB_CHANNELS = 88         # full C-band @ 50 GHz spacing
-_SPACING_HZ = 50e9
-_F_MIN_HZ = _F_CENTER_HZ - (_NB_CHANNELS // 2 - 1) * _SPACING_HZ
-_F_MAX_HZ = _F_CENTER_HZ + (_NB_CHANNELS // 2) * _SPACING_HZ
-
-
 @dataclass
 class OpmBaseline:
-    """Static QoT metrics computed by GNPy propagation for a single service."""
+    """Static QoT of one service channel, from either physics backend.
 
-    gsnr_db: float             # Worst-channel GSNR (ASE + NLI) [dB]
-    osnr_ase_db: float         # Worst-channel OSNR (ASE only) [dB]
-    cd_ps_nm: float            # Worst-channel chromatic dispersion [ps/nm]
-    pmd_ps: float              # Worst-channel PMD [ps]
+    Every metric is the service's own channel — at its assigned central
+    frequency and launch power, on a fully loaded line — not the worst
+    channel of the comb.
+    """
+
+    gsnr_db: float             # GSNR (ASE + NLI) [dB]
+    osnr_ase_db: float         # OSNR (ASE only) [dB]
+    cd_ps_nm: float            # Accumulated chromatic dispersion [ps/nm]
+    pmd_ps: float              # Accumulated PMD [ps]
     latency_ms: float          # Propagation latency [ms]
     total_fiber_km: float      # Total fiber length [km]
     edfa_uids: list[str] = field(default_factory=list)   # Ordered EDFA UIDs on path
@@ -124,19 +117,25 @@ def compute_path_baseline(
     modulation_format: str | ModulationFormat,
     *,
     defaults: SpectralDefaults,
+    bands: list[tuple[float, float]] | None,
     centre_frequency_hz: float,
+    media_channel_width_hz: float,
     launch_power_dbm: float,
 ) -> OpmBaseline:
-    """Compute the static QoT baseline for a path expressed as a UID sequence.
+    """Compute the static QoT of a service channel on a path of GNPy UIDs.
 
     The path must start and end with Transceiver elements.  Intermediate
     elements (Fiber, Edfa, Roadm) are propagated in order.
 
+    The launched spectrum is :func:`~twinlight.physics.channel_plan.line_comb`:
+    the SI comb, less the channels overlapping the service's media channel and
+    those outside ``bands``, plus the service channel at
+    ``centre_frequency_hz``. The metrics reported are that channel's.
+
     Launch power: the comb's transmitters emit SI ``tx_power_dbm``; the
-    service channel — the comb channel nearest ``centre_frequency_hz`` —
-    emits ``launch_power_dbm`` and carries an offset
-    ``delta_pdb = launch_power_dbm - SI power_dbm``. GNPy's ROADMs set every
-    channel to their per-channel target plus its ``delta_pdb``
+    service channel's emits ``launch_power_dbm`` and the channel carries an
+    offset ``delta_pdb = launch_power_dbm - SI power_dbm``. GNPy's ROADMs set
+    every channel to their per-channel target plus its ``delta_pdb``
     (``gnpy.core.elements.Roadm``), so the offset — not the transmitter
     power, which the first ROADM re-equalises — is what keeps the channel
     that many dB above or below its neighbours along the line.
@@ -144,21 +143,26 @@ def compute_path_baseline(
     Args:
         uid_map: Mapping from UID to gnpy element object (from ``build_uid_map``).
         path_uids: Ordered list of GNPy element UIDs from source to destination.
-        modulation_format: Modulation format string or enum.
+        modulation_format: Modulation format string or enum (its symbol rate).
         defaults: The equipment library's SI defaults.
+        bands: The band common to the path's amplifiers.
         centre_frequency_hz: The service channel's central frequency.
+        media_channel_width_hz: Width of the service's media channel.
         launch_power_dbm: The service channel's launch power.
 
     Returns:
-        OpmBaseline with worst-channel metrics.
+        OpmBaseline of the service channel.
 
     Raises:
         KeyError: If a UID in path_uids is not in uid_map.
-        RuntimeError: If propagation fails.
+        ValueError: The service channel did not reach the receiver (it lies
+            outside an amplifier's band, which admission never assigns).
     """
     from gnpy.core.elements import Roadm, Transceiver
     from gnpy.core.info import create_arbitrary_spectral_information
     from gnpy.core.parameters import TransceiverRole
+
+    from twinlight.physics.channel_plan import line_comb
 
     params = get_params(modulation_format)
 
@@ -168,22 +172,27 @@ def compute_path_baseline(
         (uid, copy.deepcopy(uid_map[uid])) for uid in path_uids
     ]
 
-    # A full C-band comb; the channel nearest the service's frequency is the
-    # service's, launched at its own power.
-    frequency = _F_MIN_HZ + _SPACING_HZ * np.arange(_NB_CHANNELS)
-    service = int(np.argmin(np.abs(frequency - centre_frequency_hz)))
-    tx_power_dbm = np.full(_NB_CHANNELS, defaults.tx_power_dbm)
+    comb = line_comb(
+        defaults,
+        centre_frequency_hz=centre_frequency_hz,
+        media_channel_width_hz=media_channel_width_hz,
+        baud_rate_hz=params.baud_rate_hz,
+        launch_power_dbm=launch_power_dbm,
+        bands=bands,
+    )
+    service = comb.service_index
+    tx_power_dbm = np.full(comb.frequency_hz.size, defaults.tx_power_dbm)
     tx_power_dbm[service] = launch_power_dbm
-    delta_pdb = np.zeros(_NB_CHANNELS)
+    delta_pdb = np.zeros(comb.frequency_hz.size)
     delta_pdb[service] = launch_power_dbm - defaults.power_dbm
     tx_power_w = 10 ** (tx_power_dbm / 10.0) * 1e-3  # dBm → W
     si = create_arbitrary_spectral_information(
-        frequency,
+        comb.frequency_hz,
         pch=tx_power_w,
         tx_power=tx_power_w,
-        baud_rate=params.baud_rate_hz,
-        slot_width=_SPACING_HZ,
-        roll_off=0.15,
+        baud_rate=comb.baud_rate_hz,
+        slot_width=comb.slot_width_hz,
+        roll_off=defaults.roll_off,
         tx_osnr=100.0,   # ideal Tx — transmitter is never the bottleneck
         delta_pdb_per_channel=delta_pdb,
     )
@@ -201,21 +210,26 @@ def compute_path_baseline(
         else:
             si = el(si)
 
-    # Extract worst-channel (min GSNR) metrics.
+    # The service channel, found by frequency: an EDFA drops out-of-band
+    # carriers, so indices need not survive propagation.
+    found = np.flatnonzero(np.abs(si.frequency - centre_frequency_hz) < 1.0)
+    if found.size == 0:
+        raise ValueError(
+            f"the channel at {centre_frequency_hz * 1e-12:.6f} THz was dropped "
+            "on the path: it lies outside an amplifier's band"
+        )
+    ch = int(found[0])
+
     # Unit conversions follow gnpy's own Transceiver._calc_* methods, which
     # are the authority for what SpectralInformation carries: accumulated
     # CD is in s/m (×1e3 → ps/nm), PMD in s (×1e12 → ps), latency in s
     # (×1e3 → ms).
-    worst = int(np.argmin(si.gsnr_db))
-    pmd_ps = float(np.max(si.pmd) * 1e12)   # s → ps
-    latency_ms = float(si.latency[0] * 1e3)  # s → ms (same for all channels)
-
     return OpmBaseline(
-        gsnr_db=float(si.gsnr_db[worst]),
-        osnr_ase_db=float(si.snr_lin_db[worst]),
-        cd_ps_nm=float(si.chromatic_dispersion[worst]) * 1e3,  # s/m → ps/nm
-        pmd_ps=pmd_ps,
-        latency_ms=latency_ms,
+        gsnr_db=float(si.gsnr_db[ch]),
+        osnr_ase_db=float(si.snr_lin_db[ch]),
+        cd_ps_nm=float(si.chromatic_dispersion[ch]) * 1e3,  # s/m → ps/nm
+        pmd_ps=float(si.pmd[ch] * 1e12),                     # s → ps
+        latency_ms=float(si.latency[ch] * 1e3),              # s → ms
         total_fiber_km=_sum_fiber_km(path_items),
         edfa_uids=[uid for uid, el in path_items if type(el).__name__ == "Edfa"],
         fiber_uids=[uid for uid, el in path_items if type(el).__name__ == "Fiber"],

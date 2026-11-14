@@ -107,7 +107,7 @@ def test_gnpy_offsets_the_service_channel_through_delta_pdb(gnpy_context, monkey
     path = gnpy_context.get_service_path(sip_a, sip_z)
     si = gnpy_context._backend.spectral_defaults
     asyncio.run(gnpy_context._backend.compute_baseline(
-        path, "DP-QPSK", centre_frequency_hz=193.1e12, launch_power_dbm=si.power_dbm + 3,
+        path, "DP-QPSK", centre_frequency_hz=193.1e12, media_channel_width_hz=56.25e9, launch_power_dbm=si.power_dbm + 3,
     ))
     service = int(abs(captured["frequency"] - 193.1e12).argmin())
     delta = captured["delta_pdb_per_channel"]
@@ -128,7 +128,7 @@ def test_egn_osnr_scales_with_launch_power(tmp_path) -> None:
 
     def at(power: float):
         return asyncio.run(ctx._backend.compute_baseline(
-            path, "DP-QPSK", centre_frequency_hz=193.1e12, launch_power_dbm=power,
+            path, "DP-QPSK", centre_frequency_hz=193.1e12, media_channel_width_hz=56.25e9, launch_power_dbm=power,
         ))
 
     low, high = at(0.0), at(3.0)

@@ -142,3 +142,66 @@ class TestAnalyticalMetrics:
         # 1 km / (c/n_eff) → ~4.9 µs ≈ 0.0049 ms.
         ms = latency_ms(1.0)
         assert 0.0048 < ms < 0.0050
+
+
+class TestCrossChannelNli:
+    """The cross-channel term is GNPy's gn_model_analytic (Poggiolini 2014,
+    arXiv:1209.0394 Eq. 120/123), with this kernel's field attenuation."""
+
+    @staticmethod
+    def _span():
+        from twinlight.physics.egn_kernel import SpanInputs, db_per_km_to_neper_per_m
+
+        return SpanInputs(length_m=80e3, attenuation_neper_per_m=db_per_km_to_neper_per_m(0.2),
+                          noise_figure_linear=10 ** 0.5)
+
+    @pytest.mark.parametrize("offset_hz", [50e9, -50e9, 200e9, 1.5e12])
+    def test_matches_gnpy_psi(self, offset_hz: float) -> None:
+        import numpy as np
+        from gnpy.core.science_utils import NliSolver
+
+        from twinlight.physics import egn_kernel as k
+
+        span = self._span()
+        power_alpha = 2 * span.attenuation_neper_per_m  # GNPy's α is the power one
+        l_eff = NliSolver.effective_length(power_alpha, span.length_m)
+        baud = np.array([32e9, 32e9])
+        df = np.array([[0.0, offset_hz], [-offset_hz, 0.0]])
+        psi = NliSolver._psi(df, baud, np.full(2, -k._BETA_2_S2_PER_M), l_eff, 1 / power_alpha)
+        gamma = k._GAMMA_PER_W_PER_M
+        eta = gamma ** 2 * NliSolver.XPM_WEIGHT * psi[0, 1] / (baud[0] * baud[1] ** 2) * baud[0]
+        p_cut, p_pump = 1e-3, 2e-3
+        expected = eta * p_cut * p_pump ** 2
+
+        ours = k.per_span_cross_channel_nli_power(
+            span, p_cut, 32e9, [k.Neighbour(offset_hz, p_pump, 32e9)],
+        )
+        assert ours == pytest.approx(expected, rel=1e-9)
+
+    def test_loaded_line_is_worse_and_closer_neighbours_hurt_more(self) -> None:
+        from twinlight.physics import egn_kernel as k
+
+        spans = [self._span()] * 5
+        alone = k.accumulate_path_noise(spans, launch_power_w=1e-3, bandwidth_hz=32e9,
+                                        centre_frequency_hz=193.1e12)
+        near = k.accumulate_path_noise(spans, launch_power_w=1e-3, bandwidth_hz=32e9,
+                                       centre_frequency_hz=193.1e12,
+                                       neighbours=[k.Neighbour(50e9, 1e-3, 32e9)])
+        far = k.accumulate_path_noise(spans, launch_power_w=1e-3, bandwidth_hz=32e9,
+                                      centre_frequency_hz=193.1e12,
+                                      neighbours=[k.Neighbour(1e12, 1e-3, 32e9)])
+        assert alone.gsnr_db > far.gsnr_db > near.gsnr_db
+        assert alone.osnr_ase_db == near.osnr_ase_db  # neighbours add NLI, not ASE
+
+    def test_ase_is_evaluated_at_the_channel_frequency(self) -> None:
+        import math
+
+        from twinlight.physics import egn_kernel as k
+
+        spans = [self._span()] * 3
+        low = k.accumulate_path_noise(spans, launch_power_w=1e-3, bandwidth_hz=32e9,
+                                      centre_frequency_hz=191.5e12)
+        high = k.accumulate_path_noise(spans, launch_power_w=1e-3, bandwidth_hz=32e9,
+                                       centre_frequency_hz=195.0e12)
+        assert low.osnr_ase_db - high.osnr_ase_db == pytest.approx(
+            10 * math.log10(195.0 / 191.5))

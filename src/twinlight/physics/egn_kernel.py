@@ -4,9 +4,9 @@ Implementation of the Gaussian-Noise (GN) model — the analytical
 alternative to GNPy's split-step simulation. Heavily inspired by the
 ``optical-networking-gym`` (EGN) project's
 ``optical/kernels/qot_kernel.py`` (used here with the original
-author's blessing — same person owns both projects), simplified to
-the single-channel MVP scope: self-channel NLI only, neighbour-channel
-XPM/FWM is a TODO at the bottom.
+author's blessing — same person owns both projects): self-channel NLI
+in Carena 2012's closed form, plus the incoherent GN model's
+cross-channel term for the other channels of a loaded line.
 
 Underlying formulas:
 
@@ -19,6 +19,13 @@ Underlying formulas:
 * Curri, "GNPy: A network-oriented open-source GN/EGN-model library",
   IEEE/OSA J. Lightwave Technol. 40(11):3498 (2022).
 
+* Poggiolini, Bosco, Carena, Curri, Jiang, Forghieri,
+  "The GN-Model of Fiber Non-Linear Propagation and its Applications",
+  IEEE/OSA J. Lightwave Technol. 32(4):694 (2014); arXiv:1209.0394,
+  Eqs. 120 and 123 — the incoherent closed form for cross-channel NLI,
+  as GNPy implements it (``gnpy.core.science_utils.NliSolver._gn_analytic``
+  and ``_psi``).
+
 The model gives, for a single channel propagated over a chain of
 amplified fiber spans:
 
@@ -26,8 +33,8 @@ amplified fiber spans:
 
 with per-span contributions accumulated linearly in the noise-power
 domain (Eq. 1-3 of Carena 2012). Self-channel NLI uses Carena 2012's
-closed-form integral; cross-channel XPM/FWM from neighbouring services
-is not yet modelled here (TODO at the bottom).
+closed-form integral; NLI from the other channels of a loaded line uses
+Poggiolini 2014 Eq. 120/123 (``per_span_cross_channel_nli_power``).
 """
 
 from __future__ import annotations
@@ -156,6 +163,63 @@ def per_span_self_nli_power(
 
 
 @dataclass(frozen=True)
+class Neighbour:
+    """Another channel on the line: offset from the channel under test,
+    launch power and bandwidth (symbol rate)."""
+
+    offset_hz: float
+    power_w: float
+    bandwidth_hz: float
+
+
+# XPM weight of the incoherent GN model: twice the 16/27 SPM weight
+# (Poggiolini 2014 Eq. 120; gnpy NliSolver.XPM_WEIGHT).
+_XPM_WEIGHT = 2.0 * 16.0 / 27.0
+
+
+def per_span_cross_channel_nli_power(
+    span: SpanInputs,
+    cut_power_w: float,
+    cut_bandwidth_hz: float,
+    neighbours: list[Neighbour],
+) -> float:
+    """NLI power the other channels generate on the channel under test.
+
+    Incoherent GN model, Poggiolini 2014 (arXiv:1209.0394) Eq. 120 with the
+    ψ of Eq. 123, written as GNPy's ``_gn_analytic`` writes it:
+
+        P_NLI = Σ_pump (32/27) · γ² · ψ(Δf) / B_pump² · P_cut · P_pump²
+
+        ψ(Δf) = ½ [asinh(π² L_a |β₂| B_cut (Δf + B_pump/2))
+                  − asinh(π² L_a |β₂| B_cut (Δf − B_pump/2))]
+                · L_eff² / (2π |β₂| L_a)
+
+    Those equations use the *power* attenuation coefficient; this module's α
+    is the field coefficient (half of it), so L_eff = (1 − e^(−2αL))/(2α) and
+    L_a = 1/(2α) are the same lengths as in ``per_span_self_nli_power``.
+    """
+    alpha = span.attenuation_neper_per_m
+    if alpha <= 0.0 or span.length_m <= 0.0 or not neighbours:
+        return 0.0
+    l_eff = _effective_length_m(alpha, span.length_m)
+    l_a = 1.0 / (2.0 * alpha)
+    scale = l_eff * l_eff / (2.0 * math.pi * _BETA_2_S2_PER_M * l_a)
+    k = _PI_SQ * l_a * _BETA_2_S2_PER_M * cut_bandwidth_hz
+    total = 0.0
+    for pump in neighbours:
+        half = pump.bandwidth_hz / 2.0
+        psi = 0.5 * (
+            math.asinh(k * (pump.offset_hz + half))
+            - math.asinh(k * (pump.offset_hz - half))
+        ) * scale
+        total += (
+            _XPM_WEIGHT * _GAMMA_PER_W_PER_M ** 2 * psi / pump.bandwidth_hz ** 2
+            * cut_power_w * pump.power_w ** 2
+        )
+    return total
+
+
+@dataclass(frozen=True)
 class PathQoT:
     """Aggregated link-noise results returned by ``accumulate_path_noise``."""
 
@@ -171,6 +235,7 @@ def accumulate_path_noise(
     launch_power_w: float,
     bandwidth_hz: float,
     centre_frequency_hz: float,
+    neighbours: list[Neighbour] | None = None,
 ) -> PathQoT:
     """Aggregate ASE and NLI over a chain of amplified spans.
 
@@ -178,6 +243,11 @@ def accumulate_path_noise(
     is neglected — Carena 2012 §IV) so the per-span contributions
     accumulate directly. GSNR is then the launch power divided by the
     total accumulated noise, in dB.
+
+    ``centre_frequency_hz`` is the channel's own frequency (the photon energy
+    in the ASE term). ``neighbours`` are the other channels of the line, each
+    launched into every span at its own power; without them the channel is
+    alone and only self-channel NLI applies.
     """
     if launch_power_w <= 0.0:
         raise ValueError("launch_power_w must be positive")
@@ -196,6 +266,9 @@ def accumulate_path_noise(
         p_nli_total += per_span_self_nli_power(
             span, launch_power_w, bandwidth_hz,
         )
+        p_nli_total += per_span_cross_channel_nli_power(
+            span, launch_power_w, bandwidth_hz, neighbours or [],
+        )
 
     osnr_ase_db = (
         10.0 * math.log10(launch_power_w / p_ase_total)
@@ -212,9 +285,3 @@ def accumulate_path_noise(
         p_ase_w=p_ase_total,
         p_nli_w=p_nli_total,
     )
-
-
-# Future work: cross-channel XPM/FWM from neighbouring services on
-# shared spans, per Carena 2014 §IV. Would take a list of
-# (centre_frequency, bandwidth, launch_power, modulation_phi) tuples
-# for every other service active on each span.

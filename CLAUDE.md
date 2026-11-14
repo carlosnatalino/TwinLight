@@ -125,10 +125,18 @@ Details that are easy to get wrong and cost a debugging cycle:
 - `create_input_spectral_information(f_min, f_max, …)` treats both bounds as
   channel centres, inclusive. gnpy 2 put the first channel one slot above
   `f_min`, so the same arguments now launch one extra channel without any
-  error. The twin's comb is 88 channels, 190.95–195.30 THz, and
-  `TestPropagationComb` pins it.
-- EDFAs drop carriers outside their band (the default C-band is 191.3–196.0
-  THz), so 81 of the 88 channels reach the receiver.
+  error. The twin launches the equipment library's SI comb (76 channels,
+  191.35–195.10 THz, with the bundled library) with the service channel
+  inserted at its own frequency, and reports that channel, not the worst
+  (`physics/channel_plan.py:line_comb`). `TestPropagationComb` pins it.
+- EDFAs drop carriers outside their band (`Edfa.params.bands`; 191.275–196.125
+  THz for GNPy's reference EDFAs), and slot indices do not survive that, so
+  the service channel is found by frequency after propagation. The twin keeps
+  the comb and every assigned block inside the band
+  (`find_elements_common_range`).
+- ROADMs equalise each channel to their target plus its `delta_pdb`, so a
+  per-channel launch-power offset must ride on `delta_pdb`; a transmitter
+  power alone is erased at the first ROADM.
 - `si.pmd` and `si.latency` are per-channel arrays, not scalars.
 - Deep-copy path elements before propagating; propagation mutates element state.
 - GNPy has no k-shortest-path function. `compute_constrained_path` runs
@@ -177,7 +185,7 @@ endpoint reference resolves to a physical element.
 ## Not yet implemented
 
 Soft-decision post-FEC BER (GMI/NGMI are reported, but not mapped through a
-per-code NGMI threshold); multi-band (C-band only); XPM/FWM in the EGN kernel (self-channel
-NLI only); eye and constellation *rendering* in the UI (the backend synthesis
+per-code NGMI threshold); multi-band (C-band only); the EGN correction on cross-channel NLI and
+ROADM noise in the EGN kernel; eye and constellation *rendering* in the UI (the backend synthesis
 exists); an event-driven simulation clock; T-API notification, OAM, fault and
 virtual-network modules; gNMI Get/Set; authentication on any interface.

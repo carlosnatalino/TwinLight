@@ -504,7 +504,7 @@ class TapiContext:
         guard_slots = self._config.rmsa.default_guardband_slots
         margin = self._config.rmsa.qot_margin_db
         power_dbm = self._launch_power_for(svc)
-        memo: dict[tuple[tuple[str, ...], int, float, float], OpmBaseline | None] = {}
+        memo: dict[tuple[tuple[str, ...], int, int, float, float], OpmBaseline | None] = {}
         attempts: list[str] = []
         spectrum_found = False
 
@@ -538,12 +538,19 @@ class TapiContext:
 
                 lower, upper = self._slot_range_hz(start, block)
                 centre_hz = (lower + upper) // 2
-                key = (tuple(path), centre_hz, power_dbm, params.baud_rate_hz)
+                # What the propagation depends on: the route, where the channel
+                # sits, how wide its media channel is (which comb neighbours it
+                # displaces), its power and its symbol rate. Formats sharing
+                # all of these share one propagation.
+                key = (tuple(path), centre_hz, upper - lower, power_dbm,
+                       params.baud_rate_hz)
                 if key not in memo:
                     async with self._propagation_lock:
                         memo[key] = await self._backend.compute_baseline(
                             path, fmt.value,
-                            centre_frequency_hz=centre_hz, launch_power_dbm=power_dbm,
+                            centre_frequency_hz=centre_hz,
+                            media_channel_width_hz=upper - lower,
+                            launch_power_dbm=power_dbm,
                         )
                 baseline = memo[key]
                 if baseline is None:
@@ -1336,10 +1343,11 @@ class TapiContext:
             if svc.uuid in self._baseline_cache:
                 return self._baseline_cache[svc.uuid]
 
-            centre_hz, power_dbm = self._service_channel(svc, path)
+            centre_hz, width_hz, power_dbm = self._service_channel(svc, path)
             baseline = await self._backend.compute_baseline(
                 path, svc.modulation_format.value,
-                centre_frequency_hz=centre_hz, launch_power_dbm=power_dbm,
+                centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
+                launch_power_dbm=power_dbm,
             )
             if baseline is None:
                 return None
@@ -1715,10 +1723,11 @@ class TapiContext:
                             status="link-failed",
                         )
                     else:
-                        centre_hz, power_dbm = self._service_channel(svc, path)
+                        centre_hz, width_hz, power_dbm = self._service_channel(svc, path)
                         predicted[svc.uuid] = await self._backend.compute_baseline(
                             path, svc.modulation_format.value,
-                            centre_frequency_hz=centre_hz, launch_power_dbm=power_dbm,
+                            centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
+                            launch_power_dbm=power_dbm,
                         )
             finally:
                 for uid, attr, token in reversed(tokens):
@@ -2114,12 +2123,15 @@ class TapiContext:
         path = self.get_service_path(sip_a, sip_z)
         if not path:
             return None
-        centre_hz = self._preview_centre_frequency(path, ModulationFormat(modulation_format))
+        fmt = ModulationFormat(modulation_format)
+        centre_hz = self._preview_centre_frequency(path, fmt)
         power_dbm = self.default_launch_power_dbm
         async with self._propagation_lock:
             baseline = await self._backend.compute_baseline(
                 path, modulation_format,
-                centre_frequency_hz=centre_hz, launch_power_dbm=power_dbm,
+                centre_frequency_hz=centre_hz,
+                media_channel_width_hz=self._block_width(fmt) * self._slot_hz(),
+                launch_power_dbm=power_dbm,
             )
         return None if baseline is None else (baseline, centre_hz, power_dbm)
 
@@ -2148,8 +2160,11 @@ class TapiContext:
         designed for."""
         return self._backend.spectral_defaults.power_dbm
 
-    def _service_channel(self, svc: ConnectivityService, path: list[str]) -> tuple[int, float]:
-        """(central frequency [Hz], launch power [dBm]) the service runs at.
+    def _service_channel(
+        self, svc: ConnectivityService, path: list[str],
+    ) -> tuple[int, int, float]:
+        """(central frequency [Hz], media channel width [Hz], launch power [dBm])
+        the service runs at.
 
         Taken from its allocation; a service without one (only possible for
         state built outside admission) is evaluated where admission would
@@ -2158,10 +2173,15 @@ class TapiContext:
         power_dbm = self._service_launch_power.get(svc.uuid, self.default_launch_power_dbm)
         allocation = self._service_allocation.get(svc.uuid)
         if allocation is None:
-            return self._preview_centre_frequency(path, svc.modulation_format), power_dbm
+            fmt = svc.modulation_format
+            return (
+                self._preview_centre_frequency(path, fmt),
+                self._block_width(fmt) * self._slot_hz(),
+                power_dbm,
+            )
         _edges, start, width = allocation
         lower, upper = self._slot_range_hz(start, width)
-        return (lower + upper) // 2, power_dbm
+        return (lower + upper) // 2, upper - lower, power_dbm
 
     def _build_gnpy_topology_ref_indexes(self) -> None:
         """Build gnpy_uid -> (topo_uuid, node_uuid) and (src,dst) -> (topo_uuid, link_uuid)."""

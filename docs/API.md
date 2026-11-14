@@ -355,6 +355,11 @@ bare `/data/…` paths and omits these three resources.
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
 
+Every OPM figure is the service's own channel — at its assigned central
+frequency and launch power, on a line fully loaded with the equipment
+library's SI comb — not the worst channel of the line (see
+[PHYSICS.md § 1](PHYSICS.md#1-qot-baseline)).
+
 **OPM response — all services** (`GET /internal/opm`) wraps a list:
 
 ```json

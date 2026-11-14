@@ -38,8 +38,8 @@ into it). Baseline before any change: 752 tests passed.
 | 4 | Spectrum request / band restriction | done | see git log |
 | 5 | Launch power | done | see git log |
 | 6 | Startup log of effective RMSA settings | done | see git log |
-| 7 | Channel-accurate QoT | next | |
-| — | Docs, quality gates, PR | todo | |
+| 7 | Channel-accurate QoT | done | see git log |
+| — | Docs, quality gates, PR | next | |
 
 ## Notes for whoever resumes
 
@@ -67,3 +67,8 @@ into it). Baseline before any change: 752 tests passed.
   GNPy still reports the worst comb channel until item 7. Transparent tree keeps
   `ModulationList/*/tx_power_dbm` (now the SI default) + new service leaf
   `launch_power_dbm`.
+- Item 7: `channel_plan.line_comb` (SI comb, overlap removal, band filter,
+  service inserted); GNPy reports the service channel by frequency; EGN has
+  `per_span_cross_channel_nli_power` (Poggiolini 2014 Eq. 120/123, checked
+  against gnpy `NliSolver._psi`). `compute_baseline` takes
+  `media_channel_width_hz` too; admission memo key adds the width.
