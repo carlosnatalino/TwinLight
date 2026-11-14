@@ -19,6 +19,7 @@ from twinlight.api import (
     diagrams,
     equipment,
     internal,
+    oam,
     parameters,
     path_computation,
     topology,
@@ -163,6 +164,7 @@ def create_app(config: TwinConfig) -> FastAPI:
         connectivity.router,
         path_computation.router,
         equipment.router,
+        oam.router,
     ):
         if root:
             app.include_router(tapi_router, prefix=root)
