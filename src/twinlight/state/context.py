@@ -31,6 +31,7 @@ from twinlight.algorithms.path_constraints import (
     NodeRef,
     PathConstraints,
 )
+from twinlight.algorithms.spectrum_assignment import first_fit, path_uids_to_edges
 from twinlight.config import TwinConfig
 from twinlight.loader.gnpy_topology import load_gnpy_topology
 from twinlight.loader.tapi_builder import TapiBuilder
@@ -44,6 +45,7 @@ from twinlight.models.topology import (
     Topology,
 )
 from twinlight.physics.backend import element_kind_name as _kind_name
+from twinlight.physics.modulation import ModulationFormat
 from twinlight.state.spectrum_state import SpectrumState
 from twinlight.state.topology_state import TopologyGraph
 
@@ -373,59 +375,25 @@ class TapiContext:
             raise NoPathError(f"No path between SIPs {sip_a!r} and {sip_z!r}")
 
         constraints = svc.path_constraints()
-        paths = self.candidate_paths(src, dst, constraints)
+        paths = self.candidate_paths(
+            src, dst, constraints, self._config.rmsa.k_shortest_paths,
+        )
         if not paths:
             raise NoPathError(
                 f"No path between SIPs {sip_a!r} and {sip_z!r}"
                 + ("" if constraints.is_empty else " satisfies the constraints")
             )
-        path = paths[0]
-
-        from twinlight.algorithms.spectrum_assignment import (
-            first_fit,
-            path_uids_to_edges,
-        )
-        from twinlight.physics.modulation import (
-            get_params,
-            slots_required_for_modulation,
-        )
+        path, fmt, start, block_width, baseline = await self._admit(svc, paths)
 
         path_edges = path_uids_to_edges(path)
-        slot_width_hz = self._config.spectrum.slot_width_ghz * 1e9
-        slots_required = slots_required_for_modulation(
-            svc.modulation_format, slot_width_hz
-        )
-        guard_slots = self._config.rmsa.default_guardband_slots
-        start = first_fit(
-            self._spectrum_state,
-            path_edges,
-            slots_required,
-            guard_slots,
-        )
-        if start is None:
-            raise InsufficientSpectrumError(
-                "No contiguous spectrum block available along the path"
-            )
-
-        block_width = slots_required + guard_slots
         self._spectrum_state.allocate(path_edges, start, block_width)
         self._service_allocation[svc.uuid] = (path_edges, start, block_width)
-
-        # QoT admission: require GSNR >= req_gsnr + margin (rmsa.qot_margin_db)
-        if self._gnpy_available:
-            baseline = await self.get_or_compute_baseline(svc)
-            if baseline is not None:
-                req_gsnr = get_params(svc.modulation_format).req_gsnr_db
-                margin = self._config.rmsa.qot_margin_db
-                if baseline.gsnr_db < req_gsnr + margin:
-                    self._spectrum_state.release(path_edges, start, block_width)
-                    self._service_allocation.pop(svc.uuid, None)
-                    raise InsufficientQoTError(
-                        f"Path GSNR {baseline.gsnr_db:.1f} dB below required "
-                        f"{req_gsnr + margin:.1f} dB (req {req_gsnr} + margin {margin})"
-                    )
-
+        svc.assign_modulation(fmt)
         self._services[svc.uuid] = svc
+        if baseline is not None:
+            # The admission propagation is the service's baseline: same path,
+            # channel and launch power. Seeding the cache saves a propagation.
+            self._baseline_cache[svc.uuid] = baseline
 
         # Reverse index for /config invalidation: every element on the path
         # now depends on this service's baseline.
@@ -433,13 +401,104 @@ class TapiContext:
             self._element_to_services.setdefault(uid, set()).add(svc.uuid)
 
         # Notify EDFA tracker of channel add (Bononi reservoir model)
-        if self._gnpy_available and baseline is not None:
+        if baseline is not None:
             edfa_uids = baseline.edfa_uids
             self._service_edfa_uids[svc.uuid] = edfa_uids
             if edfa_uids and self._config.transients.edfa_reservoir.enabled:
                 self._edfa_tracker.notify_channel_change(
                     edfa_uids, +1, self._config.transients.edfa_reservoir,
                 )
+
+    async def _admit(
+        self, svc: ConnectivityService, paths: list[list[str]],
+    ) -> tuple[list[str], ModulationFormat, int, int, OpmBaseline | None]:
+        """Walk the candidates and formats; return the first that passes.
+
+        Candidates are tried in rank order. On each, the requested format is
+        tried, or — when the request names none — every format from the
+        highest spectral efficiency down, so the densest format that closes
+        the link wins. A (path, format) passes when a block is free on every
+        link and, with a physics backend loaded, the propagated GSNR reaches
+        the format's requirement plus ``rmsa.qot_margin_db``.
+
+        Without a physics backend there is no QoT to check, so a request that
+        names no format gets the most robust one rather than the densest:
+        the twin cannot know a denser format would close the link.
+
+        Propagations are memoised for this admission only, keyed by
+        (path, central frequency, launch power, symbol rate) — what the
+        propagation depends on — so formats that occupy the same block share
+        one. The memo never outlives the call, so it cannot go stale on a
+        parameter change.
+
+        Returns ``(path, format, start slot, block width, baseline)``.
+
+        Raises:
+            InsufficientSpectrumError: No candidate had a free block for any
+                format tried.
+            InsufficientQoTError: Spectrum was found, but no (path, format)
+                reached its GSNR requirement. The message lists every attempt.
+        """
+        from twinlight.physics.modulation import (
+            formats_by_spectral_efficiency,
+            get_params,
+            slots_required_for_modulation,
+        )
+
+        qot_available = self._gnpy_available
+        if svc.requested_modulation is not None:
+            formats = [svc.requested_modulation]
+        elif qot_available:
+            formats = formats_by_spectral_efficiency()
+        else:
+            formats = formats_by_spectral_efficiency()[-1:]
+
+        slot_width_hz = self._config.spectrum.slot_width_ghz * 1e9
+        guard_slots = self._config.rmsa.default_guardband_slots
+        margin = self._config.rmsa.qot_margin_db
+        memo: dict[tuple[tuple[str, ...], int, float, float], OpmBaseline | None] = {}
+        attempts: list[str] = []
+        spectrum_found = False
+
+        for rank, path in enumerate(paths, start=1):
+            edges = path_uids_to_edges(path)
+            label = f"candidate {rank} ({' > '.join(self._terminals(path))})"
+            for fmt in formats:
+                params = get_params(fmt)
+                block = slots_required_for_modulation(fmt, slot_width_hz) + guard_slots
+                start = first_fit(self._spectrum_state, edges, block - guard_slots, guard_slots)
+                if start is None:
+                    attempts.append(f"{label} {fmt.value}: no free {block}-slot block")
+                    continue
+                spectrum_found = True
+                if not qot_available:
+                    return path, fmt, start, block, None
+
+                lower, upper = self._slot_range_hz(start, block)
+                key = (tuple(path), (lower + upper) // 2, params.tx_power_dbm,
+                       params.baud_rate_hz)
+                if key not in memo:
+                    async with self._propagation_lock:
+                        memo[key] = await self._backend.compute_baseline(
+                            path, fmt.value,
+                        )
+                baseline = memo[key]
+                if baseline is None:
+                    # Propagation could not run (e.g. an element GNPy rejects):
+                    # admitted without a QoT check, as before, so the OPM layer
+                    # falls back to its mock data for this service.
+                    return path, fmt, start, block, None
+                required = params.req_gsnr_db + margin
+                if baseline.gsnr_db >= required:
+                    return path, fmt, start, block, baseline
+                attempts.append(
+                    f"{label} {fmt.value}: GSNR {baseline.gsnr_db:.1f} dB below "
+                    f"{required:.1f} dB (required {params.req_gsnr_db} + "
+                    f"margin {margin})"
+                )
+
+        error_type = InsufficientQoTError if spectrum_found else InsufficientSpectrumError
+        raise error_type("; ".join(attempts))
 
     def get_services(self) -> list[ConnectivityService]:
         return list(self._services.values())

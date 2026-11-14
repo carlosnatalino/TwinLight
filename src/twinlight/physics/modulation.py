@@ -57,6 +57,21 @@ MODULATION_TABLE: dict[str, ModulationParams] = {
 }
 
 
+def spectral_efficiency(fmt: str | ModulationFormat) -> float:
+    """Net line rate per hertz of channel spacing [b/s/Hz], both polarisations."""
+    params = get_params(fmt)
+    return 2 * params.bits_per_symbol * params.baud_rate_hz / params.spacing_hz
+
+
+def formats_by_spectral_efficiency() -> list[ModulationFormat]:
+    """Every supported format, highest spectral efficiency first.
+
+    The order RMSA tries formats in when a request names none: the densest
+    format whose QoT passes uses the least spectrum per bit.
+    """
+    return sorted(ModulationFormat, key=spectral_efficiency, reverse=True)
+
+
 # T-API v2.6.0 spells modulation as a `tapi-photonic-media:MT` identity on
 # the connectivity-service end-point (see models/connectivity.py). These are
 # the identities defined in tapi-photonic-media.yang; note the ONF naming is

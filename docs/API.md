@@ -93,8 +93,7 @@ from fiber length and the speed of light in silica.
 The modulation format is the end-point's
 `otsia-connectivity-service-end-point-spec` augment, as T-API v2.6.0 specifies
 — `tapi-connectivity` has no modulation leaf of its own. `standard-modulation-technique`
-accepts `MT_DP-QPSK` (the default when the augment is absent), `MT_DP-QAM16` or
-`MT_DP-QAM64`; the module-prefixed identityref spelling is accepted too
+accepts `MT_DP-QPSK`, `MT_DP-QAM16` or `MT_DP-QAM64`; the module-prefixed identityref spelling is accepted too
 (RFC 7951 §6.8). A bare top-level `modulation-format` key is rejected with a
 `422` naming the standard location, rather than silently defaulting.
 
@@ -102,9 +101,15 @@ The body may be a single object, as above, or a one-entry JSON array — RFC 795
 §5.4 encodes a list entry as an array, and that is the form some controllers
 send. An array of more than one entry is a `400`.
 
-Creation runs the full RMSA admission path — route, spectrum first-fit, QoT
-check against the format's required GSNR plus `rmsa.qot_margin_db`. A request
-that cannot be satisfied is refused rather than admitted with a warning.
+Creation runs the full RMSA admission path. The `rmsa.k_shortest_paths`
+candidate routes are tried in rank order; on each, the requested format — or,
+when the request names none, every format from the highest spectral efficiency
+down (DP-64QAM, DP-16QAM, DP-QPSK) — gets a first-fit spectrum block and a QoT
+check against the format's required GSNR plus `rmsa.qot_margin_db`. The first
+(route, format, block) that passes is admitted, and the end-points then report
+the format in effect. Without a physics backend there is no QoT to check, so a
+request that names no format gets DP-QPSK. A request that cannot be satisfied
+is a `409` listing every attempt, rather than an admission with a warning.
 
 A service may carry the standard `routing-constraint` container and
 `topology-constraint` list; they constrain the route exactly as on a

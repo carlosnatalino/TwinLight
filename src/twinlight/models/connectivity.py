@@ -167,6 +167,11 @@ class ConnectivityService(BaseModel):
     modulation_format: ModulationFormat = Field(
         default=ModulationFormat.DP_QPSK, exclude=True
     )
+    # The format the client asked for, or None when it left the choice to
+    # admission, which then tries formats from the highest spectral
+    # efficiency down (TapiContext.add_service). ``modulation_format`` is the
+    # format in effect: the requested one, or the one admission chose.
+    requested_modulation: ModulationFormat | None = Field(default=None, exclude=True)
 
     @field_validator("topology_constraint", mode="before")
     @classmethod
@@ -217,6 +222,8 @@ class ConnectivityService(BaseModel):
         """
         if not isinstance(data, dict):
             return data
+        if data.get("modulation_format") is not None:  # built in Python
+            data.setdefault("requested_modulation", data["modulation_format"])
         if "modulation-format" in data:
             raise ValueError(
                 "'modulation-format' is not a T-API v2.6.0 field. Send the "
@@ -247,7 +254,9 @@ class ConnectivityService(BaseModel):
                         "standard-modulation-technique"
                     )
                     if identity:
-                        data["modulation_format"] = modulation_from_mt(identity)
+                        fmt = modulation_from_mt(identity)
+                        data["modulation_format"] = fmt
+                        data["requested_modulation"] = fmt
                         return data
         return data
 
@@ -259,6 +268,17 @@ class ConnectivityService(BaseModel):
         model built in Python (tests, snapshot restore, the example scripts)
         carries the same structure as one parsed from a T-API request.
         """
+        self._stamp()
+        return self
+
+    def assign_modulation(self, fmt: ModulationFormat) -> None:
+        """Record the format admission put in effect, on the model and on the
+        wire: a GET reports the format the lightpath runs, not just the one
+        the client asked for (which may have been none)."""
+        self.modulation_format = fmt
+        self._stamp()
+
+    def _stamp(self) -> None:
         spec = OtsiaCsepSpec(
             otsi_config=[
                 OtsiConfig(
@@ -274,7 +294,6 @@ class ConnectivityService(BaseModel):
             end_point.layer_protocol_constraint = [
                 LayerProtocolConstraint(otsia_spec=spec)
             ]
-        return self
 
 
 class UpdateConnectivityServiceRequest(BaseModel):

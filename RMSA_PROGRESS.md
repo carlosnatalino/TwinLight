@@ -33,8 +33,8 @@ into it). Baseline before any change: 752 tests passed.
 | # | Item | Status | Commit |
 |---|------|--------|--------|
 | 1 | Path-computation constraints + T-API path-comp-service | done | see git log |
-| 2 | Modulation selection over k candidates | next | |
-| 3 | Candidate ranking (GNPy shortest_simple_paths) | todo | |
+| 2 | Modulation selection over k candidates | done | see git log |
+| 3 | Candidate ranking (GNPy shortest_simple_paths) | next | |
 | 4 | Spectrum request / band restriction | todo | |
 | 5 | Launch power | todo | |
 | 6 | Startup log of effective RMSA settings | todo | |
@@ -55,3 +55,7 @@ into it). Baseline before any change: 752 tests passed.
   (both backends), `mesh_gnpy_context`, `mesh_app` in `tests/conftest.py`.
 - Pre-existing finding for the PR (not fixed): topology link
   `latency-characteristic/total-size` is not a v2.6.0 leaf.
+- Item 2: `ConnectivityService.requested_modulation` (None = admission
+  chooses) vs `modulation_format` (in effect). Without a physics backend an
+  unspecified format resolves to DP-QPSK (no QoT to justify a denser one) —
+  call this out in the PR. Admission memo is per call (`TapiContext._admit`).

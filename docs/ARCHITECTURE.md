@@ -190,14 +190,20 @@ src/twinlight_client/    Companion client library and CLI
    that hides excluded nodes and links; otherwise
    `algorithms/routing.py:k_shortest_paths` searches the parsed topology. The
    unconstrained best route is memoised in `_route_cache`.
-3. For each candidate, in order: assign spectrum first-fit
-   (`algorithms/spectrum_assignment.py`), propagate the path through the active
-   backend to obtain an `OpmBaseline`, and check
-   `GSNR ≥ required_gsnr(format) + rmsa.qot_margin_db`.
-4. The first candidate that satisfies both spectrum and QoT is admitted. The
-   baseline is cached in `_baseline_cache` keyed by service UUID, the EDFA
-   tracker is told a channel was added, and the T-API object is returned with
-   the assigned spectrum on its end-points.
+3. For each of the `rmsa.k_shortest_paths` candidates, in order, and on each
+   for the requested format — or every format from the highest spectral
+   efficiency down when none is requested (`TapiContext._admit`): find a
+   first-fit block (`algorithms/spectrum_assignment.py`), propagate the path
+   through the active backend to obtain an `OpmBaseline`, and check
+   `GSNR ≥ required_gsnr(format) + rmsa.qot_margin_db`. Propagations are
+   memoised for the duration of one admission, keyed by path, central
+   frequency, launch power and symbol rate, so formats occupying the same
+   block share one.
+4. The first (candidate, format, block) that passes is admitted: the block is
+   allocated, the format in effect is written onto the service, its
+   propagation seeds `_baseline_cache`, the EDFA tracker is told a channel was
+   added, and the T-API object is returned with the assigned spectrum on its
+   end-points.
 5. If no candidate passes, the request is refused with a RESTCONF error body
    explaining which constraint failed.
 
