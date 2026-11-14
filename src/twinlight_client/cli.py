@@ -29,6 +29,8 @@ import os
 import sys
 from typing import Any
 
+import grpc
+
 from twinlight_client.client import TapiClient
 from twinlight_client.streaming import (
     TapiStreamClient,
@@ -227,6 +229,12 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_stream_service(args.rest_url, args.gnmi_target, args.token, service))
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
+    except grpc.aio.AioRpcError as exc:
+        hint = f" (set --token or ${TOKEN_ENV})" if (
+            exc.code() == grpc.StatusCode.UNAUTHENTICATED
+        ) else ""
+        print(f"Streaming error: {exc.code().name}: {exc.details()}{hint}", file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001 — surface any streaming error
         print(f"Streaming error: {exc}", file=sys.stderr)
         return 1
