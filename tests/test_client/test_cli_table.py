@@ -14,8 +14,42 @@ def test_row_aligns_under_the_header():
     assert len(row) == len(_header_line())
 
 
-def test_link_failed_sample_prints_dashes_not_a_crash():
-    """None marks what a failed link cannot measure; it must not hit a format spec."""
-    row = _value_line(1, "12:00:00", _link_failed_measurements())
-    assert "-" in row.split()
-    assert "1.00e+00" in row  # the BERs still report their worst case
+def test_link_failed_record_prints_dashes_not_a_crash():
+    """A link-failed service streams every measure as MISSING (decoded to None)."""
+    from twinlight.streaming.proto import tapi_streaming_performance_pb2 as tapi
+    from twinlight.streaming.records import decode_measurements, measurement_details
+
+    details = measurement_details(
+        {"service-uuid": "svc-1", "timestamp": 0.0, "status": "link-failed",
+         "measurements": _link_failed_measurements()},
+        native_resource_id="trx", sample_interval_ns=1,
+    )
+    wire = tapi.MeasurementDetails.FromString(details.SerializeToString())
+    row = _value_line(1, "12:00:00", decode_measurements(wire))
+    assert row.split()[2:] == ["-"] * len(_METRICS)
+
+
+def test_rejected_stream_prints_code_and_hint(monkeypatch, capsys):
+    """A gRPC rejection is one readable line, with a hint for a missing token."""
+    import grpc
+
+    from twinlight_client import cli
+
+    async def fake_fetch(_url):
+        return [{"uuid": "svc-1", "name": []}]
+
+    async def fake_stream(*_args):
+        raise grpc.aio.AioRpcError(
+            grpc.StatusCode.UNAUTHENTICATED, grpc.aio.Metadata(), grpc.aio.Metadata(),
+            details="missing token",
+        )
+
+    monkeypatch.setattr(cli, "_fetch_services", fake_fetch)
+    monkeypatch.setattr(cli, "_stream_service", fake_stream)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    assert cli.main(["--rest-url", "http://twin"]) == 1
+    err = capsys.readouterr().err
+    assert err.strip() == (
+        "Streaming error: UNAUTHENTICATED: missing token "
+        "(set --token or $TWINLIGHT_STREAM_TOKEN)"
+    )

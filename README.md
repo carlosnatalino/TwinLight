@@ -21,8 +21,9 @@ TwinLight is an optical network **digital twin**: it loads a GNPy network
 description, computes a physics-based quality-of-transmission (QoT) baseline for
 every lightpath, layers four literature-grounded models of *time-varying*
 impairments on top, and exposes the result through the interfaces a real optical
-domain controller would offer — [T-API v2.6.0][tapi] REST, gNMI streaming
-telemetry, and a Prometheus metrics endpoint.
+domain controller would offer — [T-API v2.6.0][tapi] REST, the T-API
+performance-measurement stream over gNMI (TR-548), and a Prometheus metrics
+endpoint.
 
 The result behaves like an optical domain controller you can experiment against:
 useful for validating SDN control logic, running what-if and failure scenarios,
@@ -38,7 +39,7 @@ model:
 | **Slow / static** | Per-lightpath QoT baseline (GSNR, OSNR, CD, PMD, latency) | GNPy split-step propagation, or a self-contained closed-form GN/EGN kernel |
 | **Fast / transient** | µs-to-diurnal fluctuations of those same metrics | Four analytical impairment models composed over the baseline (see [Physics](#physics)) |
 
-Every OPM read — REST response, gNMI sample, or Prometheus scrape — is evaluated
+Every OPM read — REST response, gNMI stream record, or Prometheus scrape — is evaluated
 at the current wall-clock time, so a subscriber sees a signal that *moves* the
 way a deployed coherent receiver's telemetry moves.
 
@@ -87,8 +88,11 @@ way a deployed coherent receiver's telemetry moves.
 - **QoT-aware RMSA** — k-shortest-path routing, first-fit spectrum assignment on
   a 6.25 GHz flexi-grid, and admission control against the required GSNR of the
   requested modulation format.
-- **Streaming telemetry** — gNMI `Subscribe` in ONCE / STREAM / POLL modes over
-  gRPC, served by a stateless adapter that calls the FastAPI app in-process.
+- **Streaming telemetry** — the T-API v2.6.0 performance-measurement stream of
+  TR-548 over gNMI: discovered through `tapi-streaming:stream-context`, one
+  protobuf `MeasurementDetails` record per service per tick under the service's
+  `tapi-oam` job, a truncated log that lets a client resume after a dropped
+  connection, and an optional bearer token.
 - **Observability out of the box** — Prometheus `/metrics` plus a provisioned
   Grafana dashboard in the Compose stack.
 - **Web UI** — a React SPA for topology, services, spectrum occupancy, path
@@ -135,7 +139,7 @@ Once the stack reports healthy:
 | <http://localhost:8080/metrics> | Prometheus exposition |
 | <http://localhost:9090> | Prometheus UI |
 | <http://localhost:3000> | Grafana (`admin` / `admin`); the dashboard is provisioned in the *TwinLight* folder and starred, so it appears under *Starred* on the home page |
-| `localhost:50051` | gNMI gRPC endpoint |
+| `localhost:50051` | gNMI: the T-API measurement stream (discover it at `/data/tapi-common:context/tapi-streaming:stream-context`) |
 
 The default scenario is **CORONET CONUS** — a 75-ROADM US continental backbone
 with 198 fiber spans. To run the small two-site scenario instead:
@@ -290,8 +294,8 @@ usually take more attempts than `DP-QPSK`, and on a long-haul topology it may no
 be admissible at all — so with a large `-n` you may see fewer services admitted
 than requested, which the script reports per format.
 
-Then open the **Monitoring** page in the web UI, or watch one over gNMI with
-`twinlight-client`. To clear them again, delete each service by UUID with
+Then open the **Monitoring** page in the web UI, or follow one on the T-API
+measurement stream with `twinlight-client`. To clear them again, delete each service by UUID with
 `DELETE /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}`.
 
 > **Why a printed GSNR differs from the admission figure.** Admission tests the
@@ -309,13 +313,18 @@ Then open the **Monitoring** page in the web UI, or watch one over gNMI with
 The companion client library and CLI ship in the same distribution:
 
 ```bash
-twinlight-client                                              # localhost defaults
-twinlight-client --rest-url http://host:8080 --gnmi-target host:50051
+twinlight-client                                   # localhost defaults
+twinlight-client --rest-url http://host:8080       # stream address comes from discovery
+twinlight-client --gnmi-target host:50051 --token "$TOKEN"   # override the address; auth
 ```
 
-It lists the active services, lets you pick one, and streams its transient-aware
-OPM (OSNR, GSNR, Q-factor, pre- and post-FEC BER, NGMI, chromatic dispersion,
-PMD) over gNMI.
+It lists the active services and lets you pick one, then discovers the T-API
+measurement stream and the service's oam-job over RESTCONF and prints that
+job's records: the transient-aware OPM (OSNR, GSNR, Q-factor, pre- and post-FEC
+BER, NGMI, chromatic dispersion, PMD), decoded from TAPI protobuf. After a
+dropped connection it resubscribes from its last record, so no sample is lost.
+See [docs/API.md § gNMI streaming](docs/API.md#gnmi-streaming), which also
+covers migrating from the earlier, custom gNMI paths.
 
 ### Rehearse soft failures
 
@@ -404,15 +413,16 @@ NetworkX DiGraph                    ← routing graph
       +
 Transient layer                     ← four analytical impairment models
 
-gNMI gRPC server                    ← stateless adapter, port 50051
+gNMI gRPC server                    ← T-API measurement stream (TR-548), port 50051
 ```
 
 Two design rules shape the codebase:
 
-1. **The FastAPI application owns all state.** The gNMI/gRPC server is a protocol
-   adapter with no state of its own — it calls the same FastAPI app in-process
-   through `httpx.ASGITransport`, so there is no TCP round-trip and no second
-   cache to keep coherent.
+1. **The FastAPI application owns all state.** The gNMI/gRPC server has no
+   state of its own — it streams the record log of the app's measurement
+   stream, whose sampler reads OPM through the same function as
+   `GET /internal/opm`, so there is no second computation and no second cache
+   to keep coherent.
 2. **T-API surfaces stay standard.** Anything non-standard — OPM readings, path
    metadata, admin utilities, runtime configuration, the transparent controller
    — lives under separate `/internal/`, `/admin/`, `/config/` and

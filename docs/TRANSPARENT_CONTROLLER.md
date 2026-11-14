@@ -417,8 +417,9 @@ The interface borrows shapes, not conformance. Deliberate differences:
 - **No locking, no confirmed commit**, no NETCONF, no event streams. The twin
   keeps no clock for parameter changes (see
   [ARCHITECTURE.md](ARCHITECTURE.md#changing-parameters-by-path)); a confirmed
-  commit's rollback timer would be one. gNMI `Subscribe` remains the way to
-  stream values.
+  commit's rollback timer would be one. Live QoT values stream as T-API
+  performance records over gNMI ([API.md](API.md#gnmi-streaming)); parameter
+  values are read, not streamed.
 - **ns-3 indices are positions in a sorted list**, not creation-order object
   IDs; UIDs and names are the primary keys.
 - **No authentication**, like every other interface — see

@@ -116,22 +116,37 @@ excluded from ruff, mypy and coverage. Do not hand-edit it.
 
 ## Regenerating the gRPC/protobuf code
 
-Only needed after editing `gnmi.proto` or `gnmi_ext.proto`. The compiler ships
-with `grpcio-tools`, which is already a project dependency.
+Only needed after updating one of the vendored `.proto` files. They are copied
+unmodified from upstream:
 
-1. From the repository root, with the environment active:
+| File | Source |
+|------|--------|
+| `gnmi.proto`, `gnmi_ext.proto` | [openconfig/gnmi](https://github.com/openconfig/gnmi) (`gnmi_ext.proto` carries the History extension that TR-548 §6.3.4 uses for resume) |
+| `tapi-streaming-performance.proto` | [ONMI TAPI v2.6.0 `PROTOBUF/`](https://github.com/Open-Network-Models-and-Interfaces-ONMI/TAPI/blob/v2.6.0/PROTOBUF/tapi-streaming-performance.proto) — the `tapi.MeasurementDetails` record carried in `TypedValue.proto_bytes` |
+
+The compiler ships with `grpcio-tools`. Generate with the **same protoc
+release the committed files were built with** (protobuf 6.31.1, i.e.
+`grpcio-tools==1.74.0`): each generated module refuses to import under an
+older protobuf runtime than its compiler, so regenerating with a newer
+`grpcio-tools` silently raises the project's protobuf floor.
+
+1. From the repository root:
 
    ```bash
    PROTO_DIR=src/twinlight/streaming/proto
-   python -m grpc_tools.protoc \
-     -I "$PROTO_DIR" \
+   PROTOC="uvx --python 3.12 --from grpcio-tools==1.74.0 python -m grpc_tools.protoc"
+   $PROTOC -I "$PROTO_DIR" \
      --python_out="$PROTO_DIR" \
      --grpc_python_out="$PROTO_DIR" \
      "$PROTO_DIR/gnmi.proto" "$PROTO_DIR/gnmi_ext.proto"
+   # No service in the TAPI file, so no _grpc module.
+   $PROTOC -I "$PROTO_DIR" --python_out="$PROTO_DIR" \
+     "$PROTO_DIR/tapi-streaming-performance.proto"
    ```
 
    The include path is the proto directory itself, so the files' bare
-   `import "gnmi_ext.proto"` resolves.
+   `import "gnmi_ext.proto"` resolves. `protoc` maps the hyphenated TAPI file
+   name to the module `tapi_streaming_performance_pb2`.
 
 2. Rewrite the cross-module imports. `protoc` emits bare imports
    (`import gnmi_pb2`) that fail once the modules are imported as part of the
@@ -147,7 +162,7 @@ with `grpcio-tools`, which is already a project dependency.
 3. Verify:
 
    ```bash
-   python -c "from twinlight.streaming.proto import gnmi_pb2, gnmi_pb2_grpc"
+   python -c "from twinlight.streaming.proto import gnmi_pb2, gnmi_pb2_grpc, tapi_streaming_performance_pb2"
    pytest
    ```
 

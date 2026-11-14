@@ -15,6 +15,7 @@ How TwinLight is put together, and why. For the endpoint catalogue see
 │  api/          T-API routers + /internal, /admin, /config,      │
 │                /transparent                                     │
 │  state/        TapiContext — the single owner of all state      │
+│  streaming/    T-API measurement stream: sampler + record log   │
 │  transparent/  transparent controller: paths, tree, datastores  │
 │  physics/      QoT baseline + four transient models             │
 │  algorithms/   routing (k-shortest) and spectrum assignment     │
@@ -22,12 +23,13 @@ How TwinLight is put together, and why. For the endpoint catalogue see
 │  models/       Pydantic models of the T-API wire format         │
 └─────────────────────────────────────────────────────────────────┘
                               ▲
-                              │  httpx.ASGITransport (in-process)
+                              │  reads the record log (in-process)
                     gNMI gRPC server (port 50051)
+                    T-API measurement stream, TR-548 §6
 ```
 
-Both servers run on one asyncio event loop, started together from
-`main.py` with `asyncio.gather`.
+Both servers and the stream's sampler run on one asyncio event loop, started
+together from `main.py` with `asyncio.gather`.
 
 ## Two invariants
 
@@ -39,22 +41,27 @@ Everything else follows from these.
 inventory, spectrum occupancy, physics caches, EDFA tracker state. It is created
 in the app factory and attached to `app.state.context`.
 
-The gNMI server holds **no state of its own**. It is a protocol adapter that
-translates gNMI paths into REST paths and calls the *same* FastAPI application
-in-process through `httpx.AsyncClient(transport=ASGITransport(app=app))`. There
-is no TCP round-trip, no second copy of the topology, and no cache-coherency
-problem between the two northbound interfaces — a gNMI subscriber and a REST
-client observing the same lightpath at the same instant see the same numbers.
+The gNMI server holds **no state of its own**. It serves the T-API
+performance-measurement stream (TR-548 §6) from the record log of the
+`MeasurementStream` attached to `app.state.measurement_stream`. That stream's
+sampler takes each reading through `api/internal.py:sample_service_opm` — the
+function behind `GET /internal/opm` — so there is no second copy of the
+topology, no second OPM computation, and no cache-coherency problem between the
+two northbound interfaces: a gNMI record and a REST read of the same lightpath
+at the same instant carry the same numbers.
 
 The cost is that the gNMI server cannot outlive or scale independently of the
 REST app. For a digital twin, where consistency between interfaces is the whole
-point, that trade is worth making.
+point, that trade is worth making. The log sits behind the small `RecordLog`
+interface (append, replay from a time, trim by age, oldest) so that a shared
+backend such as Valkey Streams could take its place without touching the gNMI
+code.
 
 ### 2. T-API surfaces stay standard
 
 Routers under `api/common.py`, `api/topology.py`, `api/connectivity.py`,
-`api/path_computation.py` and `api/equipment.py` implement **only** T-API
-v2.6.0: standard paths, standard hyphenated JSON keys, RESTCONF error bodies,
+`api/path_computation.py`, `api/equipment.py`, `api/oam.py` and
+`api/streaming.py` implement **only** T-API v2.6.0: standard paths, standard hyphenated JSON keys, RESTCONF error bodies,
 `application/yang-data+json` responses.
 
 There is deliberately no photonic-media router. T-API puts the photonic layer
@@ -95,6 +102,7 @@ src/twinlight/
     connectivity.py        ConnectivityService, endpoints, photonic augments
     equipment.py           Equipment context objects
     path_computation.py    Path-computation service objects
+    oam.py                 tapi-oam oam-job (provider-managed, read-only)
 
   state/
     context.py             TapiContext — root state owner (see below)
@@ -136,19 +144,26 @@ src/twinlight/
     spectrum_assignment.py First-fit slot allocation with guard bands
 
   api/                   Routers (see the table above)
-  streaming/
-    gnmi_service.py        GnmiServicer: Capabilities + Subscribe (ONCE/STREAM/POLL)
-    proto/                 Generated gNMI protobuf/gRPC code (committed, not linted)
+  streaming/             The T-API performance-measurement stream (TR-548 §6)
+    measurement_stream.py  Sampler: one OPM sample per service per tick,
+                           stream state (ALIGNING → ACTIVE), subscriber wake-up
+    record_log.py          RecordLog interface + in-process truncated log
+    records.py             OPM sample ↔ tapi.MeasurementDetails, oam-job paths
+    gnmi_service.py        TapiGnmiServicer: Capabilities + TR-548 Subscribe
+                           (validation, ST-6.4 resume); bearer-token interceptor
+    proto/                 Vendored gNMI and TAPI .proto files and their
+                           generated code (committed, not linted)
   output/
     eye_diagram.py         Statistical eye synthesis from OPM
     constellation.py       Statistical constellation synthesis from OPM
-  grpc_server.py         Starts the gRPC server and wires the in-process transport
+  grpc_server.py         Builds and runs the gRPC server (auth when configured)
 
 src/twinlight_client/    Companion client library and CLI
   client.py                TapiClient — async REST wrapper (named for the
                            protocol it speaks, not for this project)
-  streaming.py             GnmiConsumer — async gNMI Subscribe consumer
-  cli.py                   twinlight-client: pick a service, stream its OPM
+  streaming.py             TapiStreamClient — TR-548 discovery, subscription,
+                           decoding and ST-6.4 resume
+  cli.py                   twinlight-client: pick a service, follow its records
   soft_failure.py          twinlight-soft-failure: immediate changes, and the
                            clock and ramp logic for gradual ones
   transparent.py           TransparentClient — sync client for /transparent
@@ -170,7 +185,9 @@ src/twinlight_client/    Companion client library and CLI
 5. If `--restore` / `--restore-latest` was given, the snapshot is replayed:
    services are re-created and spectrum occupancy is reinstated. A snapshot
    taken under a different physical-layer backend is rejected.
-6. `main.py` starts uvicorn and the gRPC server with `asyncio.gather`.
+6. `main.py` starts uvicorn, the gRPC server and the measurement stream's
+   sampler with `asyncio.gather`. The stream is `ALIGNING` until the sampler's
+   first tick is logged, then `ACTIVE`.
 
 ## Request lifecycles
 
@@ -195,13 +212,15 @@ src/twinlight_client/    Companion client library and CLI
 5. If no candidate passes, the request is refused with a RESTCONF error body
    explaining which constraint failed.
 
-Deletion reverses this: slots are released, `invalidate_baseline(uuid)` drops
-the cached propagation, and the EDFA tracker records the drop event.
+Admission also creates the service's `tapi-oam` oam-job, the anchor of its
+records on the measurement stream. Deletion reverses all of this: slots are
+released, `invalidate_baseline(uuid)` drops the cached propagation, the EDFA
+tracker records the drop event, and the oam-job is removed.
 
 ### Reading OPM
 
-`GET /internal/opm/{uuid}`, a gNMI sample, and a Prometheus scrape all funnel
-into the same computation:
+`GET /internal/opm/{uuid}`, a gNMI stream record, and a Prometheus scrape all
+funnel into the same computation (`sample_service_opm` for the first two):
 
 1. Fetch the cached `OpmBaseline` for the service (propagating once if absent).
 2. Call `physics/transients/cascade.py:apply_all_transients(baseline, t, …)`
@@ -283,7 +302,10 @@ observe the tentative values; nothing is cached.
 
 ## Concurrency
 
-- One asyncio event loop hosts uvicorn, the gRPC server, and every request.
+- One asyncio event loop hosts uvicorn, the gRPC server, the stream sampler,
+  and every request. The sampler samples every service once per tick whether or
+  not anyone is subscribed; subscribers wait on an `asyncio.Condition` and are
+  handed the same logged record objects.
 - `TapiContext._propagation_lock` (an `asyncio.Lock`) serialises physical-layer
   propagation. GNPy propagation mutates element state, so concurrent
   propagations would interfere; path elements are additionally deep-copied

@@ -270,6 +270,30 @@ spectrum:
 Defaults describe the standard C-band: 768 × 6.25 GHz = 4.8 THz centred on the
 ITU-T G.694.1 anchor at 193.1 THz.
 
+## `streaming` — the T-API measurement stream
+
+```yaml
+streaming:
+  sample_interval_s: 1.0
+  record_retention_min: 5
+  auth_token: ""
+  advertised_address: ""
+```
+
+The twin publishes one T-API v2.6.0 performance-measurement stream over gNMI
+(TR-548 §6) on `server.grpc_port`; [API.md](API.md#gnmi-streaming) describes
+discovery, subscription and the record format.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `sample_interval_s` | `1.0` | Seconds between ticks. Each tick takes one OPM sample of every connectivity service — the same computation `GET /internal/opm` serves — and appends one record per OAM job to the log, whether or not a client is subscribed. Also reported as each record's `sample-interval`. |
+| `record_retention_min` | `5` | Minutes a record stays in the truncated log, published as the stream type's `record-retention`. A client that reconnects within this window and asks to resume from its last record's timestamp loses nothing (TR-548 ST-6.4). |
+| `auth_token` | `""` | Empty disables authentication. Otherwise every gNMI call must carry `authorization: Bearer <token>` metadata, and a missing or wrong token is answered with `UNAUTHENTICATED`. The value is never logged and the transparent controller shows it masked. It protects the gRPC port only — the REST interfaces have no authentication. |
+| `advertised_address` | `""` | The `connection-address` published on the available-stream, as `grpc://<host>:<port>`. Empty derives it from the host's FQDN and `server.grpc_port`; set it when clients reach the twin through another name or a mapped port (Compose port mappings, NAT). |
+
+All four are restart-only. The effective values (with the token reported only
+as set or unset) are logged at startup.
+
 ## `logging`
 
 ```yaml

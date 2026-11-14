@@ -1,6 +1,7 @@
 # API reference
 
-TwinLight exposes 65 REST operations plus a gNMI gRPC service. This document is
+TwinLight exposes 73 REST operations plus a gNMI gRPC service carrying the
+T-API performance-measurement stream. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
 whenever the twin is running.
@@ -34,7 +35,7 @@ Endpoints fall into two groups, kept strictly apart (see
 | GET | `/data/tapi-common:context/service-interface-point={uuid}` |
 
 The context is the northbound entry point: it carries the service-interface-point
-(SIP) list and a reference to the topology context. Each SIP's `name` list
+(SIP) list, the topology context, the OAM context and the stream context. Each SIP's `name` list
 carries the underlying GNPy element UID under the value-name `node-name`, which
 is how SIPs map back to physical elements.
 
@@ -206,6 +207,91 @@ services terminating on *that* SIP — it is a property of the port, not of the
 links the lightpath crosses — and `available-spectrum` is the remainder of the
 supportable band, merged into maximal contiguous runs.
 
+### OAM jobs
+
+| Method | Path |
+|--------|------|
+| GET | `/data/tapi-common:context/tapi-oam:oam-context` |
+| GET | `…/tapi-oam:oam-context/oam-job` |
+| GET | `…/tapi-oam:oam-context/oam-job={uuid}` |
+
+The twin creates one `oam-job` per admitted connectivity service and removes
+it when the service is deleted; jobs are carried through snapshots. They are
+read-only — `POST`, `PUT` and `DELETE` answer 405. Each job is the anchor of
+its service's performance records on the [measurement stream](#gnmi-streaming)
+(TR-548 §6.2.3) and references the end-point the OPM is measured at:
+
+```json
+{
+  "tapi-oam:oam-job": [{
+    "uuid": "6f0c…",
+    "oam-job-state": "tapi-oam:OAM_JOB_STATE_ACTIVE",
+    "creation-time": "20261114093012.4Z",
+    "connectivity-service-end-point": {
+      "connectivity-service-uuid": "c2a1…",
+      "connectivity-service-end-point-local-id": "z-end"
+    },
+    "administrative-state": "UNLOCKED",
+    "operational-state": "ENABLED",
+    "lifecycle-state": "INSTALLED"
+  }]
+}
+```
+
+The job UUID is name-based on the service UUID, so it survives a `PUT`
+replacement and a restore. The referenced end-point is always `end-point[1]`:
+the twin propagates from the first end-point to the second, so that is where
+the signal it reports is received. `oam-job-type` is omitted — the only
+photonic job type, `OAM_JOB_TYPE_OPTICAL_POWER`, would mislabel records that
+carry GSNR, OSNR, BER and the other QoT measures.
+
+### Streaming discovery
+
+| Method | Path |
+|--------|------|
+| GET | `/data/tapi-common:context/tapi-streaming:stream-context` |
+| GET | `…/tapi-streaming:stream-context/supported-stream-type` |
+| GET | `…/tapi-streaming:stream-context/supported-stream-type={uuid}` |
+| GET | `…/tapi-streaming:stream-context/available-stream` |
+| GET | `…/tapi-streaming:stream-context/available-stream={uuid}` |
+
+TR-548 ST-0.2 discovery. There is one `supported-stream-type` — exactly the one
+TR-548 §6.2.2 makes mandatory for performance data — and one
+`available-stream` of it on the gRPC port:
+
+```json
+{
+  "tapi-streaming:stream-context": {
+    "supported-stream-type": [{
+      "uuid": "…",
+      "stream-type-name": "measurement-details",
+      "record-retention": "5",
+      "stream-type-content": ["tapi-gnmi-streaming:GNMI_STREAMING_OBJECT_TYPE_MEASUREMENT_DETAILS"],
+      "log-storage-strategy": "tapi-streaming:LOG_STORAGE_STRATEGY_TRUNCATED",
+      "log-record-strategy": "tapi-streaming:LOG_RECORD_STRATEGY_WHOLE_ENTITY",
+      "record-trigger": "tapi-streaming:RECORD_TRIGGER_PERIODIC",
+      "connection-protocol-details": {
+        "allowed-connection-protocols": ["tapi-streaming:CONNECTION_PROTOCOL_GNMI"],
+        "encoding-format": "tapi-streaming:ENCODING_FORMAT_PROTOBUF"
+      }
+    }],
+    "available-stream": [{
+      "uuid": "…",
+      "connection-address": ["grpc://twin.example.org:50051"],
+      "stream-state": "tapi-streaming:STREAM_STATE_ACTIVE",
+      "supported-stream-type": {"supported-stream-type-uuid": "…"},
+      "connection-protocol": "tapi-streaming:CONNECTION_PROTOCOL_GNMI"
+    }]
+  }
+}
+```
+
+`record-retention` is `streaming.record_retention_min` (minutes);
+`connection-address` is `streaming.advertised_address`, or
+`grpc://<FQDN>:<grpc_port>` when that is empty. `stream-state` is `ALIGNING`
+from startup until the first sampling tick has been logged and `ACTIVE` from
+then on (TR-548 ST-1.1). Both UUIDs are name-based and stable across restarts.
+
 ### Error format
 
 Errors under `/data/` use the RESTCONF format of
@@ -261,6 +347,10 @@ bare `/data/…` paths and omits these three resources.
 | GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service |
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
+
+The OPM endpoints and the [gNMI measurement stream](#gnmi-streaming) share one
+computation (`sample_service_opm`): at the same instant both report identical
+values, the stream as T-API records and these as the twin's own JSON.
 
 **OPM response — all services** (`GET /internal/opm`) wraps a list:
 
@@ -563,54 +653,175 @@ Grafana dashboard in
 a `${DS_PROMETHEUS}` placeholder so it imports against any Prometheus data
 source). The Compose stack provisions both automatically.
 
-## gNMI / gRPC interface
+## gNMI streaming
 
-The gRPC server listens on port 50051 (`server.grpc_port`).
+The gRPC server on `server.grpc_port` (50051) carries one stream: the T-API
+v2.6.0 performance-measurement stream of TR-548 §6, discovered as described in
+[Streaming discovery](#streaming-discovery). Configuration is the
+[`streaming`](CONFIGURATION.md#streaming--the-t-api-measurement-stream) section.
 
-| RPC | Status |
-|-----|--------|
-| `Capabilities` | Returns the tapi-common and tapi-topology model data with JSON_IETF encoding |
-| `Subscribe` ONCE | Fetches every subscribed path once, then `sync_response=True` |
-| `Subscribe` STREAM | Initial sync, then re-polls at `sample_interval` (default 10 s) |
-| `Subscribe` POLL | Like ONCE; each poll message re-fetches |
-| `Get` / `Set` | Not implemented — returns gRPC `UNIMPLEMENTED` |
+| RPC | Behaviour |
+|-----|-----------|
+| `Capabilities` | `tapi-streaming`, `tapi-gnmi-streaming` and `tapi-oam` (Linux Foundation ONMI, 2.6.0); encoding `PROTO`; gNMI 0.10.0 |
+| `Subscribe` | The TR-548 §6.3.4 subscription only; anything else is `INVALID_ARGUMENT` |
+| `Get` / `Set` | `UNIMPLEMENTED` — read and configure the twin over RESTCONF |
 
-### Path mapping
+### Records
 
-gNMI path elements are joined with `/`, looked up in a static map first, and
-otherwise fall back to `/data/<joined>`:
+Every `streaming.sample_interval_s` the twin takes one OPM sample of every
+connectivity service — the computation `GET /internal/opm` serves, at a single
+instant — and logs one record per OAM job, whether or not anyone is
+subscribed. Every subscriber receives the same records:
 
+```text
+SubscribeResponse.update (Notification)
+  timestamp   ns since the epoch: when the record was logged (the resume key)
+  prefix      { target: "tapi" }
+  update[0]
+    path      oam-job[uuid=<oam-job uuid>]
+    val       proto_bytes = serialized tapi.MeasurementDetails
 ```
-tapi-common:context                       → /data/tapi-common:context
-tapi-common:context/tapi-topology:topology-context
-                                          → /data/tapi-common:context/tapi-topology:topology-context
-topology[uuid=X]                          → topology=X       (key → =value)
-…/connectivity-service[uuid=X]/opm        → /internal/opm/X   (resolved dynamically)
-opm                                       → /internal/opm
+
+`tapi.MeasurementDetails` (from the vendored
+[`tapi-streaming-performance.proto`](../src/twinlight/streaming/proto/tapi-streaming-performance.proto))
+states the shared properties once and lists the measures in
+`qualified-measurement`:
+
+| Field | Value |
+|-------|-------|
+| `time-measurement-was-sampled` | Sampling instant, **milliseconds** since the epoch (TR-548 §6.3.5 example) |
+| `sample-interval` | `sample_interval_s` in **nanoseconds** |
+| `native-resource-id` | GNPy UID of the receiving transceiver |
+| `direction-of-measured-signal` | `RECEIVE` |
+
+| list-index | Measure | Type | Units |
+|-----------:|---------|------|-------|
+| 0 | chromatic dispersion | normalized `CHROM_DISP` | (ps/nm) |
+| 1 | PMD (mean DGD) | normalized `POL_MODE_DISP` | (ps) |
+| 2 | pre-FEC BER | normalized `FEC_PRE_FEC_BER` | — |
+| 3 | post-FEC BER, hard-decision code model | normalized `FEC_POST_FEC_BER` | — |
+| 4 | GSNR | native `gsnr-db` | `dB` |
+| 5 | OSNR (signal bandwidth) | native `osnr-db` | `dB` |
+| 6 | OSNR (0.1 nm reference) | native `osnr-01nm-db` | `dB` |
+| 7 | Q-factor | native `q-factor-db` | `dB` |
+| 8 | GMI | native `gmi-bits-per-symbol` | `bit/symbol` |
+| 9 | NGMI | native `ngmi` | `1` |
+| 10 | post-FEC BER, threshold model | native `post-fec-ber-threshold` | `1` |
+
+Normalized measures carry no `units` field, as the YANG asks where the type
+defines them; the parenthesised units are those of the twin's OPM. Native
+types are the OPM keys of `GET /internal/opm`, so a record maps back to the
+REST view one-to-one.
+
+A service whose path crosses a failed fiber reports every measure with
+`value-qualifier: MISSING` and no value or units — including the BERs that the
+REST view shows as 1.0 for charting. A sample the twin could not compute is
+reported the same way; a non-finite value is `INVALID`.
+
+### Subscribing
+
+The one accepted subscription (TR-548 §6.3.4):
+
+```text
+SubscribeRequest
+  subscribe
+    prefix        { target: "tapi" }          # or omitted
+    subscription  [ { path: {}, mode: TARGET_DEFINED } ]
+    mode          STREAM
+    updates_only  true
+  extension       [ history { range { start: <ns> } } ]   # optional: resume
 ```
 
-OPM paths are resolved dynamically rather than through the static map, because
-they carry a per-service UUID. Any path ending in an `opm` element maps to the
-transient-aware OPM endpoint, so each gNMI sample reflects the live signal
-quality rather than a cached baseline.
+`mode: SAMPLE` with `sample_interval` 0 — the form of the RIA's own example —
+is accepted as well. `encoding` may be omitted or `PROTO`; `qos` and
+`allow_aggregation` are ignored. Any other field, path content, mode, encoding
+or extension is rejected with `INVALID_ARGUMENT` and a message that starts with
+the field name, for example `subscribe.updates_only: must be true (TR-548
+§6.3.4)`. So is a second message on an open subscription; a client
+half-closing its send side is fine.
+
+Without the history extension the client receives `sync_response` at once and
+then every record logged from then on. While the stream is still `ALIGNING`
+nothing has been logged yet, so a client that connects early simply waits.
+
+### Resuming after a lost connection
+
+TR-548 ST-6.4: resubscribe with `range.start` set to the notification
+timestamp of the last record processed. The twin replays every retained record
+logged at or after `start` (so the records at `start` arrive again), sends
+`sync_response`, and continues live.
+
+- `start` older than the oldest retained record: replay starts at the oldest
+  record. Records older than `record_retention_min` are gone.
+- `start` exactly at the oldest retained record: that record is not sent, as
+  ST-6.4 requires.
+- `start` in the future: live records only.
+- `range.end` must be omitted; `snapshot_time` is rejected.
+
+### Authentication
+
+With `streaming.auth_token` set, every call — `Capabilities` included — must
+carry `authorization: Bearer <token>` metadata (the scheme is
+case-insensitive); otherwise the call fails with `UNAUTHENTICATED`. An empty
+token disables the check. The transport is plaintext gRPC either way.
 
 ### Consuming it
 
 ```bash
-twinlight-client                                              # localhost defaults
-twinlight-client --rest-url http://host:8080 --gnmi-target host:50051
+twinlight-client                                   # localhost defaults
+twinlight-client --rest-url http://host:8080       # address from discovery
+twinlight-client --gnmi-target host:50051 --token "$TOKEN"   # override; auth
 ```
 
-Programmatically, `twinlight_client.streaming.GnmiConsumer` wraps the subscribe
-loop, and `twinlight_client.client.TapiClient` wraps the REST surface.
+`twinlight-client` lists the services, discovers the stream and the chosen
+service's oam-job over RESTCONF, and prints that job's records, resuming
+automatically after a dropped connection. `--token` defaults to
+`$TWINLIGHT_STREAM_TOKEN`.
+
+Programmatically:
+
+```python
+from twinlight_client import TapiClient, TapiStreamClient
+from twinlight_client.streaming import discover_stream, oam_job_for_service
+
+async with TapiClient("http://host:8080") as rest:
+    endpoint = await discover_stream(rest)            # ST-0.2
+    job = await oam_job_for_service(rest, service_uuid)
+async with TapiStreamClient(endpoint.target, token) as stream:
+    async for record in stream.follow(job_uuid=job):  # ST-6.2 + ST-6.4
+        print(record.sampled_ms, record.measurements["gsnr-db"])
+```
+
+`record.measurements` is keyed by the OPM keys of `GET /internal/opm`, with
+`None` for a MISSING measure; `record.details` is the decoded
+`tapi.MeasurementDetails`.
+
+### Migrating from the earlier gNMI interface
+
+Earlier releases served REST resources as JSON_IETF over invented gNMI paths
+(`tapi-common:context`, `…/connectivity-service[uuid=X]/opm`, `opm`) in ONCE,
+POLL and STREAM/SAMPLE modes. Those paths, modes and the `GnmiConsumer` class
+are gone:
+
+| Before | Now |
+|--------|-----|
+| Subscribe to `…/connectivity-service[uuid=X]/opm` | Look up the service's oam-job (`GET …/tapi-oam:oam-context/oam-job`), subscribe to the whole stream, keep the records whose path is that job — `TapiStreamClient.follow(job_uuid=…)` |
+| `json_ietf_val` with OPM keys | `proto_bytes` with `tapi.MeasurementDetails`; `decode_measurements()` maps it back to the same OPM keys |
+| `sample_interval` chosen per subscription | One twin-wide cadence, `streaming.sample_interval_s` |
+| ONCE / POLL, or subscribing to context or topology paths | Read them over RESTCONF |
+| `GnmiConsumer(target)` | `TapiStreamClient(target, token)`, with the target from `discover_stream()` |
+| `twinlight-client --gnmi-target` required | Optional; the address comes from the stream-context |
+| Link-failed BER reported as 1.0 | Every measure `MISSING` (`None` once decoded) |
 
 ## Known gaps
 
 See [TAPI_COMPLIANCE.md](TAPI_COMPLIANCE.md) for the full assessment against
 T-API v2.6.0. The main gaps:
 
-- gNMI subscriptions for connectivity-service objects fall back to
-  `/data/<joined>`; only the OPM and topology paths have first-class handling.
-- Notification, OAM and virtual-network T-API modules are not implemented.
-- No authentication or TLS on either interface — TwinLight is designed to run
-  inside a lab network or a Compose stack, not exposed to the internet.
+- The gNMI interface carries only the TR-548 measurement stream; entity and
+  alarm streams, gNMI Get and Set are not implemented.
+- Notification, fault and virtual-network T-API modules are not implemented,
+  and OAM only as the read-only jobs that anchor the stream.
+- No TLS on either interface, and the only authentication is the optional
+  bearer token on gNMI — TwinLight is designed to run inside a lab network or
+  a Compose stack, not exposed to the internet.
