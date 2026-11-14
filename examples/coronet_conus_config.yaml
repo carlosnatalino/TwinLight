@@ -110,6 +110,15 @@ spectrum:
   center_frequency_thz: 193.1
 
 # ---------------------------------------------------------------------------
+# T-API performance-measurement stream over gNMI (TR-548 §6), on server.grpc_port
+# ---------------------------------------------------------------------------
+streaming:
+  sample_interval_s: 1.0               # one OPM sample of every service per tick
+  record_retention_min: 5              # truncated-log retention = max resumable outage
+  auth_token: ""                       # "" = no auth; else gNMI calls need "authorization: Bearer <token>"
+  advertised_address: ""               # "" = grpc://<this host's FQDN>:<grpc_port>
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 logging:
