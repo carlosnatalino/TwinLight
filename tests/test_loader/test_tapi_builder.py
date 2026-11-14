@@ -46,13 +46,14 @@ def _two_site_topo(*, fiber_params: dict) -> GnpyTopology:
 
 
 def _link_delay_ns(fiber_params: dict) -> int:
+    """The link's fixed-latency-characteristic (µs, a string) in whole ns."""
     gnpy = _two_site_topo(fiber_params=fiber_params)
     ctx, _ = TapiBuilder(gnpy, TopologyGraph(gnpy)).build()
     links = ctx.topology[0].link
     assert len(links) == 1
     chars = links[0].latency_characteristic
     assert len(chars) == 1
-    return chars[0].total_size
+    return round(float(chars[0].fixed_latency_characteristic) * 1000)
 
 
 def test_builds_topology_context(edfa_topology_path: Path) -> None:
@@ -101,21 +102,21 @@ def test_node_uuids_are_deterministic(edfa_topology_path: Path) -> None:
 
 
 def test_propagation_delay_km_units() -> None:
-    """100 km of fibre → int(1e5 · 1e9 / (c/1.47)) = 490_339 ns."""
-    expected = int(100_000.0 * 1e9 / _C_FIBER)
+    """100 km of fibre → 1e5 · 1e9 / (c/1.47) ≈ 490_339 ns."""
+    expected = round(100_000.0 * 1e9 / _C_FIBER)
     assert expected == 490_339
     assert _link_delay_ns({"length": 100.0, "length_units": "km"}) == expected
 
 
 def test_propagation_delay_metre_units() -> None:
     """Explicit metres must not be scaled by 1000 again."""
-    expected = int(100_000.0 * 1e9 / _C_FIBER)
+    expected = round(100_000.0 * 1e9 / _C_FIBER)
     assert _link_delay_ns({"length": 100_000.0, "length_units": "m"}) == expected
 
 
 def test_propagation_delay_missing_units_defaults_to_km() -> None:
     """GNPy's default unit is km when length_units is omitted."""
-    expected = int(80_000.0 * 1e9 / _C_FIBER)
+    expected = round(80_000.0 * 1e9 / _C_FIBER)
     assert _link_delay_ns({"length": 80.0}) == expected
 
 
@@ -133,7 +134,7 @@ def test_edfa_fixture_propagation_delay_is_80_km_scale(
 ) -> None:
     """Brest↔Morlaix fibres are 80 km; delay must be ~0.39 ms, not ~0.39 µs."""
     ctx, _ = _build(edfa_topology_path)
-    expected = int(80_000.0 * 1e9 / _C_FIBER)
+    expected = round(80_000.0 * 1e9 / _C_FIBER)
     fiber_links = [
         link
         for link in ctx.topology[0].link
@@ -141,4 +142,5 @@ def test_edfa_fixture_propagation_delay_is_80_km_scale(
     ]
     assert fiber_links
     for link in fiber_links:
-        assert link.latency_characteristic[0].total_size == expected
+        delay_us = link.latency_characteristic[0].fixed_latency_characteristic
+        assert round(float(delay_us) * 1000) == expected

@@ -13,9 +13,8 @@ import type {
   UpdateConnectivityServiceRequest,
   UpdateConnectivityServiceResponse,
   ServiceInfoResponse,
-  Equipment,
-  EquipmentContextResponse,
-  EquipmentListResponse,
+  PhysicalContextResponse,
+  TransparentElementListResponse,
   ComputePathInput,
   ComputePathResponse,
   PathInfoResponse,
@@ -215,21 +214,16 @@ export class TapiApiClient {
     );
   }
 
-  getEquipmentContext(): Promise<EquipmentContextResponse> {
-    return this.get<EquipmentContextResponse>(
-      "/data/tapi-equipment:equipment-context"
+  getPhysicalContext(): Promise<PhysicalContextResponse> {
+    return this.get<PhysicalContextResponse>(
+      "/data/tapi-equipment:physical-context"
     );
   }
 
-  getEquipmentList(): Promise<EquipmentListResponse> {
-    return this.get<EquipmentListResponse>(
-      "/data/tapi-equipment:equipment-context/equipment"
-    );
-  }
-
-  getEquipment(uuid: string): Promise<{ "tapi-equipment:equipment": Equipment[] }> {
-    return this.get(
-      `/data/tapi-equipment:equipment-context/equipment=${encodeURIComponent(uuid)}`
+  // Every element with its attributes, from the transparent controller.
+  getElementList(): Promise<TransparentElementListResponse> {
+    return this.get<TransparentElementListResponse>(
+      "/transparent/data/ElementList"
     );
   }
 

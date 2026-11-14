@@ -185,12 +185,11 @@ class TapiBuilder:
 
             span_info = ",".join(intermediates) if intermediates else "direct"
             fiber_m = self._span_fiber_length_m(intermediates)
-            latency_ns = int(
-                fiber_m * 1e9 / self._C_LIGHT_FIBER_M_PER_S
-            ) if fiber_m > 0 else 0
             latency_char = (
-                [LatencyCharacteristic(total_size=latency_ns)]
-                if latency_ns > 0
+                [LatencyCharacteristic.from_seconds(
+                    fiber_m / self._C_LIGHT_FIBER_M_PER_S
+                )]
+                if fiber_m > 0
                 else []
             )
 

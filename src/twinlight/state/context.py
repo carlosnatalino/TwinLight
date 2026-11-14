@@ -39,6 +39,7 @@ from twinlight.loader.gnpy_topology import load_gnpy_topology
 from twinlight.loader.tapi_builder import TapiBuilder
 from twinlight.models.common import ServiceInterfacePoint
 from twinlight.models.connectivity import ConnectivityService
+from twinlight.models.equipment import PhysicalContext
 from twinlight.models.path_computation import PathCompService
 from twinlight.models.topology import (
     Link,
@@ -2242,45 +2243,58 @@ class TapiContext:
                     neps.append(key)
         return {"link": links, "node": list(nodes), "node-edge-point": neps}
 
-    def get_equipment_list(self) -> list[dict]:
-        """Return equipment inventory from GNPy elements or parsed topology.
+    def physical_context(self) -> PhysicalContext:
+        """The twin's elements as T-API v2.6.0 ``physical-context``.
 
-        Each item has uuid, name, equipment-type, and optionally length-km (Fiber).
-        State is derived from _gnpy_uid_map when GNPy is loaded, else from topology.
+        Fibers become ``physical-span`` entries; every other element a
+        ``device`` holding one ``equipment`` (see ``models/equipment.py``).
+        Elements come from the backend when it holds a network — GNPy's
+        designed network includes the boosters and preamplifiers the design
+        inserted — and from the parsed topology otherwise.
         """
-        equipment: list[dict] = []
+        from twinlight.models.common import NameAndValue
+        from twinlight.models.equipment import (
+            ActualEquipment,
+            CommonEquipmentProperties,
+            Device,
+            Equipment,
+            PhysicalSpan,
+            element_uuid,
+        )
 
-        if self._gnpy_uid_map:
-            for uid, el in self._gnpy_uid_map.items():
-                el_type = _kind_name(el)
-                item: dict = {
-                    "uuid": uid,
-                    "name": [{"value-name": "element-uid", "value": uid}],
-                    "equipment-type": el_type,
-                }
-                if el_type == "Fiber" and hasattr(el, "params") and el.params:
-                    try:
-                        length_m = float(getattr(el.params, "length", 0))
-                        item["length-km"] = round(length_m / 1000.0, 4)
-                    except (TypeError, ValueError):
-                        pass
-                equipment.append(item)
+        if self._gnpy_uid_map and self._gnpy_network is not None:
+            elements = [
+                (uid, _kind_name(el), getattr(el, "type_variety", "") or "")
+                for uid, el in self._gnpy_uid_map.items()
+            ]
         else:
-            for el in self._topo_graph._gnpy_topo.elements:
-                item = {
-                    "uuid": el.uid,
-                    "name": [{"value-name": "element-uid", "value": el.uid}],
-                    "equipment-type": el.type,
-                }
-                if el.type == "Fiber" and el.params:
-                    try:
-                        length_m = float(el.params.get("length", 0))
-                        item["length-km"] = round(length_m / 1000.0, 4)
-                    except (TypeError, ValueError):
-                        pass
-                equipment.append(item)
+            elements = [
+                (el.uid, el.type, el.type_variety or "")
+                for el in self._topo_graph._gnpy_topo.elements
+            ]
 
-        return equipment
+        context = PhysicalContext()
+        for uid, kind, variety in elements:
+            name = [NameAndValue(value_name="element-uid", value=uid)]
+            if kind == "Fiber":
+                context.physical_span.append(
+                    PhysicalSpan(uuid=element_uuid(uid, "span"), name=name)
+                )
+                continue
+            equipment = Equipment(
+                uuid=element_uuid(uid, "equipment"),
+                name=name,
+                actual_equipment=ActualEquipment(
+                    common_equipment_properties=CommonEquipmentProperties(
+                        equipment_type_name=kind,
+                        equipment_type_identifier=variety or None,
+                    ),
+                ),
+            )
+            context.device.append(
+                Device(uuid=element_uuid(uid, "device"), name=name, equipment=[equipment])
+            )
+        return context
 
     # -- Snapshot / restore (checkpoints) ------------------------------------
 

@@ -93,7 +93,7 @@ src/twinlight/
     common.py              Context, ServiceInterfacePoint, NameAndValue, states
     topology.py            Topology, Node, Link, NodeEdgePoint
     connectivity.py        ConnectivityService, endpoints, photonic augments
-    equipment.py           Equipment context objects
+    equipment.py           Physical context: device, equipment, physical-span
     path_computation.py    Path-computation service objects
 
   state/

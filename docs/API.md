@@ -48,8 +48,12 @@ is how SIPs map back to physical elements.
 | GET | `…/topology={uuid}/node={node_uuid}/owned-node-edge-point={nep_uuid}` |
 | GET | `…/topology={uuid}/link={link_uuid}` |
 
-Links carry a `latency-characteristic` whose `propagation-delay` (ns) is derived
-from fiber length and the speed of light in silica.
+Links carry a `latency-characteristic` (`traffic-property-name:
+propagation-delay`) whose `fixed-latency-characteristic` is the propagation
+delay derived from fiber length and the speed of light in silica. v2.6.0 types
+that leaf as a string with no unit; the twin writes **microseconds** — the unit
+`tapi-path-computation` uses for `max-allowed-delay` — with three decimals,
+e.g. `"392.110"` for 80 km.
 
 ### Connectivity services
 
@@ -254,13 +258,44 @@ which are applied by searching a restricted view of the graph:
 The ranked view with a candidate count, which T-API has no leaf for, is
 [`POST /internal/compute-path`](#internal--observation-and-metadata).
 
-### Equipment and spectrum
+### Physical inventory and spectrum
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-equipment:equipment-context` |
-| GET | `/data/tapi-equipment:equipment-context/equipment` |
-| GET | `/data/tapi-equipment:equipment-context/equipment={uuid}` |
+| GET | `/data/tapi-equipment:physical-context` |
+| GET | `…/device` |
+| GET | `…/device={uuid}` |
+| GET | `…/device={uuid}/equipment={uuid}` |
+| GET | `…/physical-span` |
+| GET | `…/physical-span={uuid}` |
+
+T-API v2.6.0 has no `equipment-context`: `tapi-equipment` augments the context
+with `physical-context`, a list of `device` (each holding `equipment`) and a
+list of `physical-span`. Every ROADM, transceiver and amplifier — including
+the boosters and preamplifiers GNPy's design inserts — is a device holding one
+equipment, whose `actual-equipment/common-equipment-properties` carries the
+GNPy kind as `equipment-type-name` and its `type_variety` as
+`equipment-type-identifier`. Every fiber is a physical span. UUIDs are derived
+from the element UID, which each object keeps in its `name` list as
+`element-uid`.
+
+```json
+{
+  "uuid": "…",
+  "name": [{"value-name": "element-uid", "value": "east edfa in Brest to Morlaix"}],
+  "equipment": [{
+    "uuid": "…",
+    "name": [{"value-name": "element-uid", "value": "east edfa in Brest to Morlaix"}],
+    "actual-equipment": {"common-equipment-properties": {
+      "equipment-type-name": "Edfa", "equipment-type-identifier": "std_medium_gain"
+    }}
+  }]
+}
+```
+
+Element attributes T-API has no leaf for — a fiber's length among them — are
+not in this tree; read them from the transparent controller,
+`GET /transparent/data/ElementList`.
 
 There is no `tapi-photonic-media` resource of its own. The photonic surface is
 the augments on the SIP and on the connectivity-service end-point, so it is

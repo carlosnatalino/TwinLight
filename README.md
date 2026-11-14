@@ -77,7 +77,7 @@ way a deployed coherent receiver's telemetry moves.
 ## Feature overview
 
 - **T-API v2.6.0 northbound** — context, topology, connectivity-service CRUD,
-  path computation, equipment and photonic-media spectrum contexts, with
+  path computation, physical inventory and photonic-media spectrum, with
   RESTCONF-style errors and `application/yang-data+json` responses.
 - **Two interchangeable physical-layer backends** — GNPy split-step propagation
   (default) or a dependency-free closed-form GN/EGN kernel, selected at startup.

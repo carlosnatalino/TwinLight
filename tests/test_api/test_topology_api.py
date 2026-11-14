@@ -1,5 +1,6 @@
 """Tests for the TAPI Topology API endpoints."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 PREFIX = "/data/tapi-common:context/tapi-topology:topology-context"
@@ -90,8 +91,10 @@ class TestGetLink:
         data = app.get(f"{PREFIX}/topology={topo_uuid}").json()
         links = data["tapi-topology:topology"][0]["link"]
         # Fiber spans in the example topology are 80 km; delay must be
-        # ~392 µs (ns), not the 392 ns that treating km-as-m would produce.
-        expected_80km_ns = int(80_000.0 * 1e9 / (299_792_458 / 1.47))
+        # ~392 µs, not the 0.392 µs that treating km-as-m would produce.
+        # v2.6.0's leaf is fixed-latency-characteristic, a string; the twin
+        # writes microseconds (there is no total-size leaf).
+        expected_80km_us = 80_000.0 * 1e6 / (299_792_458 / 1.47)
         with_latency = [
             link for link in links if link.get("latency-characteristic")
         ]
@@ -99,8 +102,10 @@ class TestGetLink:
         for link in with_latency:
             lc = link["latency-characteristic"][0]
             assert lc.get("traffic-property-name") == "propagation-delay"
-            assert isinstance(lc.get("total-size"), int)
-            assert lc["total-size"] == expected_80km_ns
+            assert "total-size" not in lc
+            assert isinstance(lc["fixed-latency-characteristic"], str)
+            assert float(lc["fixed-latency-characteristic"]) == pytest.approx(
+                expected_80km_us, abs=1e-3)
 
     def test_404_for_unknown(self, app: TestClient) -> None:
         data = app.get(PREFIX).json()

@@ -27,7 +27,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 | **Topology list / single** | ✓ | `GET .../topology={uuid}` |
 | **Node** | ✓ | `GET .../topology={uuid}/node={node_uuid}` |
 | **Link** | ✓ | `GET .../topology={uuid}/link={link_uuid}` |
-| **Link latency-characteristic** | ✓ | Propagation delay (ns) from fiber length / speed of light in fiber |
+| **Link latency-characteristic** | ✓ | Propagation delay from fiber length / speed of light in fiber, in `fixed-latency-characteristic` (a unitless string in v2.6.0; the twin writes microseconds) |
 | **Owned node-edge-point (NEP)** | ✓ | `GET .../topology={uuid}/node={node_uuid}/owned-node-edge-point={nep_uuid}` |
 | **Data model** | ✓ | Topology, Node, Link, NodeEdgePoint with layer-protocol-name, states, NEP refs |
 
@@ -60,7 +60,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 | **path-comp-service** | ✓ | `POST`/`GET`/`DELETE .../path-comp-service[={uuid}]`; creating one computes up to `rmsa.k_shortest_paths` ranked routes. v2.6.0 has no RPC, so the earlier `compute-path` RPC (and its non-standard `max-candidates`) is gone; the ranked view with a count is `POST /internal/compute-path` |
 | **path** | ✓ | `GET .../path[={uuid}]` with `link` and `node-edge-point` references and the fiber length as a `cost-characteristic` |
 | **Route constraints** | ◐ | `topology-constraint` include/exclude node and link and `explicit-route`; `routing-constraint` `route-objective-function: MIN_WORK_ROUTE_LATENCY` and `is-exclusive: true`. Every other constraint leaf is refused with a 422 naming it, on path-comp-service and connectivity-service alike |
-| **Equipment context** | ✓ | `GET /data/tapi-equipment:equipment-context`, `.../equipment`, `.../equipment={uuid}` |
+| **Physical context** | ✓ | `GET /data/tapi-equipment:physical-context`, `.../device[={uuid}]`, `.../device={uuid}/equipment={uuid}`, `.../physical-span[={uuid}]`. v2.6.0 has no `equipment-context`; the earlier non-standard `equipment-context` endpoints and their `equipment-type`/`length-km` fields are gone |
 | **Spectrum capability** | ✓ | Per-SIP `spectrum-capability-pac` — supportable / available / occupied spectrum-bands in uint64 Hz, from live occupancy |
 | **Assigned spectrum** | ✓ | Per-service `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac` on the end-point |
 
@@ -75,7 +75,7 @@ T-API 2.6 defines several modules beyond Common, Topology, and Connectivity. Cov
 | Module | Purpose | Status |
 |--------|---------|--------|
 | **Path Computation Service** | Request candidate paths (A–Z, constraints, diversity) | ✓ Implemented — the `path-comp-service` and `path` lists of the path-computation context. Constraints: include/exclude node and link, explicit route, latency objective; no diversity, maximum cost/hops/delay, path sets or NEP/topology inclusion, which are refused by name. |
-| **Equipment** | Physical / logical equipment inventory | ✓ Implemented — `GET /data/tapi-equipment:equipment-context`, `.../equipment`, `.../equipment={uuid}`. Inventory is derived from the GNPy element list; holder/physical-position modelling is not represented. |
+| **Equipment** | Physical / logical equipment inventory | ✓ Implemented — `physical-context` with `device`, `equipment` and `physical-span`, derived from the GNPy elements (devices for ROADMs, transceivers and amplifiers; spans for fibers). Equipment carries `equipment-type-name` and `equipment-type-identifier`; holders, access ports, strands and expected-equipment are not modelled. |
 | **Photonic Media** | SIP spectrum capability, OTSi config, media channels | ◐ Partial — the SIP augment `photonic-media-service-interface-point-spec/spectrum-capability-pac` and the connectivity-service end-point augments `otsia-connectivity-service-end-point-spec/otsi-config/modulation` and `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac` are implemented. Standalone media-channel resources and the rest of `otsi-config` are not. |
 | **Virtual Network Service** | Virtual network (slicing / abstraction) | ✗ No `tapi-virtual-network:*` endpoints. |
 | **OAM (Operations, Admin, Maintenance)** | Maintenance entities, MEP/MIP, tests | ✗ No `tapi-oam:*` endpoints. |

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useConnectionStore } from "@/store/connection";
 import { createClient, ApiError } from "@/api/client";
-import type { Equipment } from "@/api/types";
+import { inventoryFromPhysicalContext, type InventoryItem } from "@/lib/inventory";
 import { Loader2, Cpu, Cable, Radio, Box } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -18,7 +18,7 @@ function getIcon(type: string) {
 
 export default function EquipmentPage() {
   const { baseUrl } = useConnectionStore();
-  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [equipment, setEquipment] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("");
@@ -27,11 +27,13 @@ export default function EquipmentPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    createClient(baseUrl)
-      .getEquipmentList()
-      .then((res) => {
+    const client = createClient(baseUrl);
+    // Fiber lengths are not a T-API leaf; they come from the transparent
+    // controller, and the inventory still renders if that call fails.
+    Promise.all([client.getPhysicalContext(), client.getElementList().catch(() => null)])
+      .then(([context, elements]) => {
         if (!cancelled) {
-          setEquipment(res["tapi-equipment:equipment-context"].equipment ?? []);
+          setEquipment(inventoryFromPhysicalContext(context, elements));
         }
       })
       .catch((err) => {
@@ -50,13 +52,14 @@ export default function EquipmentPage() {
   const filtered = filter
     ? equipment.filter(
         (e) =>
+          e.uid.toLowerCase().includes(filter.toLowerCase()) ||
           e.uuid.toLowerCase().includes(filter.toLowerCase()) ||
-          (e["equipment-type"] ?? "").toLowerCase().includes(filter.toLowerCase())
+          e.type.toLowerCase().includes(filter.toLowerCase())
       )
     : equipment;
 
   const byType = filtered.reduce<Record<string, number>>((acc, e) => {
-    const t = e["equipment-type"] || "other";
+    const t = e.type || "other";
     acc[t] = (acc[t] ?? 0) + 1;
     return acc;
   }, {});
@@ -66,7 +69,8 @@ export default function EquipmentPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Equipment</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Inventory from the T-API equipment context (GNPy elements).
+          Inventory from the T-API physical context: devices with their equipment,
+          and fibers as physical spans (GNPy elements).
         </p>
       </div>
 
@@ -88,7 +92,7 @@ export default function EquipmentPage() {
           <div className="flex flex-wrap items-center gap-4">
             <input
               type="text"
-              placeholder="Filter by UUID or type…"
+              placeholder="Filter by name, UUID or type…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               className="rounded-md border border-gray-300 px-3 py-2 text-sm w-64 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -124,7 +128,7 @@ export default function EquipmentPage() {
             </div>
             <ul className="divide-y divide-gray-200 max-h-[50vh] overflow-y-auto">
               {filtered.map((eq) => {
-                const Icon = getIcon(eq["equipment-type"] ?? "");
+                const Icon = getIcon(eq.type);
                 return (
                   <li
                     key={eq.uuid}
@@ -133,11 +137,11 @@ export default function EquipmentPage() {
                     <div
                       className={cn(
                         "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-                        eq["equipment-type"] === "Fiber"
+                        eq.type === "Fiber"
                           ? "bg-amber-100 text-amber-700"
-                          : eq["equipment-type"] === "Transceiver"
+                          : eq.type === "Transceiver"
                             ? "bg-blue-100 text-blue-700"
-                            : eq["equipment-type"] === "Roadm"
+                            : eq.type === "Roadm"
                               ? "bg-violet-100 text-violet-700"
                               : "bg-slate-100 text-slate-600"
                       )}
@@ -146,13 +150,16 @@ export default function EquipmentPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="font-mono text-sm text-gray-900 truncate" title={eq.uuid}>
-                        {eq.uuid}
+                        {eq.uid}
                       </p>
-                      <p className="text-xs text-gray-500">{eq["equipment-type"]}</p>
+                      <p className="text-xs text-gray-500">
+                        {eq.type}
+                        {eq.variety ? ` · ${eq.variety}` : ""}
+                      </p>
                     </div>
-                    {eq["length-km"] != null && (
+                    {eq.lengthKm != null && (
                       <span className="text-sm text-gray-600 shrink-0">
-                        {eq["length-km"].toFixed(2)} km
+                        {eq.lengthKm.toFixed(2)} km
                       </span>
                     )}
                   </li>
