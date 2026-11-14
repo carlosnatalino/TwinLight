@@ -108,6 +108,20 @@ class TapiClient:
             "connectivity-service", []
         )
 
+    # -- TAPI Streaming and OAM (TR-548 discovery) ---------------------------
+
+    async def get_stream_context(self) -> dict[str, Any]:
+        """The tapi-streaming:stream-context (supported and available streams)."""
+        resp = await self._client.get(f"{self._BASE}/tapi-streaming:stream-context")
+        resp.raise_for_status()
+        return resp.json()["tapi-streaming:stream-context"]
+
+    async def get_oam_jobs(self) -> list[dict[str, Any]]:
+        """Every tapi-oam:oam-job; the twin keeps one per connectivity service."""
+        resp = await self._client.get(f"{self._BASE}/tapi-oam:oam-context/oam-job")
+        resp.raise_for_status()
+        return resp.json().get("tapi-oam:oam-job", [])
+
     # -- Internal / OPM -------------------------------------------------------
 
     async def get_opm(self) -> list[dict[str, Any]]:

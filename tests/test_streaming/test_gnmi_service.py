@@ -29,7 +29,9 @@ class Twin:
     def __init__(self, app: Any, port: int, server: grpc.aio.Server) -> None:
         self.app = app
         self.server = server
-        self.channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+        self.port = port
+        self.target = f"127.0.0.1:{port}"
+        self.channel = grpc.aio.insecure_channel(self.target)
         self.stub = gnmi_pb2_grpc.gNMIStub(self.channel)
         self.rest = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://twin"

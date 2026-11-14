@@ -14,8 +14,16 @@ def test_row_aligns_under_the_header():
     assert len(row) == len(_header_line())
 
 
-def test_link_failed_sample_prints_dashes_not_a_crash():
-    """None marks what a failed link cannot measure; it must not hit a format spec."""
-    row = _value_line(1, "12:00:00", _link_failed_measurements())
-    assert "-" in row.split()
-    assert "1.00e+00" in row  # the BERs still report their worst case
+def test_link_failed_record_prints_dashes_not_a_crash():
+    """A link-failed service streams every measure as MISSING (decoded to None)."""
+    from twinlight.streaming.proto import tapi_streaming_performance_pb2 as tapi
+    from twinlight.streaming.records import decode_measurements, measurement_details
+
+    details = measurement_details(
+        {"service-uuid": "svc-1", "timestamp": 0.0, "status": "link-failed",
+         "measurements": _link_failed_measurements()},
+        native_resource_id="trx", sample_interval_ns=1,
+    )
+    wire = tapi.MeasurementDetails.FromString(details.SerializeToString())
+    row = _value_line(1, "12:00:00", decode_measurements(wire))
+    assert row.split()[2:] == ["-"] * len(_METRICS)
