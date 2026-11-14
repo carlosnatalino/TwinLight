@@ -54,8 +54,7 @@ values are conformant and deterministic across runs, which reproducibility
 depends on. Their last group is hex, so `decode()` throws.
 
 **Handled in the adapter.** Renumbering SIPs in the twin to suit one client
-would break RFC 4122 conformance, the UI, the client library and the gNMI
-paths. The adapter republishes each SIP as `<real-uuid>-<index>` and strips the
+would break RFC 4122 conformance, the UI and the client library. The adapter republishes each SIP as `<real-uuid>-<index>` and strips the
 suffix on the way back, so the real UUID still reaches ONOS as a port
 annotation.
 

@@ -1,7 +1,8 @@
 # TwinLight — one-shot digital twin + observability stack.
 #
 # Boots four services on a shared network:
-#   * twin       — the digital twin (FastAPI :8080 + gRPC :50051).
+#   * twin       — the digital twin (FastAPI :8080 + gNMI :50051, the T-API
+#                  performance-measurement stream of TR-548).
 #   * ui         — the React web UI (nginx), pointed at the twin via TWIN_URL.
 #   * prometheus — scrapes twin:8080/metrics every 15s.
 #   * grafana    — pre-provisioned with the Prometheus data source and
@@ -45,7 +46,11 @@ services:
     hostname: twin
     ports:
       - "8080:8080"   # REST (TAPI + /config + /metrics + /admin)
-      - "50051:50051" # gNMI gRPC
+      # gNMI: the T-API measurement stream. Its advertised connection-address
+      # is grpc://twin:50051, right for containers on this network; from the
+      # host, pass --gnmi-target localhost:50051 to twinlight-client, or set
+      # streaming.advertised_address in the scenario YAML.
+      - "50051:50051"
     volumes:
       # Snapshots and the shutdown checkpoint land here on the host so they
       # survive container rebuilds. Created on first up if it doesn't exist.
