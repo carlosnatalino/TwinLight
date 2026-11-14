@@ -314,6 +314,31 @@ class TapiContext:
 
         self.candidate = CandidateDatastore()
 
+        self._log_rmsa_settings()
+
+    def _log_rmsa_settings(self) -> None:
+        """Log the admission policy in effect, once, at startup.
+
+        These four values decide every admission, and two of them do not come
+        from the YAML file the operator is reading: the launch power is the
+        equipment library's SI default, and the margin and guard band may have
+        been left at their code defaults. Logging the resolved values makes a
+        run's admission decisions reproducible from its log alone.
+        """
+        rmsa = self._config.rmsa
+        defaults = self._backend.spectral_defaults
+        logger.info(
+            "RMSA settings: qot_margin_db=%.2f dB, k_shortest_paths=%d, "
+            "default_guardband_slots=%d (%.2f GHz), default launch power=%.2f dBm "
+            "(SI power_dbm from %s)",
+            rmsa.qot_margin_db,
+            rmsa.k_shortest_paths,
+            rmsa.default_guardband_slots,
+            rmsa.default_guardband_slots * self._config.spectrum.slot_width_ghz,
+            defaults.power_dbm,
+            defaults.source,
+        )
+
     # -- Backend pass-throughs ------------------------------------------
     # These three properties existed as direct attributes before the
     # ``PhysicalBackend`` refactor; keeping them as read-only aliases

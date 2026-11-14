@@ -219,7 +219,12 @@ rmsa:
 |-------|---------|---------|
 | `k_shortest_paths` | `3` | Candidate paths evaluated per request. Raise it for large meshes (the CORONET example uses 5) |
 | `qot_margin_db` | `1.5` | System margin added to the format's required GSNR before admission |
-| `default_guardband_slots` | `1` | Guard band in 6.25 GHz slots on each side of an allocation |
+| `default_guardband_slots` | `1` | Guard slots added to each media channel (8 + 1 = 9 slots for a 50 GHz channel). The carrier is centred in the media channel, so the guard is shared between its two edges |
+
+At startup the twin logs the settings in effect — margin, `k_shortest_paths`,
+guard slots and the default launch power with the equipment file it came
+from — as one `RMSA settings: …` line at INFO, so a run's admission decisions
+can be reproduced from its log.
 
 There is no launch-power key here. The default launch power is a property of
 the line and comes from the equipment library's `SI` entry (`power_dbm`, the

@@ -37,8 +37,8 @@ into it). Baseline before any change: 752 tests passed.
 | 3 | Candidate ranking (GNPy shortest_simple_paths) | done | see git log |
 | 4 | Spectrum request / band restriction | done | see git log |
 | 5 | Launch power | done | see git log |
-| 6 | Startup log of effective RMSA settings | next | |
-| 7 | Channel-accurate QoT | todo | |
+| 6 | Startup log of effective RMSA settings | done | see git log |
+| 7 | Channel-accurate QoT | next | |
 | — | Docs, quality gates, PR | todo | |
 
 ## Notes for whoever resumes
