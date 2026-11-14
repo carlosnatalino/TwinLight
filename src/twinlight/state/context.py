@@ -511,7 +511,10 @@ class TapiContext:
         for rank, path in enumerate(paths, start=1):
             edges = path_uids_to_edges(path)
             assignable = self._assignable_slots(path)
-            label = f"candidate {rank} ({' > '.join(self._terminals(path))})"
+            # One entry per candidate, naming the route once and each format's
+            # outcome after it, so a refusal stays readable on long routes.
+            outcomes: list[str] = []
+            attempts.append("")
             for fmt in formats:
                 params = get_params(fmt)
                 block = self._block_width(fmt)
@@ -521,16 +524,16 @@ class TapiContext:
                         guard_slots, assignable,
                     )
                     if start is None:
-                        attempts.append(
-                            f"{label} {fmt.value}: no free {block}-slot block "
-                            "inside the amplifier band"
+                        outcomes.append(
+                            f"{fmt.value} no free {block}-slot block inside the "
+                            "amplifier band"
                         )
                         continue
                 else:
                     start = requested[fmt]
                     conflict = self._block_conflict(path, edges, start, block, assignable)
                     if conflict is not None:
-                        attempts.append(f"{label} {fmt.value}: {conflict}")
+                        outcomes.append(f"{fmt.value} {conflict}")
                         continue
                 spectrum_found = True
                 if not qot_available:
@@ -561,14 +564,21 @@ class TapiContext:
                 required = params.req_gsnr_db + margin
                 if baseline.gsnr_db >= required:
                     return path, fmt, start, block, baseline
-                attempts.append(
-                    f"{label} {fmt.value}: GSNR {baseline.gsnr_db:.1f} dB below "
-                    f"{required:.1f} dB (required {params.req_gsnr_db} + "
-                    f"margin {margin})"
+                outcomes.append(
+                    f"{fmt.value} GSNR {baseline.gsnr_db:.1f} dB below "
+                    f"{required:.1f} dB"
                 )
+            attempts[-1] = (
+                f"candidate {rank} ({' > '.join(self._terminals(path))}): "
+                + ", ".join(outcomes)
+            )
 
         error_type = InsufficientQoTError if spectrum_found else InsufficientSpectrumError
-        raise error_type("; ".join(attempts))
+        note = (
+            f" (required GSNR includes the {margin} dB qot_margin_db)"
+            if spectrum_found else ""
+        )
+        raise error_type("; ".join(attempts) + note)
 
     def _launch_power_for(self, svc: ConnectivityService) -> float:
         """The requested launch power, else the line default (SI power_dbm)."""

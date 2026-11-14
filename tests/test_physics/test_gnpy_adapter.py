@@ -111,7 +111,7 @@ class TestPropagationComb:
         assert np.all(np.diff(comb.frequency_hz) > 0)
 
     def test_off_grid_service_and_amplifier_band(self, si) -> None:
-        centre = 193.128125e12  # on the 6.25 GHz grid, between SI channels
+        centre = 193.125e12  # a 6.25 GHz grid point between two SI channels
         comb = line_comb(si, centre_frequency_hz=centre, media_channel_width_hz=56.25e9,
                          baud_rate_hz=32e9, launch_power_dbm=0.0,
                          bands=[(191.5e12, 196.125e12)])

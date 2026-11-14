@@ -90,7 +90,8 @@ twinlight-transparent revert /
 │     ElementList/<uid>              its inline elements, in propagation order
 ├── ServiceList/<uuid>               connectivity services (read-only here)
 │     uuid, name, modulation_format, path, start_slot, num_slots,
-│     central_frequency_thz, slot_width_ghz, required_gsnr_db
+│     central_frequency_thz, slot_width_ghz, launch_power_dbm,
+│     required_gsnr_db
 │     qot/                           status, gsnr_db, osnr_db, margin_db, cd_ps_nm,
 │                                    pmd_ps, latency_ms, total_fiber_km
 │     ElementList/<uid>              the elements of the allocated path, in order
