@@ -87,6 +87,10 @@ class MeasurementStream:
     def connection_address(self) -> str:
         return self._config.streaming.connection_address(self._config.server.grpc_port)
 
+    def now_ns(self) -> int:
+        """The clock logged times come from, in ns since the epoch."""
+        return self._clock_ns()
+
     @property
     def last_logged_ns(self) -> int:
         """Logged time of the newest tick, 0 before the first."""
