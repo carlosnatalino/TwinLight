@@ -244,3 +244,32 @@ class TestOperationalState:
         ctx.apply_element_overrides({"fiber (A → B)": {"loss_coef": 0.2}})
         listed = client.get(_SVC).json()["tapi-connectivity:connectivity-context"]
         assert listed["connectivity-service"][0]["operational-state"] == "ENABLED"
+
+
+class TestAFailedLightpath:
+    """A lightpath whose route is cut still emits: it is a neighbour on the
+    fibers before the cut, and not after it."""
+
+    def test_dark_past_the_cut(self, egn: TapiContext) -> None:
+        """B→C channel under test; neighbour A→C over A-B-C. Cutting A→B
+        (upstream of the shared span) takes the neighbour off B→C."""
+        cut = _admit(egn, "trx B", "trx C", start_slot=100)
+        alone = _gsnr(egn, cut)
+        neighbour = _admit(egn, "trx A", "trx C", start_slot=109)
+        assert "roadm B" in egn._allocated_path_uids(neighbour.uuid)
+        loaded = _gsnr(egn, cut)
+        assert loaded < alone
+
+        egn.set_link_failed("fiber (A → B)", True)
+        assert _gsnr(egn, cut) == pytest.approx(alone, abs=1e-9)
+        egn.set_link_failed("fiber (A → B)", False)
+        assert _gsnr(egn, cut) == pytest.approx(loaded, abs=1e-9)
+
+    def test_lit_before_the_cut(self, egn: TapiContext) -> None:
+        """A→B channel under test; the same neighbour, cut downstream on
+        B→C, still lights A→B."""
+        cut = _admit(egn, "trx A", "trx B", start_slot=100)
+        _admit(egn, "trx A", "trx C", start_slot=109)
+        loaded = _gsnr(egn, cut)
+        egn.set_link_failed("fiber (B → C)", True)
+        assert _gsnr(egn, cut) == pytest.approx(loaded, abs=1e-9)

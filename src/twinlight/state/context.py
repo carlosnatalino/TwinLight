@@ -2321,6 +2321,11 @@ class TapiContext:
         affected = self.services_for_element(fiber_uid)
         for svc_uuid in affected:
             self.invalidate_baseline(svc_uuid)
+            # Under a load-dependent backend the cut also darkens (or, on
+            # restore, relights) the lightpath downstream of it, where it was
+            # a neighbour of others.
+            for other in self._sharing_services(svc_uuid):
+                self.invalidate_baseline(other)
 
         # Flip TAPI Link operational-state on the underlying link(s).
         for topo_uuid, link_uuid in self._fiber_to_link_refs.get(fiber_uid, []):

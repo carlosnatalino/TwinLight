@@ -401,7 +401,8 @@ class EgnBackend:
         ``(frequency offset [Hz], power offset from the reference [dB],
         symbol rate [Hz])``.
 
-        A lit channel counts only in the fibers its own route traverses. One
+        A lit channel counts only in the fibers its own route traverses and
+        its light reaches: up to the first failed fiber, not past it. One
         whose signal would overlap the channel under test cannot share a
         fiber with it (spectrum assignment forbids it), so it is left out.
         """
@@ -413,14 +414,40 @@ class EgnBackend:
             if abs(offset_hz) < (baud_hz + channel.baud_rate_hz) / 2:
                 continue
             if channel.path_uids not in by_route:
-                link_ids = self._links_for_path(list(channel.path_uids)) or []
-                by_route[channel.path_uids] = {
-                    f.uid for link_id in link_ids for f in self._link_plan(link_id).fibers
-                }
+                by_route[channel.path_uids] = set(self._lit_fibers(list(channel.path_uids)))
             entry = (offset_hz, channel.launch_power_dbm - reference_dbm, channel.baud_rate_hz)
             for uid in by_route[channel.path_uids] & fibers:
                 result.setdefault(uid, []).append(entry)
         return result
+
+    def _lit_fibers(self, path_uids: list[str]) -> list[str]:
+        """The fibers of a route its light reaches, in order: all of them, or
+        those before the first failed one (the transmitter still emits; the
+        cut stops the light)."""
+        index = self._egn_topo.gnpy_uid_index
+        terminals = [
+            uid for uid in path_uids
+            if (loc := index.get(uid)) is not None and loc.kind in ("roadm", "transceiver")
+        ]
+        lit: list[str] = []
+        position = 0  # where in path_uids the current leg starts
+        for source, target in itertools.pairwise(terminals):
+            end = path_uids.index(target, position)
+            leg = path_uids[position:end]
+            position = end
+            link_id = self._egn_topo.link_by_endpoints.get((source, target))
+            if link_id is None:
+                continue
+            fibers = [f.uid for f in self._link_plan(link_id).fibers]
+            # A failure named by a route UID the design renamed (a split
+            # fiber) cuts the leg it lies on, from its start.
+            if self._failed_fibers.intersection(leg) - set(fibers):
+                return lit
+            for uid in fibers:
+                if uid in self._failed_fibers:
+                    return lit
+                lit.append(uid)
+        return lit
 
     def _link_plan(self, link_id: int) -> _LinkPlan:
         """Walk one link with the reference channel (module docstring)."""
