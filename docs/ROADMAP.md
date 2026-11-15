@@ -90,7 +90,6 @@ spans. See [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir).
 | Soft-decision post-FEC BER | Post-FEC BER comes from a threshold model and a hard-decision block-code model; GMI and NGMI are reported but not mapped to a post-FEC BER, which needs per-code NGMI data |
 | Multi-band (C+L and beyond) | C-band only; the spectrum grid is parameterised but the physics is not |
 | EGN correction on cross-channel NLI; actual line load under GNPy | Both backends compute the plain incoherent GN model (Poggiolini 2014), and agree within 0.05–0.25 dB at full load; neither applies the EGN correction. The GNPy backend evaluates every channel on the fully loaded SI comb; only the EGN backend follows the lightpaths actually lit |
-| Eye and constellation rendering in the web UI | The backend synthesises the data (`/internal/services/{uuid}/eye-diagram`, `/constellation`); the UI components are placeholders |
 | Event-driven simulation clock | The transient layer is evaluated at wall-clock time |
 | Soft failures in the web UI | Driven by the `twinlight-soft-failure` client only |
 | T-API notification, OAM, fault and virtual-network modules | Not implemented; see [TAPI_COMPLIANCE.md](TAPI_COMPLIANCE.md) |

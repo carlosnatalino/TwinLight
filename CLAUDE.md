@@ -200,6 +200,6 @@ endpoint reference resolves to a physical element.
 Soft-decision post-FEC BER (GMI/NGMI are reported, but not mapped through a
 per-code NGMI threshold); multi-band (C-band only); the EGN correction on cross-channel NLI
 (both backends are the plain GN model); the actual line load under the GNPy backend (it
-assumes a full SI comb; EGN uses the lit lightpaths); eye and constellation *rendering* in the UI (the backend synthesis
-exists); an event-driven simulation clock; T-API notification, OAM, fault and
+assumes a full SI comb; EGN uses the lit lightpaths); an event-driven simulation clock;
+T-API notification, OAM, fault and
 virtual-network modules; gNMI Get/Set; authentication on any interface.
