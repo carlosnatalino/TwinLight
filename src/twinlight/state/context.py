@@ -18,6 +18,7 @@ import asyncio
 import itertools
 import json
 import logging
+import math
 import uuid as uuid_lib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,7 +48,7 @@ from twinlight.models.topology import (
     NodeEdgePoint,
     Topology,
 )
-from twinlight.physics.backend import LitChannel
+from twinlight.physics.backend import LitChannel, PropagationError
 from twinlight.physics.backend import element_kind_name as _kind_name
 from twinlight.physics.modulation import ModulationFormat
 from twinlight.state.spectrum_state import SpectrumState
@@ -162,6 +163,20 @@ def _adjustment_granularity(slot_width_ghz: float) -> str:
     )
 
 
+@dataclass(frozen=True)
+class _DetachedService:
+    """A service taken out of the context, with what puts it back unchanged
+    (:meth:`TapiContext.replace_service`)."""
+
+    service: ConnectivityService
+    allocation: tuple[list[tuple[str, str]], int, int] | None
+    launch_power_dbm: float | None
+    baseline: OpmBaseline | None
+    indexed_uids: frozenset[str]
+    fibers: frozenset[str] | None
+    edfa_uids: list[str]
+
+
 class TapiContext:
     """In-memory TAPI context with indexed lookups."""
 
@@ -224,6 +239,11 @@ class TapiContext:
         self._route_cache: dict[tuple[str, str], list[str]] = {}
         self._baseline_cache: dict[str, OpmBaseline] = {}
         self._propagation_lock: asyncio.Lock = asyncio.Lock()
+        # Serialises changes to the set of admitted services. Admission yields
+        # while it propagates; without this, two admissions could pick the
+        # same first-fit block, and a PUT's rollback could find its old block
+        # taken by a request that ran in between.
+        self._admission_lock: asyncio.Lock = asyncio.Lock()
         # service_uuid -> the fibers its last baseline traversed (the
         # backend's UIDs, design-split sub-spans included): which lightpaths
         # share a fiber, for a backend whose baselines depend on the load.
@@ -393,6 +413,107 @@ class TapiContext:
         return self._nep_index.get(topo_uuid, {}).get(node_uuid, {}).get(nep_uuid)
 
     async def add_service(self, svc: ConnectivityService) -> None:
+        """Admit a connectivity service (see :meth:`_add_service`)."""
+        async with self._admission_lock:
+            await self._add_service(svc)
+
+    async def remove_service(self, uuid: str) -> bool:
+        """Delete a service and bring the others' operational-state up to
+        date (it may have been a neighbour of theirs)."""
+        async with self._admission_lock:
+            removed = self.delete_service(uuid)
+        await self.refresh_operational_states()
+        return removed
+
+    async def replace_service(self, svc: ConnectivityService) -> None:
+        """Replace the service with ``svc.uuid`` by ``svc``, or leave it as it
+        was.
+
+        The old service's resources are released so the new one can reuse
+        them, then the new one goes through admission. If admission fails for
+        any reason, the old service is put back exactly as it was — same
+        route, block, format and launch power — rather than re-admitted,
+        which could move it or, with no route left, lose it.
+
+        Raises:
+            KeyError: No service with that UUID.
+            Whatever admission raises, after the rollback.
+        """
+        async with self._admission_lock:
+            detached = self._detach_service(svc.uuid)
+            try:
+                await self._add_service(svc)
+            except BaseException:
+                if svc.uuid in self._services or svc.uuid in self._service_allocation:
+                    self.delete_service(svc.uuid)  # a partial admission
+                self._reattach_service(detached)
+                raise
+            # The old channel is gone for good: the amplifiers saw a drop.
+            if detached.edfa_uids and self._config.transients.edfa_reservoir.enabled:
+                self._edfa_tracker.notify_channel_change(
+                    detached.edfa_uids, -1, self._config.transients.edfa_reservoir,
+                )
+
+    def _detach_service(self, uuid: str) -> _DetachedService:
+        """Take a service out of every structure, keeping what puts it back.
+
+        Unlike :meth:`delete_service`, the EDFA tracker is not told: if the
+        service is reattached, no channel was ever dropped.
+        """
+        svc = self._services.get(uuid)
+        if svc is None:
+            raise KeyError(uuid)
+        detached = _DetachedService(
+            service=svc,
+            allocation=self._service_allocation.get(uuid),
+            launch_power_dbm=self._service_launch_power.get(uuid),
+            baseline=self._baseline_cache.get(uuid),
+            indexed_uids=frozenset(
+                uid for uid, users in self._element_to_services.items() if uuid in users
+            ),
+            fibers=self._service_fibers.get(uuid),
+            edfa_uids=self._service_edfa_uids.get(uuid, []),
+        )
+        for other in self._sharing_services(uuid):
+            self.invalidate_baseline(other)
+        if detached.allocation is not None:
+            path_edges, start, width = detached.allocation
+            self._spectrum_state.release(path_edges, start, width)
+        self._services.pop(uuid)
+        self._service_allocation.pop(uuid, None)
+        self._service_launch_power.pop(uuid, None)
+        self._baseline_cache.pop(uuid, None)
+        self._service_fibers.pop(uuid, None)
+        self._service_edfa_uids.pop(uuid, None)
+        for uid in detached.indexed_uids:
+            self._element_to_services[uid].discard(uuid)
+        return detached
+
+    def _reattach_service(self, detached: _DetachedService) -> None:
+        """Undo :meth:`_detach_service`. The block is free again: nothing else
+        was admitted while the admission lock was held."""
+        uuid = detached.service.uuid
+        if detached.allocation is not None:
+            path_edges, start, width = detached.allocation
+            self._spectrum_state.allocate(path_edges, start, width)
+            self._service_allocation[uuid] = detached.allocation
+        if detached.launch_power_dbm is not None:
+            self._service_launch_power[uuid] = detached.launch_power_dbm
+        if detached.baseline is not None:
+            self._baseline_cache[uuid] = detached.baseline
+        if detached.fibers is not None:
+            self._service_fibers[uuid] = detached.fibers
+        if detached.edfa_uids:
+            self._service_edfa_uids[uuid] = detached.edfa_uids
+        for uid in detached.indexed_uids:
+            self._element_to_services.setdefault(uid, set()).add(uuid)
+        self._services[uuid] = detached.service
+        # Its neighbours lost and regained it: their baselines were dropped
+        # on detach and are recomputed on the next read.
+        for other in self._sharing_services(uuid):
+            self.invalidate_baseline(other)
+
+    async def _add_service(self, svc: ConnectivityService) -> None:
         """Add a connectivity service with RMSA: path, spectrum, and QoT check.
 
         Order: route under the service's routing and topology constraints
@@ -459,7 +580,8 @@ class TapiContext:
         # with it: their GSNR drops, possibly below what their format needs.
         for uuid in self._sharing_services(svc.uuid):
             self.invalidate_baseline(uuid)
-            await self.get_or_compute_baseline(self._services[uuid])
+            if (other := self._services.get(uuid)) is not None:
+                await self.get_or_compute_baseline(other)
 
     async def _admit(
         self, svc: ConnectivityService, paths: list[list[str]],
@@ -520,7 +642,7 @@ class TapiContext:
         power_dbm = self._launch_power_for(svc)
         # The lightpaths already lit; the candidate joins them.
         line_load = self._line_load()
-        memo: dict[tuple[tuple[str, ...], int, int, float, float], OpmBaseline | None] = {}
+        memo: dict[tuple[tuple[str, ...], int, int, float, float], OpmBaseline | str] = {}
         attempts: list[str] = []
         spectrum_found = False
 
@@ -564,20 +686,15 @@ class TapiContext:
                 key = (tuple(path), centre_hz, upper - lower, power_dbm,
                        params.baud_rate_hz)
                 if key not in memo:
-                    async with self._propagation_lock:
-                        memo[key] = await self._backend.compute_baseline(
-                            path, fmt.value,
-                            centre_frequency_hz=centre_hz,
-                            media_channel_width_hz=upper - lower,
-                            launch_power_dbm=power_dbm,
-                            line_load=line_load,
-                        )
+                    memo[key] = await self._admission_qot(
+                        path, fmt, centre_hz, upper - lower, power_dbm, line_load,
+                    )
                 baseline = memo[key]
-                if baseline is None:
-                    # Propagation could not run (e.g. an element GNPy rejects):
-                    # admitted without a QoT check, as before, so the OPM layer
-                    # falls back to its mock data for this service.
-                    return path, fmt, start, block, None
+                if isinstance(baseline, str):
+                    # No QoT verdict: never admit on that. The next format or
+                    # route may still propagate.
+                    outcomes.append(f"{fmt.value} QoT could not be evaluated ({baseline})")
+                    continue
                 required = params.req_gsnr_db + margin
                 if baseline.gsnr_db >= required:
                     return path, fmt, start, block, baseline
@@ -596,6 +713,40 @@ class TapiContext:
             if spectrum_found else ""
         )
         raise error_type("; ".join(attempts) + note)
+
+    async def _admission_qot(
+        self,
+        path: list[str],
+        fmt: ModulationFormat,
+        centre_hz: int,
+        width_hz: int,
+        power_dbm: float,
+        line_load: list[LitChannel],
+    ) -> OpmBaseline | str:
+        """Propagate a candidate channel; on failure, the reason instead.
+
+        A backend is loaded, so a lightpath is admitted only on a QoT verdict:
+        a propagation that raises (an element the engine rejects, a numerical
+        failure) or yields nothing is a reason to skip the candidate, not to
+        admit it unchecked.
+        """
+        try:
+            async with self._propagation_lock:
+                baseline = await self._backend.compute_baseline(
+                    path, fmt.value,
+                    centre_frequency_hz=centre_hz,
+                    media_channel_width_hz=width_hz,
+                    launch_power_dbm=power_dbm,
+                    line_load=line_load,
+                )
+        except Exception as exc:  # any engine failure is reported, not raised
+            logger.warning("Admission propagation failed on %s", path, exc_info=True)
+            return f"propagation failed: {exc}"
+        if baseline is None:
+            return f"the {self._backend.name} backend could not propagate this route"
+        if not math.isfinite(baseline.gsnr_db):
+            return f"the {self._backend.name} backend returned GSNR {baseline.gsnr_db}"
+        return baseline
 
     def _launch_power_for(self, svc: ConnectivityService) -> float:
         """The requested launch power, else the line default (SI power_dbm)."""
@@ -1469,12 +1620,15 @@ class TapiContext:
                 return self._baseline_cache[svc.uuid]
 
             centre_hz, width_hz, power_dbm = self._service_channel(svc, path)
-            baseline = await self._backend.compute_baseline(
-                path, svc.modulation_format.value,
-                centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
-                launch_power_dbm=power_dbm,
-                line_load=self._line_load(exclude=svc.uuid),
-            )
+            try:
+                baseline = await self._backend.compute_baseline(
+                    path, svc.modulation_format.value,
+                    centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
+                    launch_power_dbm=power_dbm,
+                    line_load=self._line_load(exclude=svc.uuid),
+                )
+            except PropagationError:
+                baseline = None  # OPM falls back to mock data (logged by the backend)
             if baseline is None:
                 return None
             self._baseline_cache[svc.uuid] = baseline
@@ -1851,12 +2005,16 @@ class TapiContext:
                         )
                     else:
                         centre_hz, width_hz, power_dbm = self._service_channel(svc, path)
-                        predicted[svc.uuid] = await self._backend.compute_baseline(
-                            path, svc.modulation_format.value,
-                            centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
-                            launch_power_dbm=power_dbm,
-                            line_load=self._line_load(exclude=svc.uuid),
-                        )
+                        try:
+                            predicted[svc.uuid] = await self._backend.compute_baseline(
+                                path, svc.modulation_format.value,
+                                centre_frequency_hz=centre_hz,
+                                media_channel_width_hz=width_hz,
+                                launch_power_dbm=power_dbm,
+                                line_load=self._line_load(exclude=svc.uuid),
+                            )
+                        except PropagationError:
+                            predicted[svc.uuid] = None
             finally:
                 for uid, attr, token in reversed(tokens):
                     try:
@@ -2253,13 +2411,16 @@ class TapiContext:
         centre_hz = self._preview_centre_frequency(path, fmt)
         power_dbm = self.default_launch_power_dbm
         async with self._propagation_lock:
-            baseline = await self._backend.compute_baseline(
-                path, modulation_format,
-                centre_frequency_hz=centre_hz,
-                media_channel_width_hz=self._block_width(fmt) * self._slot_hz(),
-                launch_power_dbm=power_dbm,
-                line_load=self._line_load(),
-            )
+            try:
+                baseline = await self._backend.compute_baseline(
+                    path, modulation_format,
+                    centre_frequency_hz=centre_hz,
+                    media_channel_width_hz=self._block_width(fmt) * self._slot_hz(),
+                    launch_power_dbm=power_dbm,
+                    line_load=self._line_load(),
+                )
+            except PropagationError:
+                baseline = None
         return None if baseline is None else (baseline, centre_hz, power_dbm)
 
     def _preview_centre_frequency(self, path: list[str], fmt: ModulationFormat) -> int:
@@ -2483,6 +2644,8 @@ class TapiContext:
         self._service_launch_power.clear()
         self._baseline_cache.clear()
         self._element_to_services.clear()
+        self._service_fibers.clear()
+        self._service_edfa_uids.clear()
         # Revert, not just forget: dropping the override records alone would
         # leave the overridden values live on the elements and in the config,
         # and the restored twin would silently keep them.

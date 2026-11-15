@@ -115,6 +115,14 @@ the format in effect. Without a physics backend there is no QoT to check, so a
 request that names no format gets DP-QPSK. A request that cannot be satisfied
 is a `409` listing every attempt, rather than an admission with a warning.
 
+A lightpath is never admitted without a QoT verdict while a backend is
+loaded: a (route, format) whose propagation fails is skipped, with the error
+named in the refusal, and admission moves on to the next. Admissions,
+replacements and deletions are serialised, so concurrent requests never get
+the same block. A `PUT` that is refused leaves the existing service exactly
+as it was, on the same route and block; it is not re-admitted (which could
+move it, or lose it when no route is left).
+
 A lightpath is one-way: it runs from the end-point marked `direction: SOURCE`
 to the one marked `SINK`, or, when neither says, from the first end-point to
 the second. Reads report what was provisioned: the service is

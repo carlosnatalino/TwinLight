@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from twinlight.config import TwinConfig
+from twinlight.physics.backend import PropagationError
 from twinlight.physics.channel_plan import (
     SpectralDefaults,
     load_spectral_defaults,
@@ -111,9 +112,9 @@ class GnpyBackend:
                 media_channel_width_hz=media_channel_width_hz,
                 launch_power_dbm=launch_power_dbm,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("GNPy baseline computation failed: %s", exc)
-            return None
+            raise PropagationError(f"GNPy: {exc}") from exc
 
     def amplifier_bands(self, path_uids: list[str]) -> list[tuple[float, float]] | None:
         """``gnpy.topology.request.find_elements_common_range`` over the path:

@@ -298,7 +298,7 @@ class TestGetAndDeleteConnectivityService:
         """A replacement that can't be admitted must not tear the service down.
 
         Simulates an RMSA failure on the incoming service and asserts the
-        original allocation is re-admitted and still reachable afterwards.
+        original is put back and still reachable afterwards.
         """
         from twinlight.state.context import InsufficientSpectrumError
 
@@ -310,19 +310,14 @@ class TestGetAndDeleteConnectivityService:
         assert create.status_code == 201
         uuid = create.json()["tapi-connectivity:connectivity-service"]["uuid"]
 
-        # Fail only the first add_service call (the incoming replacement); let
-        # the rollback re-admission of the original service go through for real.
+        # Fail the admission of the incoming replacement.
         ctx = app.app.state.context
-        real_add = ctx.add_service
-        calls = {"n": 0}
+        before = ctx._service_allocation[uuid]
 
-        async def flaky_add(svc):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise InsufficientSpectrumError("simulated: no spectrum")
-            return await real_add(svc)
+        async def refused(svc):
+            raise InsufficientSpectrumError("simulated: no spectrum")
 
-        monkeypatch.setattr(ctx, "add_service", flaky_add)
+        monkeypatch.setattr(ctx, "_add_service", refused)
 
         put_body = {
             "tapi-connectivity:connectivity-service": {
@@ -342,6 +337,7 @@ class TestGetAndDeleteConnectivityService:
         assert get_resp.status_code == 200
         restored = get_resp.json()["tapi-connectivity:connectivity-service"]
         assert restored["name"][0]["value"] == "test-link"
+        assert ctx._service_allocation[uuid] == before  # same route and block
 
 
 class TestConstraints:

@@ -206,7 +206,9 @@ src/twinlight_client/    Companion client library and CLI
    band every amplifier on the path passes (`backend.amplifier_bands`,
    GNPy's `find_elements_common_range`) — propagate the path
    through the active backend to obtain an `OpmBaseline`, and check
-   `GSNR ≥ required_gsnr(format) + rmsa.qot_margin_db`. Propagations are
+   `GSNR ≥ required_gsnr(format) + rmsa.qot_margin_db`. A propagation that
+   fails (`PropagationError`, or no result) skips that (path, format) with the
+   reason in the refusal; nothing is admitted without a verdict. Propagations are
    memoised for the duration of one admission, keyed by path, central
    frequency, launch power and symbol rate, so formats occupying the same
    block share one.
@@ -223,6 +225,11 @@ src/twinlight_client/    Companion client library and CLI
    recomputed with it lit, and their `operational-state` follows (`DISABLED`
    below the format's required GSNR). Admission evaluates the candidate with
    the existing lightpaths lit (`_line_load`).
+
+All of this runs under `_admission_lock`, so concurrent admissions never
+pick the same block. A replacement (`replace_service`, the T-API `PUT`)
+detaches the old service, admits the new one, and on refusal reattaches the
+old one unchanged.
 
 Deletion reverses this: slots are released, `invalidate_baseline(uuid)` drops
 the cached propagation, the EDFA tracker records the drop event, and under

@@ -32,6 +32,12 @@ if TYPE_CHECKING:
     from twinlight.physics.gnpy_adapter import OpmBaseline
 
 
+class PropagationError(RuntimeError):
+    """The engine could not propagate a path (an element it rejects, a
+    numerical failure). Admission names it and skips the candidate; OPM
+    falls back to mock data."""
+
+
 @dataclass(frozen=True)
 class LitChannel:
     """An admitted lightpath's channel, as another channel's neighbour.
@@ -88,8 +94,10 @@ class PhysicalBackend(Protocol):
         line_load: Sequence[LitChannel] = (),
     ) -> OpmBaseline | None:
         """Return a static QoT baseline for the path, or ``None`` if
-        propagation is not possible (engine unavailable, missing element).
-        Returning ``None`` puts the OPM endpoint into mock-data fallback.
+        the engine is unavailable or has no model of the route; raise
+        :class:`PropagationError` when propagation failed. Either puts the OPM
+        endpoint into mock-data fallback, and makes admission skip the
+        candidate.
 
         The metrics are the service channel's: at ``centre_frequency_hz`` in a
         media channel ``media_channel_width_hz`` wide, launched at

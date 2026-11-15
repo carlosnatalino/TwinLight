@@ -345,9 +345,10 @@ async def get_service(uuid: str, request: Request) -> dict:
 async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     """Replace a connectivity service by UUID (full replacement).
 
-    The existing service is captured before deletion and re-admitted if the
-    replacement cannot be admitted (no path, no spectrum, or insufficient QoT),
-    so a failed replace never silently tears down the service that was there.
+    The replacement goes through admission with the old service's resources
+    released. If it is refused, the old service is put back exactly as it
+    was (``TapiContext.replace_service``): a failed replace never moves or
+    tears down the service that was there.
     """
     ctx = request.app.state.context
     svc = _parse_service(body)
@@ -363,16 +364,14 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"SIP {sip_uuid!r} not found",
             )
-    # Keep a handle on the current allocation so a failed replacement can be
-    # rolled back. delete_service frees exactly the resources add_service needs
-    # to re-admit old_svc, so the rollback cannot itself fail on those grounds.
-    old_svc = ctx.get_service(uuid)
-    ctx.delete_service(uuid)
+    # A refused replacement leaves the old service exactly as it was (same
+    # route and block); with no old service, a PUT creates one.
     try:
-        await ctx.add_service(svc)
+        if ctx.get_service(uuid) is None:
+            await ctx.add_service(svc)
+        else:
+            await ctx.replace_service(svc)
     except (RmsaError, ConstraintError, SpectrumRequestError) as e:
-        if old_svc is not None:
-            await ctx.add_service(old_svc)
         raise HTTPException(
             status_code=(
                 status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -418,9 +417,9 @@ async def update_service(
 async def delete_service(uuid: str, request: Request) -> None:
     """Delete a connectivity service."""
     ctx = request.app.state.context
-    if not ctx.delete_service(uuid):
+    # The lightpaths that shared a fiber with it lose a neighbour;
+    # remove_service brings their operational-state up to date.
+    if not await ctx.remove_service(uuid):
         raise HTTPException(
             status_code=404, detail=f"Service {uuid} not found"
         )
-    # The lightpaths that shared a fiber with it lost a neighbour.
-    await ctx.refresh_operational_states()
