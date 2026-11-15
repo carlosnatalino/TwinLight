@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from twinlight.algorithms.path_constraints import ConstraintError, parse_constraints
 from twinlight.config import FecConfig
+from twinlight.state.context import NoPathError
 
 # ---------------------------------------------------------------------------
 # Service info endpoint
@@ -405,6 +406,8 @@ async def compute_path(body: dict, request: Request) -> dict:
         )
     except ConstraintError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except NoPathError as exc:  # the include search stopped at its bounds
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not routes:
         raise HTTPException(
             status_code=404,

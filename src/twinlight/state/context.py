@@ -72,6 +72,11 @@ class NoPathError(RmsaError):
     """No path exists between the requested SIPs."""
 
 
+class RouteSearchExhaustedError(NoPathError):
+    """The search through include constraints hit its bounds before finding
+    a route (``algorithms/routing.py``); a route may still exist."""
+
+
 class InsufficientSpectrumError(RmsaError):
     """No contiguous spectrum block available along the path."""
 
@@ -1311,7 +1316,7 @@ class TapiContext:
         """
         import networkx as nx
 
-        from twinlight.algorithms.routing import k_shortest_paths
+        from twinlight.algorithms.routing import RouteSearchExhausted, k_shortest_paths
 
         query = self._resolve_route_query(constraints, src, dst)
         graph, key_of = self._route_graph()
@@ -1330,19 +1335,27 @@ class TapiContext:
             return []  # an include the route graph does not contain
 
         candidates: list[list[str]] = []
-        if self._gnpy_network is not None:
+        if self._gnpy_network is not None and not query.include:
+            # GNPy's own route. With includes, compute_constrained_path filters
+            # every simple path for them, with no bound (it ran past 45 s on
+            # CORONET), so the bounded waypoint search below takes over.
             best = self._gnpy_best_path(view, src, dst, query.include)
             if best is not None:
                 candidates.append(best)
         if len(candidates) < k:
-            # Ranked as GNPy ranks: Yen's algorithm on the edge ``weight`` —
-            # fiber length (gnpy.tools.json_io.network_from_json) on both
-            # graphs — which is the search compute_constrained_path itself
-            # runs, so the best candidate above is also first here.
-            more = k_shortest_paths(
-                view, key_of(src), key_of(dst), k + len(candidates),
-                include=include_keys, weight="weight",
-            )
+            # Ranked as GNPy ranks: by the edge ``weight`` — fiber length
+            # (gnpy.tools.json_io.network_from_json) on both graphs. Without
+            # includes this is Yen's algorithm, the search
+            # compute_constrained_path itself runs, so the best candidate
+            # above is also first here; with includes, the bounded waypoint
+            # search finds the same best routes.
+            try:
+                more = k_shortest_paths(
+                    view, key_of(src), key_of(dst), k + len(candidates),
+                    include=include_keys, weight="weight",
+                )
+            except RouteSearchExhausted as exc:
+                raise RouteSearchExhaustedError(str(exc)) from exc
             for path in more:
                 uids = [getattr(n, "uid", n) for n in path]
                 if uids not in candidates:

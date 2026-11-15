@@ -300,7 +300,11 @@ refused.
 The same subset applies to `path-comp-service`, `connectivity-service` and
 `/internal/compute-path`. It is what GNPy's
 `gnpy.topology.request.compute_constrained_path` can express, plus exclusions,
-which are applied by searching a restricted view of the graph:
+which are applied by searching a restricted view of the graph. A route through
+includes is searched segment by segment between them, with bounds (25 ranked
+paths per segment, 5,000 in all, 2 s): within them the best routes are found
+exactly; past them, without a route yet, the request is a `409` saying the
+search stopped — a route may still exist — rather than that there is none:
 
 | Leaf | Supported |
 |------|-----------|

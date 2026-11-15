@@ -150,6 +150,11 @@ Details that are easy to get wrong and cost a debugging cycle:
   (`gnpy/tools/json_io.py`, `gnpy/core/network.py`). The twin's k-list is that
   same search; its `TopologyGraph` fallback carries the same weights.
   `tests/test_state/test_candidate_ranking.py` pins candidate 1 to GNPy's route.
+- With a `nodes_list`, `compute_constrained_path` filters *every* simple path
+  through `ispart`, with no bound: a far-off include runs for minutes. The twin
+  uses it only without includes; `algorithms/routing.py:waypoint_paths` (a
+  bounded segment-by-segment search, pinned to brute force in
+  `tests/test_algorithms/test_waypoint_search.py`) handles includes.
 - With an all-`LOOSE` `loose_list` it cannot satisfy, `compute_constrained_path`
   drops the constraints and returns the unconstrained route. The twin passes
   `STRICT` for every include.

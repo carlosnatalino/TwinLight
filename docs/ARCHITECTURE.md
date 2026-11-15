@@ -186,17 +186,23 @@ src/twinlight_client/    Companion client library and CLI
    stores each element's UID in the SIP's name list).
 2. Compute candidate paths under the service's `routing-constraint` and
    `topology-constraint` (`TapiContext.candidate_paths`;
-   `algorithms/path_constraints.py` decides what is supported). With a GNPy
-   network, GNPy's `compute_constrained_path` gives the best route —
-   includes become its strict `nodes_list` — on a `networkx.restricted_view`
-   that hides excluded nodes and links. GNPy has no k-shortest function, so
-   the other candidates come from the search `compute_constrained_path` itself
-   runs — `networkx.shortest_simple_paths(network, weight="weight")`, the
-   weight being the length of the fiber an edge leaves — over the same view,
-   and candidate 1 is therefore GNPy's route. Without a GNPy network (the EGN
-   backend), `algorithms/routing.py:k_shortest_paths` searches the parsed
-   topology graph, whose edges carry the same fiber-length weight. The
-   unconstrained best route is memoised in `_route_cache`.
+   `algorithms/path_constraints.py` decides what is supported). Exclusions
+   are applied by searching a `networkx.restricted_view` that hides the
+   excluded nodes and links. Without includes, and with a GNPy network,
+   GNPy's `compute_constrained_path` gives the best route; GNPy has no
+   k-shortest function, so the other candidates come from the search
+   `compute_constrained_path` itself runs —
+   `networkx.shortest_simple_paths(network, weight="weight")`, the weight
+   being the length of the fiber an edge leaves — and candidate 1 is
+   therefore GNPy's route. With includes, `compute_constrained_path` filters
+   every simple path for them with no bound (it ran past 45 s on CORONET), so
+   `algorithms/routing.py:waypoint_paths` builds the route segment by segment
+   between the includes instead: exact best routes, within bounds of 25
+   ranked paths per segment, 5,000 segment paths and 2 s, after which it
+   reports that it stopped (a `409` naming the bounds), never that no route
+   exists. Without a GNPy network (the EGN backend) the same searches run on
+   the parsed topology graph, whose edges carry the same fiber-length weight.
+   The unconstrained best route is memoised in `_route_cache`.
 3. For each of the `rmsa.k_shortest_paths` candidates, in order, and on each
    for the requested format — or every format from the highest spectral
    efficiency down when none is requested (`TapiContext._admit`): find a
