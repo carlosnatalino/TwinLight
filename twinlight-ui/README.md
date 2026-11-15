@@ -71,10 +71,14 @@ overrides the injected default. Make sure that origin is listed in the twin's
 - **Device detail** — full node view: NEP table, SIP badges, state indicators, connected links, OPM metrics
 - **Link detail** — endpoints with node resolution, span element table, state indicators
 - **Services** — service list, logical topology graph, spectrum allocation, delete with confirmation
-- **Add service** — SIP selection, modulation format, direction, admin and lifecycle state
+- **Add service** — A-end (SOURCE) and Z-end (SINK) SIPs, modulation format or automatic
+  selection, optional central frequency and launch power, ROADMs to pass through (in order)
+  or avoid, admin and lifecycle state. The request is built in `src/lib/serviceRequest.ts`;
+  its JSON is pinned by `src/__tests__/fixtures/add-service-request.*.json`, which the
+  backend suite posts to the API (`tests/test_api/test_ui_requests.py`)
 - **Monitoring** — time-series OPM dashboard (OSNR, GSNR, BER, Q-factor, CD, PMD) with configurable time ranges, pause/resume, CSV export and min/max/avg statistics
 - **Spectrum grid** — per-link slot allocation heat map with hover detail
-- **Path computation** — A/Z SIP selection, k-shortest paths, QoT estimate
+- **Path computation** — A/Z SIP selection, k-shortest paths, ROADMs to pass through or avoid, QoT estimate
 - **Equipment** — inventory list grouped and filterable by element type
 - **Settings** — twin URL, connection test, poll interval, cache management
 

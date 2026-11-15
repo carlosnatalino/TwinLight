@@ -1,0 +1,18 @@
+{
+  "tapi-connectivity:connectivity-service": {
+    "end-point": [
+      {
+        "local-id": "a-end",
+        "service-interface-point": { "service-interface-point-uuid": "<SIP trx A>" },
+        "direction": "SOURCE"
+      },
+      {
+        "local-id": "z-end",
+        "service-interface-point": { "service-interface-point-uuid": "<SIP trx C>" },
+        "direction": "SINK"
+      }
+    ],
+    "administrative-state": "UNLOCKED",
+    "lifecycle-state": "PLANNED"
+  }
+}

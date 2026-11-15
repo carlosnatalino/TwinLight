@@ -1,0 +1,56 @@
+{
+  "tapi-connectivity:connectivity-service": {
+    "name": [{ "value-name": "service-name", "value": "A to C via B" }],
+    "end-point": [
+      {
+        "local-id": "a-end",
+        "service-interface-point": { "service-interface-point-uuid": "<SIP trx A>" },
+        "direction": "SOURCE",
+        "layer-protocol-constraint": [
+          {
+            "local-id": "otsi",
+            "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
+              "otsi-config": [
+                {
+                  "local-id": "1",
+                  "modulation": { "standard-modulation-technique": "MT_DP-QAM16" },
+                  "central-frequency": 191306250000000,
+                  "channel-output-power": 150
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "local-id": "z-end",
+        "service-interface-point": { "service-interface-point-uuid": "<SIP trx C>" },
+        "direction": "SINK",
+        "layer-protocol-constraint": [
+          {
+            "local-id": "otsi",
+            "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
+              "otsi-config": [
+                {
+                  "local-id": "1",
+                  "modulation": { "standard-modulation-technique": "MT_DP-QAM16" },
+                  "central-frequency": 191306250000000,
+                  "channel-output-power": 150
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "topology-constraint": [
+      {
+        "local-id": "1",
+        "include-node": [{ "topology-uuid": "<TOPOLOGY>", "node-uuid": "<NODE roadm B>" }],
+        "exclude-node": [{ "topology-uuid": "<TOPOLOGY>", "node-uuid": "<NODE roadm D>" }]
+      }
+    ],
+    "administrative-state": "UNLOCKED",
+    "lifecycle-state": "PLANNED"
+  }
+}

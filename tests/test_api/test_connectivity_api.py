@@ -677,3 +677,12 @@ class TestRequestValidation:
         resp = app.post(f"{_BASE}/connectivity-service", json=body)
         assert resp.status_code == 422, resp.text
         assert "the twin models launch powers from -20 to 10 dBm" in resp.text
+
+
+def test_a_client_cannot_set_operational_state(app: TestClient) -> None:
+    sip_a, sip_z = _get_two_sip_uuids(app)
+    body = _create_service_payload(sip_a, sip_z)
+    body["tapi-connectivity:connectivity-service"]["operational-state"] = "DISABLED"
+    resp = app.post(f"{_BASE}/connectivity-service", json=body)
+    assert resp.status_code == 201
+    assert resp.json()["tapi-connectivity:connectivity-service"]["operational-state"] == "ENABLED"

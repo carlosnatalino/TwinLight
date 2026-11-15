@@ -145,9 +145,10 @@ directions: one service each way.
 | `otsia-connectivity-service-end-point-spec` | `total-power-warn-threshold-upper`, `total-power-warn-threshold-lower` | `number-of-otsi` = `1` |
 | `otsi-config` | `name`, `application-identifier`, `laser-control`, `otsi-threshold-power-config`, `power-management-config-pac` | — |
 
-Config-false leaves (`operational-state`, `lifecycle-state`, `connection`,
-`csep-role`, `connection-end-point`) belong to the server: they are ignored on
-input, so a body read with GET can be sent back as a PUT.
+Config-false leaves (`operational-state`, `connection`, `csep-role`,
+`connection-end-point`) belong to the server: they are ignored on input, so a
+body read with GET can be sent back as a PUT. `lifecycle-state` is kept as
+sent, and can be changed with `PATCH`.
 
 A service may carry the standard `routing-constraint` container and
 `topology-constraint` list; they constrain the route exactly as on a

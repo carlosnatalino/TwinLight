@@ -204,6 +204,9 @@ def _parse_service(body: dict) -> ConnectivityService:
                 + ". Remove these from the connectivity-service request" + hint
             ),
         )
+    # operational-state is config false and the twin's to decide (from the
+    # QoT): a client value is ignored, not stored.
+    raw = {key: value for key, value in raw.items() if key != "operational-state"}
     try:
         svc = ConnectivityService.model_validate(raw)
     except ValidationError as exc:

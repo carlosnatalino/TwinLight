@@ -179,7 +179,12 @@ export interface LayerProtocolConstraint {
   [OTSIA_CSEP_SPEC]?: {
     "otsi-config": {
       "local-id": string;
-      modulation: { "standard-modulation-technique": ModulationTechnique };
+      /** Absent in a request that leaves the format to admission; always on a read. */
+      modulation?: { "standard-modulation-technique": ModulationTechnique };
+      /** uint64, Hz. */
+      "central-frequency"?: number;
+      /** decimal64, 0.01 dBm. */
+      "channel-output-power"?: number;
     }[];
     "number-of-otsi"?: number;
   };
@@ -286,6 +291,7 @@ export interface CreateConnectivityServiceRequest {
   "tapi-connectivity:connectivity-service": {
     name?: NameAndValue[];
     "end-point": ConnectivityServiceEndPoint[];
+    "topology-constraint"?: Array<Record<string, unknown>>;
     "administrative-state": string;
     "lifecycle-state": string;
   };
