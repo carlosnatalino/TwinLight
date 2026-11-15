@@ -45,6 +45,7 @@ from twinlight.algorithms.path_constraints import (
 from twinlight.models.common import (
     AdministrativeState,
     Direction,
+    ForwardingDirection,
     LayerProtocolName,
     LifecycleState,
     NameAndValue,
@@ -138,11 +139,27 @@ class ConnectivityServiceEndPoint(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     local_id: str = Field(..., alias="local-id")
+    name: list[NameAndValue] = Field(default_factory=list)
     service_interface_point: SipRef = Field(..., alias="service-interface-point")
-    direction: Direction = Field(default=Direction.BIDIRECTIONAL)
+    layer_protocol_name: LayerProtocolName = Field(
+        default=LayerProtocolName.PHOTONIC_MEDIA, alias="layer-protocol-name",
+    )
+    # Reported, not requested: SOURCE for the end-point the lightpath leaves
+    # from, SINK for the one it reaches (set by ConnectivityService._stamp).
+    direction: Direction | None = None
     layer_protocol_constraint: list[LayerProtocolConstraint] = Field(
         default_factory=list, alias="layer-protocol-constraint"
     )
+
+    @model_serializer(mode="wrap")
+    def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """An empty name list and an unset direction are left out."""
+        data: dict[str, Any] = handler(self)
+        if not data.get("name"):
+            data.pop("name", None)
+        if data.get("direction") is None:
+            data.pop("direction", None)
+        return data
 
 
 class ConnectivityService(BaseModel):
@@ -152,6 +169,13 @@ class ConnectivityService(BaseModel):
 
     uuid: str = Field(default_factory=lambda: str(uuid_lib.uuid4()))
     name: list[NameAndValue] = Field(default_factory=list)
+    # The twin provisions photonic-media lightpaths from the first end-point
+    # to the second, so both leaves have one value; any other value is
+    # refused on the T-API surface (api/connectivity.py).
+    layer_protocol_name: LayerProtocolName = Field(
+        default=LayerProtocolName.PHOTONIC_MEDIA, alias="layer-protocol-name",
+    )
+    direction: ForwardingDirection = Field(default=ForwardingDirection.UNIDIRECTIONAL)
     end_point: list[ConnectivityServiceEndPoint] = Field(
         default_factory=list, alias="end-point"
     )
@@ -291,6 +315,38 @@ class ConnectivityService(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
+    def _source_first(cls, data: Any) -> Any:
+        """Order the end-points so the SOURCE one comes first.
+
+        Admission routes from the first end-point to the second. A client
+        may say which end is which through the end-point ``direction``
+        (SOURCE sends into the network, SINK receives from it); without it,
+        list order decides. Other values are refused by the API layer and
+        ignored here, so a snapshot from before directions were reported
+        still loads.
+
+        Raises:
+            ValueError: Both end-points are SOURCE, or both SINK.
+        """
+        if not isinstance(data, dict):
+            return data
+        end_points = data.get("end-point")
+        if not isinstance(end_points, list) or not all(
+            isinstance(ep, dict) for ep in end_points
+        ):
+            return data
+        directions = [ep.get("direction") for ep in end_points]
+        if directions.count("SOURCE") > 1 or directions.count("SINK") > 1:
+            raise ValueError(
+                "end-point direction: a lightpath has one SOURCE and one SINK "
+                f"end-point, got {directions}"
+            )
+        rank = {"SOURCE": 0, "SINK": 2}
+        data["end-point"] = sorted(end_points, key=lambda ep: rank.get(ep.get("direction"), 1))
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
     def _channel_from_end_points(cls, data: Any) -> Any:
         """Lift a requested spectrum and central frequency from the end-points.
 
@@ -394,7 +450,11 @@ class ConnectivityService(BaseModel):
                 ),
             ],
         )
-        for end_point in self.end_point:
+        self.layer_protocol_name = LayerProtocolName.PHOTONIC_MEDIA
+        self.direction = ForwardingDirection.UNIDIRECTIONAL
+        for index, end_point in enumerate(self.end_point):
+            end_point.layer_protocol_name = LayerProtocolName.PHOTONIC_MEDIA
+            end_point.direction = Direction.SOURCE if index == 0 else Direction.SINK
             end_point.layer_protocol_constraint = [
                 LayerProtocolConstraint(otsia_spec=spec)
             ]

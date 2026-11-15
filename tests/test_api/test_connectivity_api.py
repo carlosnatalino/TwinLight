@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import tapi_end_point
+from tests.conftest import MeshRefs, tapi_end_point
 from twinlight.models.connectivity import MCG_CSEP_SPEC, OTSIA_CSEP_SPEC
 
 _BASE = "/data/tapi-connectivity:connectivity-context"
@@ -389,39 +389,86 @@ class TestConstraints:
         assert "not found" in resp.text
 
 
-class TestNotImplementedContainers:
-    """connectivity-constraint and resilience-constraint are standard
-    v2.6.0 containers the twin does not implement: a request carrying either
-    fails rather than being admitted with them ignored."""
+def _spec(ep: dict) -> dict:
+    return ep["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]
+
+
+class TestUnimplementedLeaves:
+    """Standard v2.6.0 leaves the twin does not act on fail the request with
+    501 / operation-not-supported, naming each, rather than being admitted
+    and ignored. Leaves the twin supports at one value fail at any other."""
 
     def _body(self, app: TestClient, **extra) -> dict:
-        data = app.get("/data/tapi-common:context/service-interface-point").json()
-        sips = [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
+        sip_a, sip_z = _get_two_sip_uuids(app)
         return {"tapi-connectivity:connectivity-service": [{
-            "end-point": [tapi_end_point("a", sips[0]), tapi_end_point("z", sips[1])],
+            "end-point": [tapi_end_point("a", sip_a), tapi_end_point("z", sip_z)],
             **extra,
         }]}
 
-    @pytest.mark.parametrize("container", ["connectivity-constraint", "resilience-constraint"])
-    def test_create_is_refused(self, app: TestClient, container: str) -> None:
-        resp = app.post(f"{_BASE}/connectivity-service", json=self._body(app, **{container: {}}))
-        assert resp.status_code == 501
+    def _refusal(self, app: TestClient, body: dict) -> str:
+        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        assert resp.status_code == 501, resp.text
         error = resp.json()["ietf-restconf:errors"]["error"][0]
         assert error["error-tag"] == "operation-not-supported"
-        assert container in error["error-message"]
-        assert "not implemented" in error["error-message"]
         listed = app.get(f"{_BASE}/connectivity-service").json()
         assert listed["tapi-connectivity:connectivity-context"]["connectivity-service"] == []
+        return error["error-message"]
 
-    def test_both_are_named(self, app: TestClient) -> None:
-        body = self._body(app, **{
-            "connectivity-constraint": {"service-type": "POINT_TO_POINT_CONNECTIVITY"},
-            "resilience-constraint": {},
-        })
-        resp = app.post(f"{_BASE}/connectivity-service", json=body)
-        message = resp.json()["ietf-restconf:errors"]["error"][0]["error-message"]
-        assert resp.status_code == 501
-        assert "connectivity-constraint, resilience-constraint are not implemented" in message
+    @pytest.mark.parametrize("leaf", [
+        "connectivity-constraint", "resilience-constraint", "layer-protocol-qualifier",
+        "connectivity-service", "internal-point", "connectivity-protection-service",
+    ])
+    def test_service_leaf(self, app: TestClient, leaf: str) -> None:
+        message = self._refusal(app, self._body(app, **{leaf: {}}))
+        assert message.startswith("not implemented by this twin: ")
+        assert leaf in message
+
+    @pytest.mark.parametrize("leaf", [
+        "role", "capacity", "layer-protocol-qualifier", "protection-role",
+        "administrative-state", "profile",
+    ])
+    def test_end_point_leaf(self, app: TestClient, leaf: str) -> None:
+        body = self._body(app)
+        body["tapi-connectivity:connectivity-service"][0]["end-point"][1][leaf] = "X"
+        assert f"end-point[z]/{leaf}" in self._refusal(app, body)
+
+    @pytest.mark.parametrize(("where", "leaf"), [
+        ("lpc", "layer-protocol-qualifier"),
+        ("spec", "total-power-warn-threshold-upper"),
+        ("cfg", "laser-control"),
+        ("cfg", "application-identifier"),
+    ])
+    def test_photonic_leaf(self, app: TestClient, where: str, leaf: str) -> None:
+        body = self._body(app)
+        ep = body["tapi-connectivity:connectivity-service"][0]["end-point"][0]
+        node = {"lpc": ep["layer-protocol-constraint"][0], "spec": _spec(ep),
+                "cfg": _spec(ep)["otsi-config"][0]}[where]
+        node[leaf] = "X"
+        assert f"/{leaf}" in self._refusal(app, body)
+
+    @pytest.mark.parametrize(("place", "leaf", "value"), [
+        ("service", "direction", "BIDIRECTIONAL"),
+        ("service", "layer-protocol-name", "ODU"),
+        ("end-point", "direction", "BIDIRECTIONAL"),
+        ("end-point", "layer-protocol-name", "ETH"),
+        ("spec", "number-of-otsi", 2),
+    ])
+    def test_unsupported_value(self, app: TestClient, place: str, leaf: str, value) -> None:
+        body = self._body(app)
+        service = body["tapi-connectivity:connectivity-service"][0]
+        node = {"service": service, "end-point": service["end-point"][0],
+                "spec": _spec(service["end-point"][0])}[place]
+        node[leaf] = value
+        message = self._refusal(app, body)
+        assert f"{leaf}={value!r} (supported: " in message
+
+    def test_every_refusal_is_named(self, app: TestClient) -> None:
+        body = self._body(app, **{"connectivity-constraint": {}, "direction": "BIDIRECTIONAL"})
+        body["tapi-connectivity:connectivity-service"][0]["end-point"][0]["role"] = "ROOT"
+        message = self._refusal(app, body)
+        for part in ("connectivity-constraint", "direction='BIDIRECTIONAL'",
+                     "end-point[a]/role"):
+            assert part in message
 
     def test_replace_is_refused_and_keeps_the_service(self, app: TestClient) -> None:
         created = app.post(f"{_BASE}/connectivity-service", json=self._body(app))
@@ -431,3 +478,53 @@ class TestNotImplementedContainers:
                        json={"tapi-connectivity:connectivity-service": replacement})
         assert resp.status_code == 501
         assert app.get(f"{_BASE}/connectivity-service={service['uuid']}").status_code == 200
+
+    def test_a_get_body_is_accepted_back(self, app: TestClient) -> None:
+        """Every fixed leaf is reported at its supported value, so a client
+        that replaces a service with what it read gets no 501."""
+        created = app.post(f"{_BASE}/connectivity-service", json=self._body(app))
+        service = created.json()["tapi-connectivity:connectivity-service"]
+        assert service["direction"] == "UNIDIRECTIONAL"
+        assert service["layer-protocol-name"] == "PHOTONIC_MEDIA"
+        assert [ep["direction"] for ep in service["end-point"]] == ["SOURCE", "SINK"]
+        resp = app.put(f"{_BASE}/connectivity-service={service['uuid']}",
+                       json={"tapi-connectivity:connectivity-service": service})
+        assert resp.status_code in (200, 201), resp.text
+
+
+class TestEndPointDirection:
+    """The lightpath runs from the SOURCE end-point to the SINK one; without
+    a direction, from the first end-point to the second."""
+
+    def _create(self, app: TestClient, a: dict, z: dict):
+        return app.post(f"{_BASE}/connectivity-service",
+                        json={"tapi-connectivity:connectivity-service": [{"end-point": [a, z]}]})
+
+    def test_source_is_where_the_route_starts(self, mesh_app: TestClient) -> None:
+        ctx = mesh_app.app.state.context
+        refs = MeshRefs(ctx)
+        z = {**tapi_end_point("z", refs.sip("trx C")), "direction": "SOURCE"}
+        resp = self._create(mesh_app, tapi_end_point("a", refs.sip("trx A")), z)
+        assert resp.status_code == 201, resp.text
+        service = resp.json()["tapi-connectivity:connectivity-service"]
+        assert [(ep["local-id"], ep["direction"]) for ep in service["end-point"]] == [
+            ("z", "SOURCE"), ("a", "SINK"),
+        ]
+        path = ctx._allocated_path_uids(service["uuid"])
+        assert (path[0], path[-1]) == ("trx C", "trx A")
+
+    def test_two_sources_are_422(self, app: TestClient) -> None:
+        sip_a, sip_z = _get_two_sip_uuids(app)
+        resp = self._create(app, {**tapi_end_point("a", sip_a), "direction": "SOURCE"},
+                            {**tapi_end_point("z", sip_z), "direction": "SOURCE"})
+        assert resp.status_code == 422
+        assert "one SOURCE and one SINK" in resp.text
+
+    def test_end_point_name_is_kept(self, app: TestClient) -> None:
+        sip_a, sip_z = _get_two_sip_uuids(app)
+        name = [{"value-name": "port", "value": "client-1"}]
+        resp = self._create(app, {**tapi_end_point("a", sip_a), "name": name},
+                            tapi_end_point("z", sip_z))
+        end_points = resp.json()["tapi-connectivity:connectivity-service"]["end-point"]
+        assert end_points[0]["name"] == name
+        assert "name" not in end_points[1]

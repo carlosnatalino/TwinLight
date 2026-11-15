@@ -115,10 +115,28 @@ the format in effect. Without a physics backend there is no QoT to check, so a
 request that names no format gets DP-QPSK. A request that cannot be satisfied
 is a `409` listing every attempt, rather than an admission with a warning.
 
-The standard `connectivity-constraint` and `resilience-constraint` containers
-are not implemented: a create or PUT carrying either fails with `501`
-(`operation-not-supported`) naming them, rather than admitting a service that
-ignores them.
+A lightpath is one-way: it runs from the end-point marked `direction: SOURCE`
+to the one marked `SINK`, or, when neither says, from the first end-point to
+the second. Reads report what was provisioned: the service is
+`direction: UNIDIRECTIONAL` and `layer-protocol-name: PHOTONIC_MEDIA`, and the
+end-points are listed `SOURCE` first, then `SINK`. Two `SOURCE` (or two `SINK`)
+end-points are a `422`. An end-point `name` is kept and echoed.
+
+Standard leaves the twin does not act on fail the create or PUT with `501`
+(`operation-not-supported`). The error message names each one by path, so no
+service is admitted while ignoring part of the request:
+
+| Where | Refused when present | Refused unless |
+|-------|----------------------|----------------|
+| `connectivity-service` | `layer-protocol-qualifier`, `connectivity-constraint`, `resilience-constraint`, `connectivity-service`, `internal-point`, `connectivity-protection-service` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `UNIDIRECTIONAL` |
+| `end-point` | `layer-protocol-qualifier`, `role`, `protection-role`, `capacity`, `administrative-state`, the `peer-fwd-`, `server-`, `protecting-` and `assembled-connectivity-service-end-point` references, `profile`, `sink-profile`, `source-profile` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `SOURCE` or `SINK` |
+| `layer-protocol-constraint` | `layer-protocol-qualifier`, `name`, `tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec` | `layer-protocol-name` = `PHOTONIC_MEDIA` |
+| `otsia-connectivity-service-end-point-spec` | `total-power-warn-threshold-upper`, `total-power-warn-threshold-lower` | `number-of-otsi` = `1` |
+| `otsi-config` | `name`, `application-identifier`, `laser-control`, `otsi-threshold-power-config`, `power-management-config-pac` | — |
+
+Config-false leaves (`operational-state`, `lifecycle-state`, `connection`,
+`csep-role`, `connection-end-point`) belong to the server: they are ignored on
+input, so a body read with GET can be sent back as a PUT.
 
 A service may carry the standard `routing-constraint` container and
 `topology-constraint` list; they constrain the route exactly as on a
@@ -364,7 +382,7 @@ Errors under `/data/` use the RESTCONF format of
 | 404 | `data-missing` | An unknown resource |
 | 409 | `resource-denied` | Admission refused: no route, spectrum or QoT |
 | 422 | `invalid-value` | A body that does not validate, or a constraint or value the twin cannot honour |
-| 501 | `operation-not-supported` | A standard container the twin does not implement (`connectivity-constraint`, `resilience-constraint`) |
+| 501 | `operation-not-supported` | A standard leaf the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
 
 ### A note on percent-encoded colons
 

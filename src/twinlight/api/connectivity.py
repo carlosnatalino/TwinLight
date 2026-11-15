@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from twinlight.algorithms.path_constraints import ConstraintError
 from twinlight.models.connectivity import (
     MCG_CSEP_SPEC,
+    OTSIA_CSEP_SPEC,
     ConnectivityService,
     UpdateConnectivityServiceRequest,
 )
@@ -57,11 +58,95 @@ def _single_service(body: dict) -> dict:
     return raw
 
 
-# Containers of tapi-connectivity:connectivity-service (v2.6.0) that the twin
-# does not implement. They are standard, so a client may legitimately send
-# them; admitting the service while ignoring them would hand the client a
-# lightpath that does not honour what it asked for, so the request fails.
-_NOT_IMPLEMENTED = ("connectivity-constraint", "resilience-constraint")
+# What the twin implements of a connectivity-service request, level by level
+# (tapi-connectivity and tapi-photonic-media v2.6.0). A standard leaf the twin
+# does not act on is refused rather than ignored: admitting the service
+# without it would hand the client a lightpath that does not honour what it
+# asked for.
+#
+# _UNIMPLEMENTED: standard leaves refused whenever present.
+# _FIXED: standard leaves the twin supports at one value only (two for the
+#   end-point direction); any other value is refused. Each is reported at its
+#   value, so a GET body sent back as a PUT passes.
+# Leaves listed in neither are acted on (uuid, name, end-point, the routing
+# and topology constraints, administrative-state, the channel leaves, …) or
+# are config false (operational-state, lifecycle-state, connection, csep-role,
+# connection-end-point): state the server reports and ignores on input.
+_UNIMPLEMENTED: dict[str, tuple[str, ...]] = {
+    "connectivity-service": (
+        "layer-protocol-qualifier", "connectivity-constraint", "resilience-constraint",
+        "connectivity-service", "internal-point", "connectivity-protection-service",
+    ),
+    "end-point": (
+        "layer-protocol-qualifier", "role", "protection-role", "capacity",
+        "administrative-state", "peer-fwd-connectivity-service-end-point",
+        "server-connectivity-service-end-point",
+        "protecting-connectivity-service-end-point",
+        "assembled-connectivity-service-end-point",
+        "profile", "sink-profile", "source-profile",
+    ),
+    "layer-protocol-constraint": (
+        "layer-protocol-qualifier", "name",
+        "tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec",
+    ),
+    OTSIA_CSEP_SPEC: (
+        "total-power-warn-threshold-upper", "total-power-warn-threshold-lower",
+    ),
+    "otsi-config": (
+        "name", "application-identifier", "laser-control",
+        "otsi-threshold-power-config", "power-management-config-pac",
+    ),
+}
+# A lightpath runs from its SOURCE end-point to its SINK over one-way fibres,
+# so the service is UNIDIRECTIONAL (TapiContext.add_service).
+_FIXED: dict[str, dict[str, tuple[object, ...]]] = {
+    "connectivity-service": {
+        "layer-protocol-name": ("PHOTONIC_MEDIA",),
+        "direction": ("UNIDIRECTIONAL",),
+    },
+    "end-point": {
+        "layer-protocol-name": ("PHOTONIC_MEDIA",),
+        "direction": ("SOURCE", "SINK"),
+    },
+    "layer-protocol-constraint": {"layer-protocol-name": ("PHOTONIC_MEDIA",)},
+    OTSIA_CSEP_SPEC: {"number-of-otsi": (1,)},
+}
+
+
+def _entries(value: object) -> list[dict]:
+    """The object entries of a YANG list in a request (a lone object too)."""
+    items = value if isinstance(value, list) else [value]
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _unimplemented(raw: dict) -> list[str]:
+    """Paths of the unimplemented leaves in a connectivity-service request.
+
+    A leaf refused for its value, not its presence, carries the value and
+    the values the twin supports.
+    """
+    found: list[str] = []
+
+    def check(level: str, node: dict, at: str) -> None:
+        found.extend(f"{at}{key}" for key in _UNIMPLEMENTED[level] if key in node)
+        for key, allowed in _FIXED.get(level, {}).items():
+            if key in node and node[key] not in allowed:
+                supported = " or ".join(str(value) for value in allowed)
+                found.append(f"{at}{key}={node[key]!r} (supported: {supported})")
+
+    check("connectivity-service", raw, "")
+    for ep in _entries(raw.get("end-point") or []):
+        ep_at = f"end-point[{ep.get('local-id')}]/"
+        check("end-point", ep, ep_at)
+        for lpc in _entries(ep.get("layer-protocol-constraint") or []):
+            lpc_at = f"{ep_at}layer-protocol-constraint[{lpc.get('local-id')}]/"
+            check("layer-protocol-constraint", lpc, lpc_at)
+            for spec in _entries(lpc.get(OTSIA_CSEP_SPEC) or []):
+                spec_at = f"{lpc_at}{OTSIA_CSEP_SPEC}/"
+                check(OTSIA_CSEP_SPEC, spec, spec_at)
+                for cfg in _entries(spec.get("otsi-config") or []):
+                    check("otsi-config", cfg, f"{spec_at}otsi-config[{cfg.get('local-id')}]/")
+    return found
 
 
 def _parse_service(body: dict) -> ConnectivityService:
@@ -74,19 +159,18 @@ def _parse_service(body: dict) -> ConnectivityService:
 
     Raises:
         HTTPException: 501 (``operation-not-supported``) when the body
-            carries a container listed in ``_NOT_IMPLEMENTED``; 422 when it
-            does not validate.
+            carries a standard leaf the twin does not implement, naming
+            each (see ``_UNIMPLEMENTED`` and ``_FIXED``); 422 when it does
+            not validate.
     """
     raw = _single_service(body)
-    present = [key for key in _NOT_IMPLEMENTED if key in raw]
-    if present:
+    refused = _unimplemented(raw)
+    if refused:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=(
-                f"{', '.join(present)} {'is' if len(present) == 1 else 'are'} "
-                "not implemented by this twin; remove "
-                f"{'it' if len(present) == 1 else 'them'} from the "
-                "connectivity-service request"
+                "not implemented by this twin: " + "; ".join(refused)
+                + ". Remove these from the connectivity-service request"
             ),
         )
     try:
