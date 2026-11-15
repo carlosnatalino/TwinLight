@@ -302,7 +302,7 @@ class ConnectivityService(BaseModel):
                         continue
                     modulation = cfg["modulation"]
                     if not isinstance(modulation, dict):
-                        raise ValueError(
+                        raise ValueError(  # noqa: TRY004 — pydantic needs ValueError
                             "otsi-config/modulation must be an object, got "
                             f"{modulation!r}; leave it out to let admission "
                             "choose the format"
@@ -581,7 +581,7 @@ def _requested_media_channel(
     spectrum = pac.get("spectrum")
     band: tuple[int, int] | None = None
     if spectrum is not None and not isinstance(spectrum, dict):
-        raise ValueError(  # noqa: TRY004
+        raise ValueError(
             f"{where}/mc-spectrum-config-pac/spectrum must be an object"
         )
     if spectrum is not None:
