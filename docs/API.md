@@ -866,6 +866,70 @@ async with TapiStreamClient(endpoint.target, token) as stream:
 call metadata: gRPC's own call credentials refuse to travel over an insecure
 channel, and the twin serves no other.
 
+### A walkthrough of every feature
+
+[`examples/tapi_stream_walkthrough.py`](../examples/tapi_stream_walkthrough.py)
+does each TR-548 step in the open and prints what it sends and receives:
+credentials (`/internal/whoami`), RESTCONF and stream discovery, the oam-jobs and
+the services they measure, Capabilities, the calls the twin refuses (no token, a
+non-§6.3.4 subscription), a subscription that replays the last seconds of the log
+before its `sync_response`, one record decoded field by field (normalized and
+native types, units, value qualifiers), and a deliberate disconnect followed by
+an ST-6.4 resume that recovers the records logged meanwhile. `--fail-link` cuts a
+fiber on the service's path to show every measure turn `MISSING`, then restores
+it; `--follow` ends in `TapiStreamClient.follow`, the library's resume loop.
+
+```bash
+python examples/demo_services.py                      # a few services to measure
+python examples/tapi_stream_walkthrough.py --fail-link --follow
+python examples/tapi_stream_walkthrough.py --rest-url http://host:8080 \
+    --gnmi-target localhost:50051 --history 30        # behind a port mapping
+```
+
+Steps 5–10 use the raw gNMI stub rather than the library, so the protocol is
+visible; a test runs the whole script against a live twin with tokens.
+
+### Testing with gnmic
+
+[gnmic](https://gnmic.openconfig.net) (OpenConfig) is a general-purpose gNMI
+client, useful for checking the stream without any TwinLight code. Version
+0.49.1 has been tried against the twin; it runs from its container image:
+
+```bash
+gnmic() { docker run --rm ghcr.io/openconfig/gnmic:0.49.1 \
+  -a host.docker.internal:50051 --insecure \
+  -H "authorization=Bearer $TWINLIGHT_API_TOKEN" "$@"; }   # drop -H when auth is off
+
+gnmic capabilities
+gnmic -e proto subscribe --target tapi --path / --mode stream \
+  --stream-mode target-defined --updates-only                # the §6.3.4 subscription
+gnmic -e proto subscribe --target tapi --path / --stream-mode target-defined \
+  --updates-only --history-start $(( $(date +%s) - 60 ))000000000   # replay the last minute
+```
+
+It prints a `sync-response`, then one update per oam-job with the
+`MeasurementDetails` as base64 `proto_bytes`. Three things to know:
+
+- Send the token with `-H "authorization=Bearer …"`. gnmic's `--token` uses gRPC
+  call credentials, which are never sent over a plaintext channel.
+- `--proto-file` does not decode the payload (gnmic expects a Nokia root
+  message). Decode one with the vendored `.proto` and the `protoc` bundled in
+  `grpcio-tools`:
+
+  ```bash
+  echo '<proto_bytes value>' | base64 -d | python -m grpc_tools.protoc \
+      -I src/twinlight/streaming/proto --decode=tapi.MeasurementDetails \
+      tapi-streaming-performance.proto
+  ```
+
+- A rejected subscription (for example without `--updates-only`) appears only in
+  gnmic's log; add `-d` to see `InvalidArgument: subscribe.updates_only: must be
+  true (TR-548 §6.3.4)`.
+
+`host.docker.internal` reaches a twin on the host from Docker Desktop. Inside
+the Compose network, run the container with `--network <project>_default` and
+use `twin:50051` instead.
+
 ### Migrating from the earlier gNMI interface
 
 Earlier releases served REST resources as JSON_IETF over invented gNMI paths

@@ -330,6 +330,13 @@ dropped connection it resubscribes from its last record, so no sample is lost.
 See [docs/API.md § gNMI streaming](docs/API.md#gnmi-streaming), which also
 covers migrating from the earlier, custom gNMI paths.
 
+To see every step of the protocol — discovery, Capabilities, history replay,
+decoding, resume after a dropped connection, value qualifiers on a fiber cut —
+run [`examples/tapi_stream_walkthrough.py`](examples/tapi_stream_walkthrough.py)
+(`--fail-link --follow` for the full tour). Any gNMI client can subscribe too;
+[docs/API.md § Testing with gnmic](docs/API.md#testing-with-gnmic) shows the
+commands for [gnmic](https://gnmic.openconfig.net).
+
 ### Rehearse soft failures
 
 A soft failure is a slow degradation rather than a cut: a span's loss creeping
