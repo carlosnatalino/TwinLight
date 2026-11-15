@@ -283,6 +283,49 @@ class TestDeprecatedSnapshot:
         again = ctx.restore_from(path)
         assert len(again) == 1 and "out-of-band" in again[0]
 
+    def test_a_read_only_file_is_restored_not_rewritten(self, tmp_path) -> None:
+        """A checkpoint on a read-only mount: the restore succeeds, the
+        migration is skipped with a warning, the file is left as it was."""
+        from fastapi.testclient import TestClient
+
+        from tests.conftest import _mesh_config
+        from twinlight.app import create_app
+
+        client = TestClient(create_app(_mesh_config(tmp_path, "egn")))
+        ctx = client.app.state.context
+        mount = tmp_path / "ro"
+        mount.mkdir()
+        path = mount / "checkpoint.json"
+        uuid = _v1_snapshot(ctx, path)
+        original = path.read_text()
+        mount.chmod(0o555)
+        try:
+            resp = client.post("/admin/restore", json={"path": str(path)})
+        finally:
+            mount.chmod(0o755)
+        assert resp.status_code == 200
+        warning = resp.json()["warnings"][0]
+        assert "could not be rewritten" in warning and "stays at version 1" in warning
+        assert path.read_text() == original
+        assert ctx.get_service(uuid) is not None
+
+    def test_an_unreadable_file_is_a_400(self, tmp_path) -> None:
+        from fastapi.testclient import TestClient
+
+        from tests.conftest import _mesh_config
+        from twinlight.app import create_app
+
+        client = TestClient(create_app(_mesh_config(tmp_path, "egn")))
+        path = tmp_path / "secret.json"
+        path.write_text("{}")
+        path.chmod(0o000)
+        try:
+            resp = client.post("/admin/restore", json={"path": str(path)})
+        finally:
+            path.chmod(0o644)
+        assert resp.status_code == 400
+        assert "Cannot read snapshot" in resp.text
+
     def test_the_api_reports_it(self, tmp_path) -> None:
         from fastapi.testclient import TestClient
 

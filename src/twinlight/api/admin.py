@@ -89,6 +89,11 @@ async def restore_snapshot(request: Request, body: dict) -> dict:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from e
+    except OSError as e:  # raised reading the file, before any state changed
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot read snapshot {path}: {e.strerror or e}",
+        ) from e
     # A deprecated snapshot was rewritten in place; services outside their
     # amplifier band were restored DISABLED. Both are reported, not hidden.
     return {
