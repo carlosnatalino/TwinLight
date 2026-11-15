@@ -196,11 +196,22 @@ src/twinlight_client/    Companion client library and CLI
    being the length of the fiber an edge leaves — and candidate 1 is
    therefore GNPy's route. With includes, `compute_constrained_path` filters
    every simple path for them with no bound (it ran past 45 s on CORONET), so
-   `algorithms/routing.py:waypoint_paths` builds the route segment by segment
-   between the includes instead: exact best routes, within bounds of 25
-   ranked paths per segment, 5,000 segment paths and 2 s, after which it
-   reports that it stopped (a `409` naming the bounds), never that no route
-   exists. Without a GNPy network (the EGN backend) the same searches run on
+   `algorithms/routing.py:waypoint_paths` runs a branch and bound instead. It
+   extends the route one junction (ROADM, end transceiver, include) at a time,
+   with each link direction's amplifiers and fibers contracted into one arc.
+   It drops a partial route once its length plus a lower bound on the rest
+   cannot beat the k-th best found. The bound is the shortest distance once
+   every include is visited, and before that a min-cost flow over the
+   remaining includes on the node-split graph. With one include left, that
+   flow is Suurballe's disjoint pair, exact when links cost the same both
+   ways. A bound never exceeds the true length, so the answer is exact: the k
+   shortest routes, or none when none exists. Each search has a budget of
+   3,000 bound evaluations (about 1.6 s on CORONET), with a 3 s time
+   backstop. If the budget runs out first, the request is a `409` saying so,
+   never a route that may not be the best and never "no route". On CORONET,
+   one include takes at most about 0.1 s for k = 5. Two or three includes in
+   random order across the continent sometimes run out of budget, mostly when
+   proving that no route exists. Without a GNPy network (the EGN backend) the same searches run on
    the parsed topology graph, whose edges carry the same fiber-length weight.
    The unconstrained best route is memoised in `_route_cache`.
 3. For each of the `rmsa.k_shortest_paths` candidates, in order, and on each

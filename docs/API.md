@@ -302,10 +302,11 @@ The same subset applies to `path-comp-service`, `connectivity-service` and
 `/internal/compute-path`. It is what GNPy's
 `gnpy.topology.request.compute_constrained_path` can express, plus exclusions,
 which are applied by searching a restricted view of the graph. A route through
-includes is searched segment by segment between them, with bounds (25 ranked
-paths per segment, 5,000 in all, 2 s): within them the best routes are found
-exactly; past them, without a route yet, the request is a `409` saying the
-search stopped — a route may still exist — rather than that there is none:
+includes is the exact shortest one (and the next k − 1), or none when none
+exists. The search has a budget (3,000 steps, about 1.6 s on CORONET; 3 s at
+most). If the budget runs out before the search has proven its answer, the
+request is a `409` saying so. In that case a route may exist, and the twin
+does not claim either way:
 
 | Leaf | Supported |
 |------|-----------|

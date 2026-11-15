@@ -406,7 +406,7 @@ async def compute_path(body: dict, request: Request) -> dict:
         )
     except ConstraintError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except NoPathError as exc:  # the include search stopped at its bounds
+    except NoPathError as exc:  # the include search ran out of budget
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not routes:
         raise HTTPException(

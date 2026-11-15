@@ -1338,7 +1338,7 @@ class TapiContext:
         if self._gnpy_network is not None and not query.include:
             # GNPy's own route. With includes, compute_constrained_path filters
             # every simple path for them, with no bound (it ran past 45 s on
-            # CORONET), so the bounded waypoint search below takes over.
+            # CORONET), so the exact waypoint search below takes over.
             best = self._gnpy_best_path(view, src, dst, query.include)
             if best is not None:
                 candidates.append(best)
@@ -1347,8 +1347,8 @@ class TapiContext:
             # (gnpy.tools.json_io.network_from_json) on both graphs. Without
             # includes this is Yen's algorithm, the search
             # compute_constrained_path itself runs, so the best candidate
-            # above is also first here; with includes, the bounded waypoint
-            # search finds the same best routes.
+            # above is also first here; with includes, the exact waypoint
+            # search finds the shortest routes through them.
             try:
                 more = k_shortest_paths(
                     view, key_of(src), key_of(dst), k + len(candidates),

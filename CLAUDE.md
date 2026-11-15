@@ -152,9 +152,10 @@ Details that are easy to get wrong and cost a debugging cycle:
   `tests/test_state/test_candidate_ranking.py` pins candidate 1 to GNPy's route.
 - With a `nodes_list`, `compute_constrained_path` filters *every* simple path
   through `ispart`, with no bound: a far-off include runs for minutes. The twin
-  uses it only without includes; `algorithms/routing.py:waypoint_paths` (a
-  bounded segment-by-segment search, pinned to brute force in
-  `tests/test_algorithms/test_waypoint_search.py`) handles includes.
+  uses it only without includes; `algorithms/routing.py:waypoint_paths` (an
+  exact branch and bound with a step budget, pinned to brute force and to a
+  min-cost-flow optimum in `tests/test_algorithms/test_waypoint_search.py`)
+  handles includes.
 - With an all-`LOOSE` `loose_list` it cannot satisfy, `compute_constrained_path`
   drops the constraints and returns the unconstrained route. The twin passes
   `STRICT` for every include.
