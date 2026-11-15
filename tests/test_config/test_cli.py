@@ -517,3 +517,90 @@ class TestParserStructure:
         with pytest.raises(SystemExit) as exc_info:
             parser.parse_args(["--help"])
         assert exc_info.value.code == 0
+
+
+# ===========================================================================
+# API tokens
+# ===========================================================================
+
+_UI = "ui-token-0123456789abcdef"
+_ONOS = "onos-token-0123456789abcdef"
+
+
+class TestApiTokens:
+    """Tokens come from the environment or a dotenv file, never from YAML."""
+
+    @pytest.fixture
+    def topo(self, tmp_path: Path) -> Path:
+        topo = tmp_path / "net.json"
+        topo.write_text("{}")
+        return topo
+
+    def test_none_by_default(self, topo: Path) -> None:
+        config = load_config(["--topology", str(topo)])
+        assert config.api_tokens == ()
+
+    def test_from_the_environment(
+        self, topo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TWINLIGHT_API_TOKENS", f"ui:{_UI}")
+        config = load_config(["--topology", str(topo)])
+        assert [t.name for t in config.api_tokens] == ["ui"]
+
+    def test_from_the_default_dotenv(
+        self, topo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = tmp_path / ".env"
+        env.write_text(f"TWINLIGHT_API_TOKENS=ui:{_UI},onos:{_ONOS}\n")
+        monkeypatch.setattr("twinlight.auth.DEFAULT_ENV_FILE", env)
+        config = load_config(["--topology", str(topo)])
+        assert [t.name for t in config.api_tokens] == ["ui", "onos"]
+
+    def test_from_env_file_flag(self, topo: Path, tmp_path: Path) -> None:
+        env = tmp_path / "lab.env"
+        env.write_text(f"TWINLIGHT_API_TOKENS=onos:{_ONOS}\n")
+        config = load_config(["--topology", str(topo), "--env-file", str(env)])
+        assert [t.name for t in config.api_tokens] == ["onos"]
+
+    def test_environment_beats_the_file(
+        self, topo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = tmp_path / "lab.env"
+        env.write_text(f"TWINLIGHT_API_TOKENS=onos:{_ONOS}\n")
+        monkeypatch.setenv("TWINLIGHT_API_TOKENS", f"ui:{_UI}")
+        config = load_config(["--topology", str(topo), "--env-file", str(env)])
+        assert [t.name for t in config.api_tokens] == ["ui"]
+
+    def test_missing_env_file_is_an_error(self, topo: Path, tmp_path: Path) -> None:
+        with pytest.raises(SystemExit):
+            load_config(
+                ["--topology", str(topo), "--env-file", str(tmp_path / "nope.env")]
+            )
+
+    def test_yaml_cannot_carry_tokens(self, tmp_path: Path, topo: Path) -> None:
+        cfg = _write_yaml(
+            tmp_path, {"gnpy": {"topology": str(topo)}, "api_tokens": [_UI]}
+        )
+        with pytest.raises(SystemExit):
+            load_config(["--config", str(cfg)])
+
+    def test_invalid_token_fails_without_echoing_it(
+        self, topo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        secret = "too-short"
+        monkeypatch.setenv("TWINLIGHT_API_TOKENS", f"ui:{secret},ops:{_UI},dup:{_UI}")
+        with pytest.raises(SystemExit):
+            load_config(["--topology", str(topo)])
+        err = capsys.readouterr().err
+        assert "TWINLIGHT_API_TOKENS" in err
+        assert secret not in err
+        assert _UI not in err
+
+    def test_tokens_never_leave_the_config(
+        self, topo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TWINLIGHT_API_TOKENS", f"ui:{_UI}")
+        config = load_config(["--topology", str(topo)])
+        assert "api_tokens" not in config.model_dump()
+        assert _UI not in config.model_dump_json()
+        assert _UI not in repr(config)

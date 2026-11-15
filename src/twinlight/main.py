@@ -11,6 +11,7 @@ from typing import Any
 import uvicorn
 
 from twinlight.app import create_app
+from twinlight.auth import TOKENS_ENV_VAR, TokenAuthenticator
 from twinlight.cli import load_config
 from twinlight.config import TwinConfig
 from twinlight.grpc_server import start_grpc_server
@@ -25,6 +26,26 @@ def configure_logging(config: TwinConfig) -> None:
         format=config.logging.format,
         force=True,
     )
+
+
+def log_auth_mode(authenticator: TokenAuthenticator) -> None:
+    """Say at startup whether the interfaces require a token.
+
+    A warning when they do not, whatever ``rest_host`` is: the gRPC server
+    always binds every interface, so an open twin is reachable from the
+    network on its gNMI port even when REST listens on loopback only.
+    """
+    if authenticator.enabled:
+        logger.info(
+            "Authentication: bearer token required on REST and gNMI "
+            "(%d token(s): %s)",
+            len(authenticator.principals), ", ".join(authenticator.principals),
+        )
+    else:
+        logger.warning(
+            "Authentication: disabled — REST and gNMI accept any client. "
+            "Set %s to require a token.", TOKENS_ENV_VAR,
+        )
 
 
 def archive_checkpoint(config: TwinConfig) -> None:
@@ -96,12 +117,12 @@ async def async_main() -> None:
     streaming = config.streaming
     log.info(
         "Measurement stream (T-API over gNMI): sample_interval_s=%g "
-        "record_retention_min=%d auth=%s connection-address=%s",
+        "record_retention_min=%d connection-address=%s",
         streaming.sample_interval_s,
         streaming.record_retention_min,
-        "bearer token required" if streaming.auth_token.get_secret_value() else "disabled",
         streaming.connection_address(config.server.grpc_port),
     )
+    log_auth_mode(app.state.authenticator)
 
     uvicorn_config = uvicorn.Config(
         app,

@@ -21,6 +21,11 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from twinlight.auth import (
+    DEFAULT_ENV_FILE,
+    TOKENS_ENV_VAR,
+    load_tokens,
+)
 from twinlight.config import TwinConfig
 
 _logger = logging.getLogger(__name__)
@@ -93,6 +98,20 @@ def build_parser() -> argparse.ArgumentParser:
     server_group.add_argument("--rest-host", type=str, default=None)
     server_group.add_argument("--rest-port", type=int, default=None)
     server_group.add_argument("--grpc-port", type=int, default=None)
+
+    # -- Authentication ---------------------------------------------------
+    auth_group = parser.add_argument_group(
+        "Authentication",
+        f"REST and gNMI require a bearer token when {TOKENS_ENV_VAR} is set, "
+        "in the environment or in a dotenv file; without it both are open. "
+        "Tokens are never read from the YAML config.",
+    )
+    auth_group.add_argument(
+        "--env-file", type=Path, default=None, metavar="FILE",
+        help=f"Dotenv file to read {TOKENS_ENV_VAR} from, instead of "
+             f"./{DEFAULT_ENV_FILE}. A variable already set in the "
+             "environment takes precedence over the file.",
+    )
 
     # -- Simulation -------------------------------------------------------
     sim_group = parser.add_argument_group("Simulation")
@@ -349,13 +368,45 @@ def load_config(argv: list[str] | None = None) -> TwinConfig:
     # Step 4: Decide what state to start from
     _resolve_startup_state(merged, args, parser)
 
-    # Step 5: Validate with Pydantic
+    # Step 5: Load the API tokens — from the environment, never the YAML
+    _load_api_tokens(merged, args, parser)
+
+    # Step 6: Validate with Pydantic
     try:
         config = TwinConfig(**merged)
     except ValidationError as e:
         parser.error(f"Configuration validation failed:\n{e}")
 
     return config
+
+
+def _load_api_tokens(
+    merged: dict[str, Any],
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Set ``api_tokens`` on the merged config from the environment.
+
+    A YAML file that tries to carry tokens is refused rather than ignored:
+    scenario files are committed next to their topologies, and quietly
+    accepting a secret there is how it ends up in git history.
+    """
+    if "api_tokens" in merged:
+        parser.error(
+            "api_tokens cannot be set in the YAML config: tokens are secrets. "
+            f"Set {TOKENS_ENV_VAR} in the environment or in a .env file."
+        )
+
+    env_file: Path | None = args.env_file
+    if env_file is not None and not env_file.is_file():
+        parser.error(f"--env-file not found: {env_file}")
+
+    try:
+        merged["api_tokens"] = load_tokens(env_file)
+    except OSError as exc:  # an env file that exists but cannot be read
+        parser.error(f"Could not read {env_file or DEFAULT_ENV_FILE}: {exc}")
+    except ValueError as exc:  # parse_tokens' message never echoes a secret
+        parser.error(str(exc))
 
 
 def _snapshot_dir_of(merged: dict[str, Any]) -> Path:

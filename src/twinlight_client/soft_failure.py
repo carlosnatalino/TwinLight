@@ -67,6 +67,11 @@ import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 
 from twinlight.state.parameter_ops import ParameterChange
+from twinlight_client.credentials import (
+    add_token_argument,
+    bearer_headers,
+    resolve_token,
+)
 
 SET_URL = "/config/parameters"
 CHANGES_URL = "/config/parameters/changes"
@@ -541,6 +546,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--rest-url", default="http://localhost:8080",
         help="TwinLight REST base URL (default: %(default)s)",
     )
+    add_token_argument(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("params", help="list the parameters a path resolves to")
@@ -659,7 +665,10 @@ def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> i
     try:
         if client is not None:
             return run_command(args, client)
-        with httpx.Client(base_url=args.rest_url, timeout=30.0) as http:
+        headers = bearer_headers(resolve_token(args.token))
+        with httpx.Client(
+            base_url=args.rest_url, timeout=30.0, headers=headers
+        ) as http:
             return run_command(args, http)
     except ScenarioError as exc:
         print(f"error: {exc}", file=sys.stderr)

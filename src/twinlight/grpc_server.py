@@ -8,7 +8,9 @@ import logging
 import grpc
 from fastapi import FastAPI
 
-from twinlight.streaming.gnmi_service import BearerTokenInterceptor, TapiGnmiServicer
+from twinlight.auth import TokenAuthenticator
+from twinlight.streaming.gnmi_service import TapiGnmiServicer
+from twinlight.streaming.interceptors import TokenAuthInterceptor
 from twinlight.streaming.proto import gnmi_pb2_grpc
 
 logger = logging.getLogger(__name__)
@@ -17,9 +19,14 @@ DEFAULT_GRPC_GRACE_S: float = 5.0
 
 
 def build_grpc_server(app: FastAPI) -> grpc.aio.Server:
-    """A gRPC server serving gNMI for ``app``, with auth if a token is set."""
-    token = app.state.config.streaming.auth_token.get_secret_value()
-    interceptors = [BearerTokenInterceptor(token)] if token else []
+    """A gRPC server serving gNMI for ``app``, not yet bound or started.
+
+    The token interceptor uses the authenticator ``create_app`` attached to
+    ``app.state``, so gNMI accepts exactly the tokens REST does. Without
+    tokens no interceptor is installed and calls go straight to the servicer.
+    """
+    authenticator: TokenAuthenticator = app.state.authenticator
+    interceptors = [TokenAuthInterceptor(authenticator)] if authenticator.enabled else []
     server = grpc.aio.server(interceptors=interceptors)
     gnmi_pb2_grpc.add_gNMIServicer_to_server(
         TapiGnmiServicer(app.state.measurement_stream), server
@@ -37,8 +44,8 @@ async def start_grpc_server(
     """Start the gNMI gRPC server for ``app``'s measurement stream.
 
     The servicer reads the stream's record log directly: values never pass
-    through REST. When ``streaming.auth_token`` is set, every call must carry
-    it as a bearer token.
+    through REST. When API tokens are configured, every call must carry one
+    as a bearer token.
 
     If shutdown_event is set, the server will stop gracefully (stop with
     grace_seconds, then close). Otherwise it runs until wait_for_termination().

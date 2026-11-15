@@ -43,8 +43,6 @@ from dataclasses import dataclass, field
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
 
-from pydantic import SecretStr
-
 from twinlight.physics.backend import element_kind_name
 from twinlight.transparent.path import Segment, format_path
 
@@ -207,13 +205,7 @@ class Branch(Node):
 
 
 def jsonable(value: Any) -> Any:
-    """Make a leaf value JSON-friendly (enums, paths, numpy scalars).
-
-    A ``SecretStr`` (the streaming auth token) renders as its mask: the
-    controller is transparent about the twin's model, not its credentials.
-    """
-    if isinstance(value, SecretStr):
-        return str(value)
+    """Make a leaf value JSON-friendly (enums, paths, numpy scalars)."""
     if isinstance(value, enum.Enum):
         return value.value
     if isinstance(value, PurePath):

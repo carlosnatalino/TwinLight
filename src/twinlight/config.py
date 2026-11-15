@@ -31,10 +31,11 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    SecretStr,
     field_validator,
     model_validator,
 )
+
+from twinlight.auth import ApiToken
 
 
 class ClockMode(str, Enum):
@@ -369,7 +370,10 @@ _CONNECTION_ADDRESS = re.compile(r"^grpc://[^\s/:]+:[0-9]{1,5}$|^grpc://\[[0-9a-
 
 
 class StreamingConfig(BaseModel):
-    """The measurement stream's log, cadence, authentication and address."""
+    """The measurement stream's log, cadence and address.
+
+    Authentication is twin-wide, not per interface: see ``api_tokens``.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -387,13 +391,6 @@ class StreamingConfig(BaseModel):
             "Minutes a record stays in the truncated log, and so how long a "
             "client may be disconnected and still resume without loss (TR-548 "
             "ST-6.4). Published as the stream type's record-retention."
-        ),
-    )
-    auth_token: SecretStr = Field(
-        default=SecretStr(""),
-        description=(
-            "Bearer token required on every gNMI call as 'authorization: "
-            "Bearer <token>' metadata. Empty disables authentication."
         ),
     )
     advertised_address: str = Field(
@@ -471,6 +468,11 @@ class TwinConfig(BaseModel):
     # operation the flag implies (moving an existing checkpoint aside) belongs
     # with the other startup side effects in main.py, not in a config loader.
     reset: bool = Field(default=False, exclude=True)
+    # The accepted API tokens. Never from YAML: cli.load_config() reads them
+    # from TWINLIGHT_API_TOKENS or a .env file (see twinlight.auth). Empty
+    # means authentication is off. Excluded from dumps and repr so a config
+    # that is logged or serialised never carries a secret.
+    api_tokens: tuple[ApiToken, ...] = Field(default=(), exclude=True, repr=False)
 
     def checkpoint_path(self) -> Path:
         """Absolute-ish path of the shutdown checkpoint."""

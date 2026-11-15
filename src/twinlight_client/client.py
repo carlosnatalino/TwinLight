@@ -6,6 +6,8 @@ from typing import Any, Self
 
 import httpx
 
+from twinlight_client.credentials import bearer_headers
+
 
 class TapiClient:
     """Async HTTP client wrapping all T-API REST endpoints."""
@@ -13,8 +15,13 @@ class TapiClient:
     _BASE = "/data/tapi-common:context"
     _TOPO = f"{_BASE}/tapi-topology:topology-context"
 
-    def __init__(self, base_url: str = "http://localhost:8080") -> None:
-        self._client = httpx.AsyncClient(base_url=base_url)
+    def __init__(
+        self, base_url: str = "http://localhost:8080", token: str | None = None
+    ) -> None:
+        """``token`` is sent as ``Authorization: Bearer <token>`` on every
+        request; leave it None for a twin with authentication disabled."""
+        headers = bearer_headers(token)
+        self._client = httpx.AsyncClient(base_url=base_url, headers=headers)
 
     async def close(self) -> None:
         await self._client.aclose()

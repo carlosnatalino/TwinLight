@@ -1,4 +1,4 @@
-"""The ``streaming`` config section: defaults, validation, token masking."""
+"""The ``streaming`` config section: defaults and validation."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from twinlight.app import create_app
+from twinlight.auth import parse_tokens
 from twinlight.config import StreamingConfig, TwinConfig
 
 
@@ -16,7 +17,6 @@ def test_defaults() -> None:
     cfg = StreamingConfig()
     assert cfg.sample_interval_s == 1.0
     assert cfg.record_retention_min == 5
-    assert cfg.auth_token.get_secret_value() == ""
     assert cfg.advertised_address == ""
 
 
@@ -50,17 +50,19 @@ def test_rejects_bad_values(field: str, value: object) -> None:
         StreamingConfig(**{field: value})
 
 
-def test_token_is_masked_by_the_transparent_controller(
+def test_tokens_never_reach_the_transparent_controller(
     twin_config: TwinConfig,
 ) -> None:
-    """The controller exposes every config leaf; the token only as its mask."""
-    twin_config.streaming.auth_token = StreamingConfig(
-        auth_token="s3cret"
-    ).auth_token
+    """The controller exposes every config leaf, but not the API tokens."""
+    token = "s3cret-token-0123456789"
+    twin_config.api_tokens = parse_tokens(token)
     client = TestClient(create_app(twin_config))
-    resp = client.get("/transparent/data/Config/streaming")
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = client.get("/transparent/data/Config/streaming", headers=headers)
     assert resp.status_code == 200
-    body = resp.json()["twinlight-transparent:data"]["Config"]["streaming"]
-    assert body["auth_token"] == "**********"
+    assert "auth_token" not in resp.json()["twinlight-transparent:data"]["Config"]["streaming"]
     for path in ("/transparent/data", "/transparent/schema"):
-        assert "s3cret" not in client.get(path).text
+        body = client.get(path, headers=headers)
+        assert body.status_code == 200
+        assert token not in body.text
+        assert "api_tokens" not in body.text

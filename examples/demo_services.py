@@ -14,6 +14,9 @@ on Windows, macOS and Linux::
     python examples/demo_services.py -n 5            # five per format
     python examples/demo_services.py --base-url http://host:8080 --attempts 300
 
+Against a twin with authentication enabled, export ``TWINLIGHT_API_TOKEN``
+(or pass ``--token``) with one of the tokens in its ``TWINLIGHT_API_TOKENS``.
+
 Endpoint pairs are retried because admission is genuinely allowed to fail: a
 409 means no route, no contiguous spectrum, or a GSNR below the format's
 threshold. Higher-order formats need more GSNR, so DP-64QAM usually takes more
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import urllib.request
 from urllib.error import HTTPError
@@ -156,12 +160,31 @@ def main() -> None:
         default=300,
         help="Endpoint pairs to try per service before giving up (default: %(default)s)",
     )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("TWINLIGHT_API_TOKEN"),
+        help="API token for a twin with authentication enabled "
+        "(default: $TWINLIGHT_API_TOKEN)",
+    )
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
 
-    ctx = json.load(
-        urllib.request.urlopen(f"{base}/data/tapi-common:context/service-interface-point")
-    )
+    if args.token:
+        # Every urlopen() below, Request objects included, goes through this.
+        opener = urllib.request.build_opener()
+        opener.addheaders.append(("Authorization", f"Bearer {args.token}"))
+        urllib.request.install_opener(opener)
+
+    try:
+        ctx = json.load(
+            urllib.request.urlopen(f"{base}/data/tapi-common:context/service-interface-point")
+        )
+    except HTTPError as exc:
+        if exc.code == 401:
+            raise SystemExit(
+                f"{base} requires an API token: set TWINLIGHT_API_TOKEN or pass --token"
+            ) from None
+        raise
     sips = ctx["tapi-common:context"]["service-interface-point"]
     if len(sips) < 2:
         raise SystemExit("Need at least 2 service interface points")

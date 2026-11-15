@@ -11,7 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.test_streaming.test_gnmi_service import Twin, start_twin
-from twinlight.config import StreamingConfig, TwinConfig
+from twinlight.auth import parse_tokens
+from twinlight.config import TwinConfig
 from twinlight.grpc_server import build_grpc_server
 from twinlight.models.oam import oam_job_uuid
 from twinlight_client.client import TapiClient
@@ -26,6 +27,7 @@ from twinlight_client.streaming import (
 )
 
 TIMEOUT = 5.0
+TOKEN = "s3cret-token-0123456789"
 
 
 def _rest(twin: Twin) -> TapiClient:
@@ -126,24 +128,24 @@ async def test_records_are_decoded_and_filtered_by_job(twin: Twin) -> None:
 
 
 async def test_token_is_sent_as_bearer_metadata(twin_config: TwinConfig) -> None:
-    twin_config.streaming = StreamingConfig(auth_token="s3cret")
-    twin = await start_twin(twin_config)
+    twin_config.api_tokens = parse_tokens(TOKEN)
+    twin = await start_twin(twin_config, token=TOKEN)
     try:
         async with TapiStreamClient(twin.target) as anonymous:
             with pytest.raises(grpc.aio.AioRpcError) as info:
                 await anonymous.capabilities()
             assert info.value.code() == grpc.StatusCode.UNAUTHENTICATED
-        async with TapiStreamClient(twin.target, token="s3cret") as client:
+        async with TapiStreamClient(twin.target, token=TOKEN) as client:
             assert (await client.capabilities())["gnmi_version"]
     finally:
         await twin.close()
 
 
 async def test_follow_does_not_retry_a_rejection(twin_config: TwinConfig) -> None:
-    twin_config.streaming = StreamingConfig(auth_token="s3cret")
-    twin = await start_twin(twin_config)
+    twin_config.api_tokens = parse_tokens(TOKEN)
+    twin = await start_twin(twin_config, token=TOKEN)
     try:
-        async with TapiStreamClient(twin.target, token="wrong") as client:
+        async with TapiStreamClient(twin.target, token="wrong-token-0123456789") as client:
             with pytest.raises(grpc.aio.AioRpcError) as info:
                 await take(client.follow(retry_delay_s=0.01), 1)
             assert info.value.code() == grpc.StatusCode.UNAUTHENTICATED

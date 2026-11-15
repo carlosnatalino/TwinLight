@@ -12,7 +12,8 @@ import pytest
 
 from tests.conftest import tapi_end_point
 from twinlight.app import create_app
-from twinlight.config import StreamingConfig, TwinConfig
+from twinlight.auth import parse_tokens
+from twinlight.config import TwinConfig
 from twinlight.grpc_server import build_grpc_server
 from twinlight.models.oam import oam_job_uuid
 from twinlight.streaming.measurement_stream import MeasurementStream
@@ -26,7 +27,9 @@ TIMEOUT = 5.0
 class Twin:
     """An app, its gRPC server, and a stub — all on the test's event loop."""
 
-    def __init__(self, app: Any, port: int, server: grpc.aio.Server) -> None:
+    def __init__(
+        self, app: Any, port: int, server: grpc.aio.Server, token: str | None = None
+    ) -> None:
         self.app = app
         self.server = server
         self.port = port
@@ -34,7 +37,8 @@ class Twin:
         self.channel = grpc.aio.insecure_channel(self.target)
         self.stub = gnmi_pb2_grpc.gNMIStub(self.channel)
         self.rest = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://twin"
+            transport=httpx.ASGITransport(app=app), base_url="http://twin",
+            headers={"Authorization": f"Bearer {token}"} if token else None,
         )
 
     @property
@@ -60,12 +64,13 @@ class Twin:
         await self.server.stop(None)
 
 
-async def start_twin(config: TwinConfig) -> Twin:
+async def start_twin(config: TwinConfig, token: str | None = None) -> Twin:
+    """``token``, when given, is what the twin's own REST helper presents."""
     app = create_app(config)
     server = build_grpc_server(app)
     port = server.add_insecure_port("127.0.0.1:0")
     await server.start()
-    return Twin(app, port, server)
+    return Twin(app, port, server, token)
 
 
 @pytest.fixture
@@ -372,18 +377,22 @@ async def test_resume_with_an_empty_window_just_syncs(twin: Twin) -> None:
 # -- Authentication ---------------------------------------------------------------
 
 
+TOKEN = "s3cret-token-0123456789"
+OTHER = "other-client-token-9876543210"
+
+
 @pytest.fixture
 async def secured(twin_config: TwinConfig) -> AsyncIterator[Twin]:
-    twin_config.streaming = StreamingConfig(auth_token="s3cret")
-    t = await start_twin(twin_config)
+    twin_config.api_tokens = parse_tokens(f"ui:{TOKEN},onos:{OTHER}")
+    t = await start_twin(twin_config, token=TOKEN)
     yield t
     await t.close()
 
 
 @pytest.mark.parametrize(
     "metadata",
-    [None, (("authorization", "Bearer wrong"),), (("authorization", "s3cret"),),
-     (("authorization", "Basic s3cret"),)],
+    [None, (("authorization", "Bearer wrong-token-0123456789"),),
+     (("authorization", TOKEN),), (("authorization", f"Basic {TOKEN}"),)],
     ids=["missing", "wrong-token", "no-scheme", "wrong-scheme"],
 )
 async def test_auth_on_rejects_without_the_token(secured: Twin, metadata: Any) -> None:
@@ -396,9 +405,13 @@ async def test_auth_on_rejects_without_the_token(secured: Twin, metadata: Any) -
     assert err.code() == grpc.StatusCode.UNAUTHENTICATED
 
 
-@pytest.mark.parametrize("scheme", ["Bearer", "bearer"])
-async def test_auth_on_accepts_the_token(secured: Twin, scheme: str) -> None:
-    metadata = (("authorization", f"{scheme} s3cret"),)
+@pytest.mark.parametrize(
+    "scheme, token", [("Bearer", TOKEN), ("bearer", TOKEN), ("Bearer", OTHER)]
+)
+async def test_auth_on_accepts_any_configured_token(
+    secured: Twin, scheme: str, token: str
+) -> None:
+    metadata = (("authorization", f"{scheme} {token}"),)
     caps = await secured.stub.Capabilities(gnmi_pb2.CapabilityRequest(), metadata=metadata)
     assert caps.gNMI_version
     await secured.add_service()
@@ -417,3 +430,41 @@ async def test_auth_off_needs_no_metadata(twin: Twin) -> None:
         gnmi_pb2.CapabilityRequest(), metadata=(("authorization", "Bearer anything"),)
     )
     assert caps.gNMI_version
+
+
+async def test_the_rest_token_is_the_gnmi_token(secured: Twin) -> None:
+    """One token set for both interfaces: what REST accepts, gNMI accepts."""
+    assert (await secured.rest.get("/internal/whoami")).json()["principal"] == "ui"
+    metadata = (("authorization", f"Bearer {TOKEN}"),)
+    assert (await secured.stub.Capabilities(
+        gnmi_pb2.CapabilityRequest(), metadata=metadata
+    )).gNMI_version
+
+
+async def test_no_interceptor_without_tokens(
+    twin_config: TwinConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Authentication off: the interceptor is never built, so no auth code runs."""
+    from twinlight.streaming.interceptors import TokenAuthInterceptor
+
+    built: list[TokenAuthInterceptor] = []
+
+    class Spy(TokenAuthInterceptor):
+        def __init__(self, authenticator: Any) -> None:
+            super().__init__(authenticator)
+            built.append(self)
+
+    monkeypatch.setattr("twinlight.grpc_server.TokenAuthInterceptor", Spy)
+    build_grpc_server(create_app(twin_config))
+    assert built == []
+    twin_config.api_tokens = parse_tokens(TOKEN)
+    build_grpc_server(create_app(twin_config))
+    assert len(built) == 1
+
+
+def test_interceptor_refuses_an_empty_token_set() -> None:
+    from twinlight.auth import TokenAuthenticator
+    from twinlight.streaming.interceptors import TokenAuthInterceptor
+
+    with pytest.raises(ValueError, match="do not install"):
+        TokenAuthInterceptor(TokenAuthenticator())

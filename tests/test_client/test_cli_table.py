@@ -35,7 +35,7 @@ def test_rejected_stream_prints_code_and_hint(monkeypatch, capsys):
 
     from twinlight_client import cli
 
-    async def fake_fetch(_url):
+    async def fake_fetch(_url, _token=None):
         return [{"uuid": "svc-1", "name": []}]
 
     async def fake_stream(*_args):
@@ -51,5 +51,5 @@ def test_rejected_stream_prints_code_and_hint(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert err.strip() == (
         "Streaming error: UNAUTHENTICATED: missing token "
-        "(set --token or $TWINLIGHT_STREAM_TOKEN)"
+        "(set TWINLIGHT_API_TOKEN (environment or ./.env) or pass --token)"
     )

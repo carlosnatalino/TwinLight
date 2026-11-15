@@ -15,9 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hmac
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import grpc
@@ -241,68 +240,3 @@ class TapiGnmiServicer(gnmi_pb2_grpc.gNMIServicer):
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await task
-
-
-# -- Authentication ------------------------------------------------------------
-
-
-def _bearer_matches(metadata: Any, token: str) -> bool:
-    """``authorization: Bearer <token>``; the scheme is case-insensitive (RFC 6750)."""
-    for key, value in metadata or ():
-        if key == "authorization":
-            scheme, _, credential = str(value).partition(" ")
-            return scheme.lower() == "bearer" and hmac.compare_digest(
-                credential.strip().encode(), token.encode()
-            )
-    return False
-
-
-class BearerTokenInterceptor(grpc.aio.ServerInterceptor):
-    """Reject every call without the configured bearer token (UNAUTHENTICATED).
-
-    TR-548 ST-0.1 has the client obtain a token before connecting; the twin's
-    token is pre-shared through ``streaming.auth_token``.
-    """
-
-    def __init__(self, token: str) -> None:
-        if not token:
-            raise ValueError("an empty token disables authentication; do not install")
-        self._token = token
-
-    async def intercept_service(
-        self,
-        continuation: Callable[[grpc.HandlerCallDetails], Awaitable[grpc.RpcMethodHandler]],
-        handler_call_details: grpc.HandlerCallDetails,
-    ) -> grpc.RpcMethodHandler:
-        handler = await continuation(handler_call_details)
-        if handler is None or _bearer_matches(
-            handler_call_details.invocation_metadata, self._token
-        ):
-            return handler
-        return _denying(handler)
-
-
-_DENIED = "missing or invalid 'authorization: Bearer <token>' metadata"
-
-
-def _denying(handler: grpc.RpcMethodHandler) -> grpc.RpcMethodHandler:
-    """A handler of the same shape as ``handler`` that aborts UNAUTHENTICATED."""
-
-    async def deny_unary(request: Any, context: grpc.aio.ServicerContext) -> Any:
-        await context.abort(grpc.StatusCode.UNAUTHENTICATED, _DENIED)
-
-    async def deny_stream(request: Any, context: grpc.aio.ServicerContext) -> Any:
-        await context.abort(grpc.StatusCode.UNAUTHENTICATED, _DENIED)
-        yield  # pragma: no cover — abort raises
-
-    codec = {
-        "request_deserializer": handler.request_deserializer,
-        "response_serializer": handler.response_serializer,
-    }
-    if handler.request_streaming and handler.response_streaming:
-        return grpc.stream_stream_rpc_method_handler(deny_stream, **codec)
-    if handler.request_streaming:
-        return grpc.stream_unary_rpc_method_handler(deny_unary, **codec)
-    if handler.response_streaming:
-        return grpc.unary_stream_rpc_method_handler(deny_stream, **codec)
-    return grpc.unary_unary_rpc_method_handler(deny_unary, **codec)

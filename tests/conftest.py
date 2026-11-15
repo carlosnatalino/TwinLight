@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from twinlight.app import create_app
+from twinlight.auth import CLIENT_TOKEN_ENV_VAR, TOKENS_ENV_VAR
 from twinlight.config import GnpyConfig, TwinConfig
 from twinlight.example_data import find_example_file
 from twinlight.models.connectivity import OTSIA_CSEP_SPEC
@@ -42,6 +43,23 @@ def _no_snapshots_in_the_working_tree():
         f"tests wrote {created} into {snapshots}. Point "
         f"simulation.snapshot_dir at tmp_path — see the twin_config fixture."
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_api_tokens(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Keep a developer's own API tokens out of the test run.
+
+    ``load_config()`` reads ``TWINLIGHT_API_TOKENS`` from the environment and
+    from ``./.env``. Without this, anyone with tokens configured locally
+    would see the CLI tests build an authenticating twin, and every request
+    a test makes after ``load_config()`` would fail with 401. Tests that want
+    tokens set them explicitly.
+    """
+    monkeypatch.delenv(TOKENS_ENV_VAR, raising=False)
+    monkeypatch.delenv(CLIENT_TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setattr("twinlight.auth.DEFAULT_ENV_FILE", tmp_path / "absent.env")
 
 
 def tapi_end_point(

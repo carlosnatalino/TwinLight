@@ -17,6 +17,10 @@ Installed as the ``twinlight-client`` console command (see pyproject.toml):
     twinlight-client
     twinlight-client --rest-url URL [--gnmi-target HOST:PORT] [--token TOKEN]
 
+Against a twin with authentication enabled, the one token is used for the
+REST lookups and the gNMI stream alike. It comes from ``--token``, else from
+``TWINLIGHT_API_TOKEN`` in the environment or in ``./.env``.
+
 Equivalently runnable as a module: ``python -m twinlight_client``.
 """
 
@@ -25,20 +29,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as _dt
-import os
 import sys
 from typing import Any
 
 import grpc
+import httpx
 
+from twinlight.auth import CLIENT_TOKEN_ENV_VAR
 from twinlight_client.client import TapiClient
+from twinlight_client.credentials import add_token_argument, resolve_token
 from twinlight_client.streaming import (
     TapiStreamClient,
     discover_stream,
     oam_job_for_service,
 )
 
-TOKEN_ENV = "TWINLIGHT_STREAM_TOKEN"
+_TOKEN_HINT = f"set {CLIENT_TOKEN_ENV_VAR} (environment or ./.env) or pass --token"
 
 # (measurement key, column header, formatter kind) — display order.
 # kind: "f" → fixed-point with 3 decimals, "e" → scientific with 2 decimals.
@@ -112,9 +118,11 @@ def _value_line(count: int, when: str, measurements: dict[str, Any]) -> str:
     return "  ".join(cols)
 
 
-async def _fetch_services(rest_url: str) -> list[dict[str, Any]]:
+async def _fetch_services(
+    rest_url: str, token: str | None = None
+) -> list[dict[str, Any]]:
     """Connect to the T-API service and return its connectivity services."""
-    async with TapiClient(rest_url) as rest:
+    async with TapiClient(rest_url, token=token) as rest:
         return await rest.get_connectivity_services()
 
 
@@ -148,7 +156,7 @@ async def _stream_service(
 ) -> None:
     """Follow the selected service's records on the measurement stream."""
     uuid = service["uuid"]
-    async with TapiClient(rest_url) as rest:
+    async with TapiClient(rest_url, token=token) as rest:
         endpoint = await discover_stream(rest)
         job_uuid = await oam_job_for_service(rest, uuid)
     target = gnmi_target or endpoint.target
@@ -201,15 +209,19 @@ def main(argv: list[str] | None = None) -> int:
             "advertises (useful behind NAT or a port mapping)"
         ),
     )
-    parser.add_argument(
-        "--token",
-        default=os.environ.get(TOKEN_ENV),
-        help=f"bearer token for the gNMI stream (default: ${TOKEN_ENV})",
-    )
+    add_token_argument(parser)
     args = parser.parse_args(argv)
+    token = resolve_token(args.token)
 
     try:
-        services = asyncio.run(_fetch_services(args.rest_url))
+        services = asyncio.run(_fetch_services(args.rest_url, token))
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            problem = "rejected the API token" if token else "requires an API token"
+            print(f"{args.rest_url} {problem}: {_TOKEN_HINT}.", file=sys.stderr)
+        else:
+            print(f"Failed to fetch services from {args.rest_url}: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001 — surface any connection error
         print(
             f"Failed to fetch services from {args.rest_url}: {exc}",
@@ -226,11 +238,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        asyncio.run(_stream_service(args.rest_url, args.gnmi_target, args.token, service))
+        asyncio.run(_stream_service(args.rest_url, args.gnmi_target, token, service))
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
     except grpc.aio.AioRpcError as exc:
-        hint = f" (set --token or ${TOKEN_ENV})" if (
+        hint = f" ({_TOKEN_HINT})" if (
             exc.code() == grpc.StatusCode.UNAUTHENTICATED
         ) else ""
         print(f"Streaming error: {exc.code().name}: {exc.details()}{hint}", file=sys.stderr)
