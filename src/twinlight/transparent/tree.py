@@ -273,9 +273,14 @@ SERVICE_LEAVES = (
            "Launch power in effect: requested, else the SI default", "dBm"),
     _state("required_gsnr_db", "number",
            "GSNR the format needs (before the admission margin)", "dB"),
+    _state("operational_state", "string",
+           "ENABLED, or DISABLED when the path is cut, the channel is outside "
+           "the amplifier band, or the GSNR is below required_gsnr_db"),
 )
 QOT_LEAVES = (
-    _state("status", "string", "'ok', or 'link-failed' when a fiber on the path is cut"),
+    _state("status", "string",
+           "'ok'; 'link-failed' when a fiber on the path is cut; 'out-of-band' "
+           "when the channel lies outside the band its amplifiers pass"),
     _state("gsnr_db", "number", "Static GSNR of the allocated path", "dB"),
     _state("osnr_db", "number", "ASE-only OSNR in the signal bandwidth", "dB"),
     _state("margin_db", "number", "gsnr_db - required_gsnr_db", "dB"),
@@ -547,6 +552,16 @@ class TreeBuilder:
             )
         return self._baselines[uuid]
 
+    def _operational_state_reader(self, uuid: str) -> Callable[[], Awaitable[Any]]:
+        """The state the current QoT implies (computing the baseline sets it)."""
+
+        async def read() -> Any:
+            await self._baseline(uuid)
+            svc = self.ctx.get_service(uuid)
+            return svc.operational_state.value if svc else None
+
+        return read
+
     def service_entry(self, uuid: str) -> Branch:
         from twinlight.physics.modulation import get_params
 
@@ -570,6 +585,7 @@ class TreeBuilder:
             "slot_width_ghz": lambda: spectrum.get("slot-width"),
             "launch_power_dbm": lambda: ctx._service_launch_power.get(uuid),
             "required_gsnr_db": lambda: required,
+            "operational_state": self._operational_state_reader(uuid),
         }
 
         def qot_reader(name: str) -> Callable[[], Awaitable[Any]]:
@@ -577,10 +593,9 @@ class TreeBuilder:
                 b = await self._baseline(uuid)
                 if b is None:
                     return None
-                failed = b.status == "link-failed"
                 if name == "status":
                     return b.status or "ok"
-                if failed:
+                if b.status is not None:  # link-failed, out-of-band: no signal
                     return None
                 values = {
                     "gsnr_db": b.gsnr_db, "osnr_db": b.osnr_ase_db,

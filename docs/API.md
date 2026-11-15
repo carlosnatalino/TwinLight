@@ -717,7 +717,7 @@ gNMI, Prometheus, `/config/get` and snapshots all reflect them.
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/admin/snapshot` | Serialise connectivity + spectrum state to JSON. Optional body `{"path": "…"}`; default `snapshots/twin-<ISO8601>.json` |
-| POST | `/admin/restore` | Restore from a snapshot. Body: `{"path": "…"}` |
+| POST | `/admin/restore` | Restore from a snapshot. Body: `{"path": "…"}`. Returns `restored`, `services` and `warnings` |
 | GET | `/admin/snapshot/latest` | Path and mtime of the most recent snapshot |
 | GET | `/admin/snapshots` | All snapshots, newest first |
 | GET | `/admin/snapshot/content?path=<file>` | Contents of one snapshot; the path must resolve inside the snapshot directory |
@@ -728,6 +728,16 @@ GSNR values would not be comparable.
 
 At startup, `--restore <path>` or `--restore-latest` replays a snapshot before
 the servers accept traffic.
+
+The snapshot format is version 2. Version 1, written before spectrum
+assignment was bounded by the amplifier band, is deprecated: it is restored
+with a warning, and the file is then rewritten in place as version 2 (an
+atomic replace, so the old file is never left half-written). A restored
+service whose block lies outside the band its amplifiers pass keeps that
+block but has no signal: its OPM reads `"status": "out-of-band"`, its
+`operational-state` is `DISABLED`, and it is not a neighbour of any other
+channel. Replace it with `PUT` to move it into the band. Each such service is
+named in the restore's `warnings` (and logged at startup).
 
 ### `/metrics` — Prometheus
 
@@ -751,6 +761,8 @@ One snapshot per scrape, in Prometheus text exposition format:
   `twinlight_fiber_failed`, `twinlight_service_link_failed`.
 - Twin state: `twinlight_services_total`, `twinlight_failed_links_total`,
   `twinlight_rmsa_qot_margin_db`, `twinlight_transient_enabled`.
+- `twinlight_service_enabled`: 1 while the service's `operational-state` is
+  `ENABLED`.
 - `twinlight_info{backend="gnpy"|"egn"}` so a dashboard can show which
   physical-layer backend produced a series.
 

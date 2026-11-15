@@ -54,8 +54,8 @@ class TestApplyAllTransients:
         missing in another.
         """
         from twinlight.api.internal import (
-            _link_failed_measurements,
             _mock_measurements,
+            _no_signal_measurements,
         )
 
         real = apply_all_transients(
@@ -63,7 +63,7 @@ class TestApplyAllTransients:
             cfg=TransientsConfig(),
         )
         assert set(_mock_measurements("svc-1", 100.0)) == set(real)
-        assert set(_link_failed_measurements()) == set(real)
+        assert set(_no_signal_measurements()) == set(real)
 
     def test_coding_kpis_follow_the_perturbed_ber_and_gsnr(self):
         """Post-FEC BER and GMI are computed after the transients, not before."""

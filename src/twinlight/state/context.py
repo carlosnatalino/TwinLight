@@ -163,6 +163,12 @@ def _adjustment_granularity(slot_width_ghz: float) -> str:
     )
 
 
+# Snapshot format. 2: spectrum is assigned inside the amplifier band and each
+# allocation records its launch power. 1 (deprecated) is still restored and
+# rewritten as 2.
+SNAPSHOT_VERSION = 2
+
+
 @dataclass(frozen=True)
 class _DetachedService:
     """A service taken out of the context, with what puts it back unchanged
@@ -1511,8 +1517,9 @@ class TapiContext:
         otherwise.
 
         T-API defines DISABLED as "unable to meet the SLA of the user of the
-        resource". A lightpath cannot when its route is failed or its GSNR is
-        below the format's required GSNR. The admission margin
+        resource". A lightpath cannot when its route is failed, its channel
+        lies outside the band its amplifiers pass, or its GSNR is below the
+        format's required GSNR. The admission margin
         (``rmsa.qot_margin_db``) is planning headroom, not part of the test:
         a lightpath that eats into it still works. Without a baseline (no
         physics backend) the state is left as it is.
@@ -1522,7 +1529,7 @@ class TapiContext:
         from twinlight.physics.modulation import get_params
 
         works = (
-            baseline.status != "link-failed"
+            baseline.status is None  # link-failed, out-of-band: no signal
             and baseline.gsnr_db >= get_params(svc.modulation_format).req_gsnr_db
         )
         svc.operational_state = (
@@ -1554,6 +1561,17 @@ class TapiContext:
             if other != uuid and not fibers.isdisjoint(theirs)
         }
 
+    def _out_of_band(self, uuid: str) -> bool:
+        """True when the service's block is not wholly inside the band every
+        amplifier on its route passes (the test admission applies)."""
+        allocation = self._service_allocation.get(uuid)
+        path = self._allocated_path_uids(uuid)
+        if allocation is None or not path:
+            return False
+        assignable = self._assignable_slots(path)
+        _edges, start, width = allocation
+        return assignable is not None and not assignable[start:start + width].all()
+
     def _line_load(self, exclude: str | None = None) -> list[LitChannel]:
         """The admitted lightpaths' channels (all but ``exclude``), for a
         backend that models the actual line load; empty for one that
@@ -1565,8 +1583,8 @@ class TapiContext:
         load: list[LitChannel] = []
         for uuid, svc in self._services.items():
             path = self._allocated_path_uids(uuid)
-            if uuid == exclude or not path:
-                continue
+            if uuid == exclude or not path or self._out_of_band(uuid):
+                continue  # an out-of-band channel is dropped by the first EDFA
             centre_hz, _width_hz, power_dbm = self._service_channel(svc, path)
             load.append(LitChannel(
                 path_uids=tuple(path),
@@ -1612,6 +1630,17 @@ class TapiContext:
             return OpmBaseline(
                 gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
                 latency_ms=0.0, total_fiber_km=0.0, status="link-failed",
+            )
+        # A channel outside the band its amplifiers pass is dropped by the
+        # first of them: there is nothing to propagate, and reporting mock
+        # values would hide it. Only a restored snapshot from before the band
+        # was enforced holds one.
+        if self._out_of_band(svc.uuid):
+            from twinlight.physics.gnpy_adapter import OpmBaseline
+
+            return OpmBaseline(
+                gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
+                latency_ms=0.0, total_fiber_km=0.0, status="out-of-band",
             )
 
         async with self._propagation_lock:
@@ -2590,7 +2619,7 @@ class TapiContext:
                 "launch_power_dbm": self._service_launch_power.get(uuid),
             }
         data = {
-            "version": 1,
+            "version": SNAPSHOT_VERSION,
             "timestamp": datetime.now(UTC).isoformat(),
             # Backend name lets restore reject mismatched snapshots
             # (services admitted under different QoT thresholds would
@@ -2607,21 +2636,37 @@ class TapiContext:
             "failed_links": sorted(self._failed_links),
             "twin_overrides": dict(self._twin_overrides),
         }
-        path.write_text(json.dumps(data, indent=2))
+        # Written to a temporary file and renamed, so a crash mid-write (or a
+        # migration rewriting an old snapshot in place) never leaves a
+        # truncated file behind.
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(path)
         logger.info("Snapshot written: %s (%d services)", path, len(self._services))
         return path
 
-    def restore_from(self, path: Path) -> None:
+    def restore_from(self, path: Path) -> list[str]:
         """Restore connectivity and spectrum state from a snapshot file.
 
         Topology and GNPy network are unchanged (already loaded in __init__).
         Clears existing services and spectrum, then applies the snapshot.
+
+        Version 1 (written before the amplifier band bounded spectrum
+        assignment) is deprecated: it is restored, then the file is replaced
+        by the same state in the current version. A restored service whose
+        block lies outside its amplifier band keeps it, and reports
+        ``out-of-band`` and DISABLED.
+
+        Returns:
+            Warnings about the snapshot, also logged: the deprecated format,
+            and each out-of-band service.
         """
         data = json.loads(path.read_text())
         version = data.get("version")
-        if version != 1:
+        if version not in (1, SNAPSHOT_VERSION) or isinstance(version, bool):
             raise ValueError(
-                f"Unsupported snapshot version: {version!r} (expected 1)"
+                f"Unsupported snapshot version: {version!r} (expected "
+                f"{SNAPSHOT_VERSION}, or the deprecated 1)"
             )
         # Cross-backend restore is rejected: the snapshot's services
         # were admitted under the recorded backend's QoT thresholds,
@@ -2696,6 +2741,28 @@ class TapiContext:
             self.apply_twin_overrides(twin_overrides)
         self._bump_revision()
 
+        warnings: list[str] = []
+        thz = 1e-12
+        for uuid, svc in self._services.items():
+            if self._out_of_band(uuid):
+                _edges, start, width = self._service_allocation[uuid]
+                lower, upper = self._slot_range_hz(start, width)
+                warnings.append(
+                    f"service {uuid} occupies {lower * thz:.6f}-{upper * thz:.6f} THz, "
+                    "outside the band the amplifiers on its route pass: its "
+                    "channel would be dropped, so it reports out-of-band and "
+                    "DISABLED. Replace it (PUT) to move it into the band"
+                )
+                svc.operational_state = OperationalState.DISABLED
+        if version == 1:
+            self.snapshot(path)
+            warnings.insert(0, (
+                f"snapshot {path} used the deprecated format version 1; it was "
+                f"restored and rewritten in place as version {SNAPSHOT_VERSION}"
+            ))
+        for warning in warnings:
+            logger.warning("Restore: %s", warning)
+
         logger.info(
             "Restored from %s: %d services, %d element overrides, "
             "%d failed links",
@@ -2704,6 +2771,7 @@ class TapiContext:
             len(self._element_overrides),
             len(self._failed_links),
         )
+        return warnings
 
     def _get_transceiver_node_refs(self) -> set[tuple[str, str]]:
         """Set of (topology_uuid, node_uuid) for nodes that are Transceivers (have SIPs)."""

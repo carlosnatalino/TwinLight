@@ -47,7 +47,7 @@ class TestSnapshot:
         path = tmp_path / "snap.json"
         app.post("/admin/snapshot", json={"path": str(path)})
         content = path.read_text()
-        assert '"version": 1' in content
+        assert '"version": 2' in content
         assert "services" in content
         assert "spectrum" in content
         assert "service_allocation" in content
@@ -189,7 +189,7 @@ class TestSnapshotContent:
         r = app.get("/admin/snapshot/content", params={"path": name})
         assert r.status_code == 200
         data = r.json()
-        assert data.get("version") == 1
+        assert data.get("version") == 2
         assert "services" in data
         assert "spectrum" in data
         assert "service_allocation" in data

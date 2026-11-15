@@ -53,13 +53,15 @@ def _mock_path_factor(service_uuid: str) -> float:
     return 0.5 + (int(digest[:8], 16) % 1000) / 1000.0
 
 
-def _link_failed_measurements() -> dict[str, Any]:
-    """OPM payload for a service whose path crosses a failed fiber.
+def _no_signal_measurements() -> dict[str, Any]:
+    """OPM payload for a service with no signal to measure: its path crosses
+    a failed fiber, or its channel lies outside the amplifier band.
 
     Returns the standard metric dict with ``None`` for every numeric value
     plus a worst-case 1.0 for each BER, pre- and post-FEC, so UI charts can
     render a clear "service down" line rather than zeros that look like a
-    real measurement. The caller adds a top-level ``"status": "link-failed"``.
+    real measurement. The caller adds a top-level ``"status"`` (the
+    baseline's: ``link-failed`` or ``out-of-band``).
     """
     return {
         "osnr-db": None,
@@ -147,9 +149,9 @@ async def get_all_opm(request: Request) -> dict:
     for svc in ctx.get_services():
         baseline = await ctx.get_or_compute_baseline(svc)
         entry: dict[str, Any] = {"service-uuid": svc.uuid, "timestamp": t}
-        if baseline is not None and baseline.status == "link-failed":
-            entry["status"] = "link-failed"
-            entry["measurements"] = _link_failed_measurements()
+        if baseline is not None and baseline.status is not None:
+            entry["status"] = baseline.status
+            entry["measurements"] = _no_signal_measurements()
         elif baseline is None:
             entry["measurements"] = _mock_measurements(
                 svc.uuid, t, svc.modulation_format.value, cfg.fec
@@ -190,9 +192,9 @@ async def get_service_opm(service_uuid: str, request: Request) -> dict:
         "service-uuid": service_uuid,
         "timestamp": t,
     }
-    if baseline is not None and baseline.status == "link-failed":
-        response["status"] = "link-failed"
-        response["measurements"] = _link_failed_measurements()
+    if baseline is not None and baseline.status is not None:
+        response["status"] = baseline.status
+        response["measurements"] = _no_signal_measurements()
     elif baseline is None:
         response["measurements"] = _mock_measurements(
             service_uuid, t, svc.modulation_format.value, cfg.fec

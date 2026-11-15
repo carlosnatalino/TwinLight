@@ -83,13 +83,19 @@ async def restore_snapshot(request: Request, body: dict) -> dict:
         )
     ctx = request.app.state.context
     try:
-        ctx.restore_from(path)
+        warnings = ctx.restore_from(path)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from e
-    return {"restored": str(path), "services": len(ctx.get_services())}
+    # A deprecated snapshot was rewritten in place; services outside their
+    # amplifier band were restored DISABLED. Both are reported, not hidden.
+    return {
+        "restored": str(path),
+        "services": len(ctx.get_services()),
+        "warnings": warnings,
+    }
 
 
 @router.get("/snapshot/latest")
