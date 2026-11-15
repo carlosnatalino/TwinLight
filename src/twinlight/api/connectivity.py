@@ -7,10 +7,13 @@ GET  /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import ValidationError
 
 from twinlight.algorithms.path_constraints import ConstraintError
+from twinlight.models.common import Direction, ForwardingDirection, LayerProtocolName
 from twinlight.models.connectivity import (
     MCG_CSEP_SPEC,
     OTSIA_CSEP_SPEC,
@@ -98,18 +101,28 @@ _UNIMPLEMENTED: dict[str, tuple[str, ...]] = {
     ),
 }
 # A lightpath runs from its SOURCE end-point to its SINK over one-way fibres,
-# so the service is UNIDIRECTIONAL (TapiContext.add_service).
-_FIXED: dict[str, dict[str, tuple[object, ...]]] = {
+# so the service is UNIDIRECTIONAL (TapiContext.add_service). Each entry is
+# (the values the twin supports, the values the YANG type admits): a value
+# outside the type is invalid (422), a valid one the twin does not support is
+# not implemented (501).
+_LAYER_PROTOCOL_NAMES = frozenset(v.value for v in LayerProtocolName)
+_FIXED: dict[str, dict[str, tuple[tuple[object, ...], Callable[[object], bool]]]] = {
     "connectivity-service": {
-        "layer-protocol-name": ("PHOTONIC_MEDIA",),
-        "direction": ("UNIDIRECTIONAL",),
+        "layer-protocol-name": (("PHOTONIC_MEDIA",), _LAYER_PROTOCOL_NAMES.__contains__),
+        "direction": (("UNIDIRECTIONAL",), {v.value for v in ForwardingDirection}.__contains__),
     },
     "end-point": {
-        "layer-protocol-name": ("PHOTONIC_MEDIA",),
-        "direction": ("SOURCE", "SINK"),
+        "layer-protocol-name": (("PHOTONIC_MEDIA",), _LAYER_PROTOCOL_NAMES.__contains__),
+        "direction": (("SOURCE", "SINK"), {v.value for v in Direction}.__contains__),
     },
-    "layer-protocol-constraint": {"layer-protocol-name": ("PHOTONIC_MEDIA",)},
-    OTSIA_CSEP_SPEC: {"number-of-otsi": (1,)},
+    "layer-protocol-constraint": {
+        "layer-protocol-name": (("PHOTONIC_MEDIA",), _LAYER_PROTOCOL_NAMES.__contains__),
+    },
+    OTSIA_CSEP_SPEC: {
+        "number-of-otsi": (
+            (1,), lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
+        ),
+    },
 }
 
 
@@ -119,20 +132,27 @@ def _entries(value: object) -> list[dict]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def _unimplemented(raw: dict) -> list[str]:
-    """Paths of the unimplemented leaves in a connectivity-service request.
+def _unimplemented(raw: dict) -> tuple[list[str], list[str]]:
+    """``(unimplemented, invalid)`` leaves of a connectivity-service request.
 
-    A leaf refused for its value, not its presence, carries the value and
-    the values the twin supports.
+    Unimplemented: standard leaves the twin does not act on, and valid
+    values the twin does not support (with the values it does). Invalid:
+    values the leaf's YANG type does not admit.
     """
     found: list[str] = []
+    invalid: list[str] = []
 
     def check(level: str, node: dict, at: str) -> None:
         found.extend(f"{at}{key}" for key in _UNIMPLEMENTED[level] if key in node)
-        for key, allowed in _FIXED.get(level, {}).items():
-            if key in node and node[key] not in allowed:
-                supported = " or ".join(str(value) for value in allowed)
-                found.append(f"{at}{key}={node[key]!r} (supported: {supported})")
+        for key, (allowed, valid) in _FIXED.get(level, {}).items():
+            if key not in node or node[key] in allowed:
+                continue
+            value = node[key]
+            if not isinstance(value, (str, int)) or not valid(value):
+                invalid.append(f"{at}{key}={value!r}")
+            else:
+                supported = " or ".join(str(v) for v in allowed)
+                found.append(f"{at}{key}={value!r} (supported: {supported})")
 
     check("connectivity-service", raw, "")
     for ep in _entries(raw.get("end-point") or []):
@@ -146,7 +166,7 @@ def _unimplemented(raw: dict) -> list[str]:
                 check(OTSIA_CSEP_SPEC, spec, spec_at)
                 for cfg in _entries(spec.get("otsi-config") or []):
                     check("otsi-config", cfg, f"{spec_at}otsi-config[{cfg.get('local-id')}]/")
-    return found
+    return found, invalid
 
 
 def _parse_service(body: dict) -> ConnectivityService:
@@ -164,17 +184,28 @@ def _parse_service(body: dict) -> ConnectivityService:
             not validate.
     """
     raw = _single_service(body)
-    refused = _unimplemented(raw)
+    refused, invalid = _unimplemented(raw)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="invalid value: " + "; ".join(invalid),
+        )
     if refused:
+        hint = (
+            ". A lightpath runs one way: mark the head end-point SOURCE and the "
+            "tail SINK (or leave direction out: the first end-point is the "
+            "head), and create a second service for the reverse direction"
+            if any("direction='BIDIRECTIONAL'" in r for r in refused) else ""
+        )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=(
                 "not implemented by this twin: " + "; ".join(refused)
-                + ". Remove these from the connectivity-service request"
+                + ". Remove these from the connectivity-service request" + hint
             ),
         )
     try:
-        return ConnectivityService.model_validate(raw)
+        svc = ConnectivityService.model_validate(raw)
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -183,6 +214,17 @@ def _parse_service(body: dict) -> ConnectivityService:
                 for e in exc.errors()
             ),
         ) from exc
+    if len(svc.end_point) != 2:
+        # A lightpath has a head and a tail; a third end-point would be
+        # silently ignored by admission.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "a connectivity-service is a point-to-point lightpath: it needs "
+                f"exactly two end-points, got {len(svc.end_point)}"
+            ),
+        )
+    return svc
 
 
 @router.post(
@@ -194,6 +236,15 @@ async def create_service(body: dict, request: Request) -> dict:
     ctx = request.app.state.context
 
     svc = _parse_service(body)
+    if ctx.get_service(svc.uuid) is not None:
+        # RFC 8040 §4.4.1: POST must not overwrite an existing resource.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"connectivity-service {svc.uuid} already exists; replace it "
+                "with PUT or delete it first"
+            ),
+        )
 
     # Validate that all referenced SIPs exist
     for ep in svc.end_point:

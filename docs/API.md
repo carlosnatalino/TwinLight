@@ -124,7 +124,10 @@ end-points are a `422`. An end-point `name` is kept and echoed.
 
 Standard leaves the twin does not act on fail the create or PUT with `501`
 (`operation-not-supported`). The error message names each one by path, so no
-service is admitted while ignoring part of the request:
+service is admitted while ignoring part of the request. A value the leaf's
+YANG type does not admit (a `direction` of `"x"`) is a `422` instead. A
+`BIDIRECTIONAL` direction is refused with a note on how to get both
+directions: one service each way.
 
 | Where | Refused when present | Refused unless |
 |-------|----------------------|----------------|
@@ -219,7 +222,19 @@ the whole grid is assignable.
 
 **Requesting launch power.** `otsi-config/channel-output-power` is optional,
 in 0.01 dBm, as a number or decimal string; end-points that carry it must
-agree. A malformed value is a `422`.
+agree. A malformed value, or one outside the −20 to +10 dBm the twin models
+(−2000 to 1000), is a `422`.
+
+`otsi-config/modulation` is optional too: an `otsi-config` carrying only a
+central frequency or a launch power leaves the format to admission. A
+`modulation` that is not an object (`null` included) is a `422`.
+
+**Request checks.** A connectivity-service is a point-to-point lightpath:
+anything but exactly two end-points is a `422`. A `POST` naming the UUID of
+an existing service is a `409` (`resource-denied`, RFC 8040 §4.4.1) and
+changes nothing; replace a service with `PUT`. A body of the wrong shape (a
+string where an object belongs, an object where a list does) is a `422`,
+never a `500`.
 
 **Operational state.** `operational-state` reports whether the lightpath can
 carry its format now: `DISABLED` while its route has a failed fiber or its

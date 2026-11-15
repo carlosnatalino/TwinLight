@@ -99,7 +99,9 @@ class OtsiConfig(BaseModel):
     channel_output_power: float | None = Field(
         default=None, alias="channel-output-power"
     )
-    modulation: ModulationTechnique
+    # Optional on a request: without it, admission chooses the format. Always
+    # present on a read (the format in effect).
+    modulation: ModulationTechnique | None = None
 
     @model_serializer(mode="wrap")
     def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -284,28 +286,33 @@ class ConnectivityService(BaseModel):
                 f"{OTSIA_CSEP_SPEC}/otsi-config/modulation/"
                 "standard-modulation-technique (e.g. 'MT_DP-QPSK')."
             )
-        for end_point in data.get("end-point") or data.get("end_point") or []:
-            if not isinstance(end_point, dict):
-                continue
+        for end_point in _objects(data.get("end-point") or data.get("end_point")):
             constraints = (
                 end_point.get("layer-protocol-constraint")
                 or end_point.get("layer_protocol_constraint")
-                or []
             )
-            for constraint in constraints:
-                if not isinstance(constraint, dict):
-                    continue
+            for constraint in _objects(constraints):
                 spec = constraint.get(OTSIA_CSEP_SPEC) or constraint.get(
                     "otsia_spec"
                 )
                 if not isinstance(spec, dict):
                     continue
-                for cfg in spec.get("otsi-config") or spec.get(
-                    "otsi_config"
-                ) or []:
-                    identity = (cfg or {}).get("modulation", {}).get(
-                        "standard-modulation-technique"
-                    )
+                for cfg in _objects(spec.get("otsi-config") or spec.get("otsi_config")):
+                    if "modulation" not in cfg:
+                        continue
+                    modulation = cfg["modulation"]
+                    if not isinstance(modulation, dict):
+                        raise ValueError(
+                            "otsi-config/modulation must be an object, got "
+                            f"{modulation!r}; leave it out to let admission "
+                            "choose the format"
+                        )
+                    identity = modulation.get("standard-modulation-technique")
+                    if identity is not None and not isinstance(identity, str):
+                        raise ValueError(
+                            "modulation/standard-modulation-technique must be an "
+                            f"identity name such as 'MT_DP-QPSK', got {identity!r}"
+                        )
                     if identity:
                         fmt = modulation_from_mt(identity)
                         data["modulation_format"] = fmt
@@ -371,16 +378,15 @@ class ConnectivityService(BaseModel):
         centres: set[int] = set()
         powers: set[float] = set()
         edges: list[dict[str, Any]] = []
-        for end_point in data.get("end-point") or []:
-            for constraint in (end_point or {}).get("layer-protocol-constraint") or []:
-                if not isinstance(constraint, dict):
-                    continue
-                for cfg in (constraint.get(OTSIA_CSEP_SPEC) or {}).get("otsi-config") or []:
-                    if isinstance(cfg, dict) and cfg.get("central-frequency") is not None:
+        for end_point in _objects(data.get("end-point")):
+            for constraint in _objects(end_point.get("layer-protocol-constraint")):
+                spec = constraint.get(OTSIA_CSEP_SPEC)
+                for cfg in _objects(spec.get("otsi-config") if isinstance(spec, dict) else None):
+                    if cfg.get("central-frequency") is not None:
                         centres.add(_uint64(
                             cfg["central-frequency"], "otsi-config/central-frequency",
                         ))
-                    if isinstance(cfg, dict) and cfg.get("channel-output-power") is not None:
+                    if cfg.get("channel-output-power") is not None:
                         powers.add(_centi_dbm_to_dbm(cfg["channel-output-power"]))
                 mcg = constraint.get(MCG_CSEP_SPEC)
                 if mcg is None:
@@ -481,9 +487,25 @@ _MCG_KEYS = frozenset({"number-of-mc", "mc-spectrum-config-pac"})
 _MC_SPECTRUM_KEYS = frozenset({"local-id", "name", "spectrum", "edge-frequency-constraint"})
 
 
+# Per-channel launch powers the twin models [dBm]. Above the top a single
+# channel approaches an amplifier's total output (GNPy's EDFAs saturate and
+# propagation returns NaN from ~25 dBm); below the bottom it is far under any
+# receiver's sensitivity. A request outside is a 422 rather than a QoT that
+# means nothing.
+LAUNCH_POWER_RANGE_DBM = (-20.0, 10.0)
+
+
 # These helpers run inside pydantic validators, which turn only ValueError into
-# a validation error (a 422); a TypeError would escape as a 500. Hence the
-# TRY004 suppressions below.
+# a validation error (a 422); any other exception would escape as a 500. Hence
+# the TRY004 suppressions below, and the type checks on input that pydantic
+# has not validated yet.
+
+
+def _objects(value: Any) -> list[dict[str, Any]]:
+    """The object entries of a JSON list, or none when ``value`` is not a
+    list: a "before" validator must not trip over a malformed body, which
+    pydantic's own validation then reports as a 422."""
+    return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
 
 
 def _uint64(value: Any, where: str) -> int:
@@ -511,7 +533,15 @@ def _centi_dbm_to_dbm(value: Any) -> float:
         raise ValueError(f"{where} must be a decimal64, got {value!r}") from None
     if not math.isfinite(centi):
         raise ValueError(f"{where} must be finite, got {value!r}")
-    return centi / 100.0
+    dbm = centi / 100.0
+    if not LAUNCH_POWER_RANGE_DBM[0] <= dbm <= LAUNCH_POWER_RANGE_DBM[1]:
+        low, high = LAUNCH_POWER_RANGE_DBM
+        raise ValueError(
+            f"{where}={value!r} is {dbm:g} dBm; the twin models launch powers "
+            f"from {low:g} to {high:g} dBm ({low * 100:g} to {high * 100:g} "
+            "in the leaf's 0.01 dBm units)"
+        )
+    return dbm
 
 
 def _dbm_to_centi_dbm(dbm: float | None) -> float | None:
@@ -530,6 +560,8 @@ def _requested_media_channel(
     if unknown:
         raise ValueError(f"{where}/{unknown[0]} is not supported")
     pacs = mcg.get("mc-spectrum-config-pac") or []
+    if not isinstance(pacs, list):
+        raise ValueError(f"{where}/mc-spectrum-config-pac must be a list")  # noqa: TRY004
     number = mcg.get("number-of-mc", 1)
     if number != 1 or len(pacs) > 1:
         raise ValueError(
@@ -548,6 +580,10 @@ def _requested_media_channel(
         raise ValueError(f"{where}/mc-spectrum-config-pac/{unknown[0]} is not supported")
     spectrum = pac.get("spectrum")
     band: tuple[int, int] | None = None
+    if spectrum is not None and not isinstance(spectrum, dict):
+        raise ValueError(  # noqa: TRY004
+            f"{where}/mc-spectrum-config-pac/spectrum must be an object"
+        )
     if spectrum is not None:
         lower = _uint64(spectrum.get("lower-frequency"), "spectrum/lower-frequency")
         upper = _uint64(spectrum.get("upper-frequency"), "spectrum/upper-frequency")
