@@ -55,7 +55,11 @@ def ber_to_q_db(ber: float) -> float:
 
     Returns:
         Q-factor in dB (positive).
+
+    ``erfcinv`` is accurate down to the smallest subnormal double, so only a
+    BER that underflowed to 0 is clamped (Q ≈ 31.7 dB). A higher floor would
+    pin Q for every healthy channel and hide its GSNR changes.
     """
-    ber = max(ber, 1e-20)  # guard log(0)
+    ber = max(ber, math.ulp(0.0))  # guard erfcinv(0) = inf
     q_lin = math.sqrt(2.0) * float(erfcinv(2.0 * ber))
     return 20.0 * math.log10(max(q_lin, 1e-10))
