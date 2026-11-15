@@ -102,9 +102,14 @@ class TransparentClient:
     def __init__(
         self, base_url: str = "http://localhost:8080",
         client: httpx.Client | None = None, timeout: float = 30.0,
+        token: str | None = None,
     ) -> None:
+        """``token`` is sent as ``Authorization: Bearer <token>`` for a twin
+        with API tokens; it is ignored when ``client`` is given (that client
+        carries its own headers)."""
         self._own = client is None
-        self._http = client or httpx.Client(base_url=base_url, timeout=timeout)
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        self._http = client or httpx.Client(base_url=base_url, timeout=timeout, headers=headers)
 
     def close(self) -> None:
         if self._own:

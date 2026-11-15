@@ -32,7 +32,9 @@ Run it against a twin (``twinlight --config examples/twin_config.yaml``)::
 
 It needs the ``twinlight`` package installed (it uses
 ``twinlight_client.TransparentClient``); the topology's UIDs are discovered,
-not assumed, so it runs on the two-site example and on CORONET alike.
+not assumed, so it runs on the two-site example and on CORONET alike. Against
+a twin with API tokens, set TWINLIGHT_API_TOKEN (environment or ./.env) or
+pass --token.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ from typing import Any
 
 import httpx
 
+from twinlight_client.credentials import add_token_argument, bearer_headers, resolve_token
 from twinlight_client.transparent import TransparentClient, TransparentError
 
 CONNECTIVITY = "/restconf/data/tapi-connectivity:connectivity-context"
@@ -262,9 +265,11 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://localhost:8080")
     parser.add_argument("--keep", action="store_true",
                         help="leave the changes and the lightpath in place")
+    add_token_argument(parser)
     args = parser.parse_args()
+    headers = bearer_headers(resolve_token(args.token))
     try:
-        with httpx.Client(base_url=args.base_url, timeout=60.0) as http:
+        with httpx.Client(base_url=args.base_url, timeout=60.0, headers=headers) as http:
             run(http, args.keep)
     except TransparentError as exc:
         print(f"error: {exc}", file=sys.stderr)

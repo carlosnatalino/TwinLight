@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import httpx
 import pytest
@@ -91,3 +91,36 @@ class TestSoftFailureAgainstASecuredTwin:
     def test_with_environment_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(CLIENT_TOKEN_ENV_VAR, UI)
         assert soft_failure.main(["params"]) == 0
+
+
+def test_transparent_client_sends_the_token() -> None:
+    from twinlight_client.transparent import TransparentClient
+
+    with TransparentClient("http://twin", token="abc-token-0123456789") as odc:
+        assert odc._http.headers["authorization"] == "Bearer abc-token-0123456789"
+    with TransparentClient("http://twin") as odc:
+        assert "authorization" not in odc._http.headers
+
+
+def test_transparent_cli_passes_the_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from twinlight_client import transparent_cli
+
+    seen: dict[str, object] = {}
+
+    class Fake:
+        def __init__(self, url: str, client: object = None, token: str | None = None) -> None:
+            seen["token"] = token
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(transparent_cli, "TransparentClient", Fake)
+    monkeypatch.setattr(transparent_cli, "run_command", lambda args, odc: 0)
+    assert transparent_cli.main(["--token", "cli-token-0123456789", "get", "/"]) == 0
+    assert seen["token"] == "cli-token-0123456789"
+    monkeypatch.setenv("TWINLIGHT_API_TOKEN", "env-token-0123456789")
+    assert transparent_cli.main(["get", "/"]) == 0
+    assert seen["token"] == "env-token-0123456789"

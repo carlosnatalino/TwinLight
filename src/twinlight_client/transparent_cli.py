@@ -33,6 +33,7 @@ from typing import Any
 
 import httpx
 
+from twinlight_client.credentials import add_token_argument, resolve_token
 from twinlight_client.transparent import TransparentClient, TransparentError
 
 
@@ -107,6 +108,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--rest-url", default="http://localhost:8080",
                         help="TwinLight REST base URL (default: %(default)s)")
+    add_token_argument(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("get", help="read a path")
@@ -196,7 +198,9 @@ def run_command(args: argparse.Namespace, odc: TransparentClient) -> int:
 def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        with TransparentClient(args.rest_url, client=client) as odc:
+        with TransparentClient(
+            args.rest_url, client=client, token=resolve_token(args.token)
+        ) as odc:
             return run_command(args, odc)
     except TransparentError as exc:
         print(f"error: {exc}", file=sys.stderr)

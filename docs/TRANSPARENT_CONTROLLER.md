@@ -79,6 +79,9 @@ twinlight-transparent commit
 twinlight-transparent revert /
 ```
 
+Against a twin with API tokens, the CLI reads `TWINLIGHT_API_TOKEN` (environment
+or `./.env`) or `--token`, and `TransparentClient` takes `token=`.
+
 ## The data tree
 
 ```
