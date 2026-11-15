@@ -13,6 +13,7 @@ to satisfy.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from twinlight.config import TwinConfig
@@ -25,6 +26,7 @@ from twinlight.physics.channel_plan import (
 if TYPE_CHECKING:
     import networkx as nx
 
+    from twinlight.physics.backend import LitChannel
     from twinlight.physics.gnpy_adapter import OpmBaseline
 
 
@@ -35,6 +37,10 @@ class GnpyBackend:
     """GNPy-backed QoT propagation + element mutation."""
 
     name = "gnpy"
+    # GNPy propagates one path at a time, so it cannot place a channel that
+    # joins or leaves mid-path; it evaluates every channel on the line fully
+    # loaded by the SI comb, the loading the line is designed for.
+    uses_line_load = False
 
     def __init__(self, config: TwinConfig) -> None:
         self.available: bool = False
@@ -88,7 +94,10 @@ class GnpyBackend:
         centre_frequency_hz: float,
         media_channel_width_hz: float,
         launch_power_dbm: float,
+        line_load: Sequence[LitChannel] = (),
     ) -> OpmBaseline | None:
+        """Propagate the SI comb with the service channel in place. The line
+        is fully loaded, so ``line_load`` is not used."""
         if not self.available:
             return None
         from twinlight.physics.gnpy_adapter import compute_path_baseline

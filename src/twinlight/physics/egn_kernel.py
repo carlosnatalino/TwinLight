@@ -1,287 +1,226 @@
-"""GN/EGN closed-form noise model for a multi-span lightpath.
+"""GN-model closed-form noise terms for a lightpath, element by element.
 
 Implementation of the Gaussian-Noise (GN) model — the analytical
 alternative to GNPy's split-step simulation. Heavily inspired by the
 ``optical-networking-gym`` (EGN) project's
 ``optical/kernels/qot_kernel.py`` (used here with the original
-author's blessing — same person owns both projects): self-channel NLI
-in Carena 2012's closed form, plus the incoherent GN model's
-cross-channel term for the other channels of a loaded line.
+author's blessing — same person owns both projects).
 
 Underlying formulas:
-
-* Carena, Curri, Bosco, Poggiolini, Forghieri,
-  "Modeling of the Impact of Nonlinear Propagation Effects in
-  Uncompensated Optical Coherent Transmission Links",
-  IEEE/OSA J. Lightwave Technol. 30(10):1524 (2012).
-* Carena et al., "EGN model of non-linear fiber propagation",
-  Opt. Express 22(13):16335 (2014).
-* Curri, "GNPy: A network-oriented open-source GN/EGN-model library",
-  IEEE/OSA J. Lightwave Technol. 40(11):3498 (2022).
 
 * Poggiolini, Bosco, Carena, Curri, Jiang, Forghieri,
   "The GN-Model of Fiber Non-Linear Propagation and its Applications",
   IEEE/OSA J. Lightwave Technol. 32(4):694 (2014); arXiv:1209.0394,
-  Eqs. 120 and 123 — the incoherent closed form for cross-channel NLI,
-  as GNPy implements it (``gnpy.core.science_utils.NliSolver._gn_analytic``
-  and ``_psi``).
+  Eqs. 120 and 123 — the incoherent closed form for the NLI one channel
+  (the "pump") generates on another (the "channel under test", CUT). The
+  self-channel term is the same expression with the CUT as its own pump.
+  GNPy implements exactly this (``gnpy.core.science_utils.NliSolver.
+  _gn_analytic`` and ``_psi``), which the tests check to 1e-9.
+* Carena, Curri, Bosco, Poggiolini, Forghieri,
+  "Modeling of the Impact of Nonlinear Propagation Effects in
+  Uncompensated Optical Coherent Transmission Links",
+  IEEE/OSA J. Lightwave Technol. 30(10):1524 (2012) — incoherent
+  accumulation of the per-span noise.
+* Carena et al., "EGN model of non-linear fiber propagation",
+  Opt. Express 22(13):16335 (2014).
+* Curri, "GNPy: A network-oriented open-source GN/EGN-model library",
+  IEEE/OSA J. Lightwave Technol. 40(11):3498 (2022) — the amplifier noise
+  convention (ASE referred to the amplifier input, as GNPy's
+  ``Edfa.noise_profile``).
 
-The model gives, for a single channel propagated over a chain of
-amplified fiber spans:
+Each noise source is compared with the signal power where it is added,
+and the inverse SNRs add along the path (Carena 2012 §IV: inter-span
+correlation neglected):
 
-    GSNR = P_signal / (P_ASE + P_NLI)
+    1/GSNR = Σ_amplifiers P_ASE,i / P_in,i + Σ_fibers P_NLI,j / P_in,j
 
-with per-span contributions accumulated linearly in the noise-power
-domain (Eq. 1-3 of Carena 2012). Self-channel NLI uses Carena 2012's
-closed-form integral; NLI from the other channels of a loaded line uses
-Poggiolini 2014 Eq. 120/123 (``per_span_cross_channel_nli_power``).
+which is how GNPy accumulates noise on a propagated carrier too.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-# Standard SSMF parameters — same defaults Curri 2022 uses for GNPy's
-# reference C-band channel.
-_BETA_2_S2_PER_M = 21.3e-27       # |β₂| group-velocity-dispersion parameter
-_GAMMA_PER_W_PER_M = 1.3e-3       # γ Kerr nonlinearity coefficient
-_H_PLANCK_J_S = 6.626e-34
+# Standard SSMF parameters, used when a fiber's own are unknown (no
+# equipment library): |β₂| ≈ 21.3 ps²/km (D = 16.7 ps/nm/km at 1550 nm)
+# and the γ of GNPy's SSMF type.
+DEFAULT_BETA_2_S2_PER_M = 21.3e-27
+DEFAULT_GAMMA_PER_W_PER_M = 1.265e-3
+_H_PLANCK_J_S = 6.62607015e-34
 _PI_SQ = math.pi * math.pi
+
+# Weights of the incoherent GN model (Poggiolini 2014 Eq. 120; gnpy
+# NliSolver.SPM_WEIGHT and XPM_WEIGHT): 16/27 for the channel on itself,
+# twice that for each other channel.
+_SPM_WEIGHT = 16.0 / 27.0
+_XPM_WEIGHT = 2.0 * _SPM_WEIGHT
 
 
 @dataclass(frozen=True)
-class SpanInputs:
-    """Per-span physical parameters needed by the GN-model kernel.
+class FiberSpan:
+    """The fiber parameters the NLI terms need.
 
-    Units are SI: length in metres, attenuation in 1/m (Neper/m, *not*
-    dB/km — convert with ``db_per_km_to_neper_per_m`` below), linear
-    noise figure (not dB).
+    ``attenuation_neper_per_m`` is the **field** attenuation coefficient α
+    (convert from dB/km with :func:`db_per_km_to_neper_per_m`): the power
+    loss is ``exp(2αL)``. ``beta2_s2_per_m`` is |β₂|.
     """
 
     length_m: float
     attenuation_neper_per_m: float
-    noise_figure_linear: float
-
-
-def db_per_km_to_neper_per_m(loss_db_per_km: float) -> float:
-    """Convert fiber loss from dB/km (operator units) to the field
-    attenuation coefficient α in Neper/m (SI).
-
-    The GN-model formulas in this module follow the standard Carena 2012
-    convention where α is the **field** (amplitude) attenuation, so that
-    the span *power* loss is ``exp(2·α·L)`` and the effective length is
-    ``(1 − exp(−2·α·L)) / (2·α)``. The dB figure operators quote is a
-    *power* ratio, so the conversion carries a factor of one half:
-
-        α_field[Np/m] = α[dB/km] · (ln 10 / 10) · 1e-3 / 2
-
-    Dropping that half — treating the power coefficient as if it were the
-    field coefficient — doubles every span's modelled loss (an 18 dB span
-    is charged 36 dB), which inflates ASE by tens of dB over a long path.
-    """
-    return loss_db_per_km * (math.log(10) / 10.0) * 1e-3 / 2.0
-
-
-def nf_db_to_linear(nf_db: float) -> float:
-    """Convert an EDFA noise figure from dB to a linear power ratio."""
-    return 10.0 ** (nf_db / 10.0)
-
-
-def _effective_length_m(alpha: float, length_m: float) -> float:
-    """L_eff = (1 - exp(-2αL)) / (2α)  — Carena 2012 §III.A.
-
-    The "1/e amplitude" reach within a single span, used for both the
-    NLI integration and the L_eff_a (= 1/(2α)) limit for long spans.
-    """
-    return (1.0 - math.exp(-2.0 * alpha * length_m)) / (2.0 * alpha)
-
-
-def per_span_ase_power(
-    span: SpanInputs,
-    bandwidth_hz: float,
-    centre_frequency_hz: float,
-) -> float:
-    """ASE noise power emitted by the EDFA that terminates this span.
-
-    Standard amplifier ASE formula:
-
-        P_ASE = NF_lin · h · ν · (G - 1) · B
-
-    where the amplifier gain G compensates the span loss exactly, so
-    G = exp(α_power · L) = exp(2α_amp · L) with α_amp the
-    amplitude-attenuation in Neper/m.
-    """
-    gain_minus_one = math.exp(
-        2.0 * span.attenuation_neper_per_m * span.length_m
-    ) - 1.0
-    return (
-        span.noise_figure_linear
-        * _H_PLANCK_J_S
-        * centre_frequency_hz
-        * gain_minus_one
-        * bandwidth_hz
-    )
-
-
-def per_span_self_nli_power(
-    span: SpanInputs,
-    launch_power_w: float,
-    bandwidth_hz: float,
-) -> float:
-    """Self-channel NLI noise emitted by this span (no neighbours).
-
-    Carena 2012 / Curri 2022 single-span GN expression (single Gaussian
-    channel of bandwidth B, span attenuation α, dispersion β₂):
-
-        G_NLI = (8/27) · (γ²/(π·|β₂|))
-              · P_ch³ / B³
-              · L_eff
-              · asinh( (π²/4) · |β₂| · B² · L_eff_a )
-
-    where L_eff = (1 - e^(-2αL))/(2α) and L_eff_a = 1/(2α). We then
-    multiply by B to get the NLI power within the channel bandwidth.
-    """
-    alpha = span.attenuation_neper_per_m
-    if alpha <= 0.0 or span.length_m <= 0.0:
-        return 0.0
-    l_eff = _effective_length_m(alpha, span.length_m)
-    l_eff_a = 1.0 / (2.0 * alpha)
-    pre = (
-        (8.0 / 27.0)
-        * (_GAMMA_PER_W_PER_M ** 2)
-        / (math.pi * _BETA_2_S2_PER_M)
-    )
-    # Inner integral collapses to asinh for a single rectangular Gaussian
-    # channel (Carena 2012 Eq. 13 in the high-bandwidth / fully-coherent
-    # regime). Multiply by B at the end to get integrated NLI power.
-    psd_factor = math.asinh(
-        _PI_SQ * _BETA_2_S2_PER_M * (bandwidth_hz ** 2) * l_eff_a / 4.0
-    )
-    g_nli = pre * (launch_power_w ** 3 / bandwidth_hz ** 3) * l_eff * psd_factor
-    return g_nli * bandwidth_hz
+    gamma_per_w_per_m: float = DEFAULT_GAMMA_PER_W_PER_M
+    beta2_s2_per_m: float = DEFAULT_BETA_2_S2_PER_M
 
 
 @dataclass(frozen=True)
 class Neighbour:
-    """Another channel on the line: offset from the channel under test,
-    launch power and bandwidth (symbol rate)."""
+    """Another channel in the same fiber: its offset from the channel under
+    test, its power at the fiber input, and its bandwidth (symbol rate)."""
 
     offset_hz: float
     power_w: float
     bandwidth_hz: float
 
 
-# XPM weight of the incoherent GN model: twice the 16/27 SPM weight
-# (Poggiolini 2014 Eq. 120; gnpy NliSolver.XPM_WEIGHT).
-_XPM_WEIGHT = 2.0 * 16.0 / 27.0
+def db_per_km_to_neper_per_m(loss_db_per_km: float) -> float:
+    """Convert fiber loss from dB/km (operator units) to the field
+    attenuation coefficient α in Neper/m (SI).
+
+    The dB figure operators quote is a *power* ratio, so the conversion
+    carries a factor of one half:
+
+        α_field[Np/m] = α[dB/km] · (ln 10 / 10) · 1e-3 / 2
+
+    Dropping that half doubles every span's modelled loss (an 18 dB span is
+    charged 36 dB).
+    """
+    return loss_db_per_km * (math.log(10) / 10.0) * 1e-3 / 2.0
 
 
-def per_span_cross_channel_nli_power(
-    span: SpanInputs,
-    cut_power_w: float,
-    cut_bandwidth_hz: float,
-    neighbours: list[Neighbour],
+def nf_db_to_linear(nf_db: float) -> float:
+    """Convert an amplifier noise figure from dB to a linear power ratio."""
+    return 10.0 ** (nf_db / 10.0)
+
+
+def dbm_to_w(power_dbm: float) -> float:
+    """Convert a power from dBm to W."""
+    return 10.0 ** (power_dbm / 10.0) * 1e-3
+
+
+def _effective_length_m(alpha: float, length_m: float) -> float:
+    """L_eff = (1 − exp(−2αL)) / (2α), with α the field coefficient."""
+    return (1.0 - math.exp(-2.0 * alpha * length_m)) / (2.0 * alpha)
+
+
+def ase_power(
+    noise_figure_linear: float, bandwidth_hz: float, centre_frequency_hz: float,
 ) -> float:
-    """NLI power the other channels generate on the channel under test.
+    """ASE power of one amplifier in the channel bandwidth, referred to its
+    input: ``NF · h · ν · B`` (GNPy ``Edfa.noise_profile``; Curri 2022).
 
-    Incoherent GN model, Poggiolini 2014 (arXiv:1209.0394) Eq. 120 with the
-    ψ of Eq. 123, written as GNPy's ``_gn_analytic`` writes it:
+    Compare it with the signal power at the amplifier input.
+    """
+    return noise_figure_linear * _H_PLANCK_J_S * centre_frequency_hz * bandwidth_hz
 
-        P_NLI = Σ_pump (32/27) · γ² · ψ(Δf) / B_pump² · P_cut · P_pump²
+
+def _psi(fiber: FiberSpan, cut_bandwidth_hz: float, pump: Neighbour) -> float:
+    """ψ of Poggiolini 2014 Eq. 123, as GNPy's ``NliSolver._psi``:
 
         ψ(Δf) = ½ [asinh(π² L_a |β₂| B_cut (Δf + B_pump/2))
                   − asinh(π² L_a |β₂| B_cut (Δf − B_pump/2))]
                 · L_eff² / (2π |β₂| L_a)
 
-    Those equations use the *power* attenuation coefficient; this module's α
-    is the field coefficient (half of it), so L_eff = (1 − e^(−2αL))/(2α) and
-    L_a = 1/(2α) are the same lengths as in ``per_span_self_nli_power``.
+    The paper's α is the power coefficient (2α here), so the asymptotic
+    length is L_a = 1/(2α) and L_eff = (1 − e^(−2αL))/(2α).
     """
-    alpha = span.attenuation_neper_per_m
-    if alpha <= 0.0 or span.length_m <= 0.0 or not neighbours:
-        return 0.0
-    l_eff = _effective_length_m(alpha, span.length_m)
+    alpha = fiber.attenuation_neper_per_m
+    beta2 = fiber.beta2_s2_per_m
+    l_eff = _effective_length_m(alpha, fiber.length_m)
     l_a = 1.0 / (2.0 * alpha)
-    scale = l_eff * l_eff / (2.0 * math.pi * _BETA_2_S2_PER_M * l_a)
-    k = _PI_SQ * l_a * _BETA_2_S2_PER_M * cut_bandwidth_hz
-    total = 0.0
-    for pump in neighbours:
-        half = pump.bandwidth_hz / 2.0
-        psi = 0.5 * (
-            math.asinh(k * (pump.offset_hz + half))
-            - math.asinh(k * (pump.offset_hz - half))
-        ) * scale
-        total += (
-            _XPM_WEIGHT * _GAMMA_PER_W_PER_M ** 2 * psi / pump.bandwidth_hz ** 2
-            * cut_power_w * pump.power_w ** 2
-        )
-    return total
+    k = _PI_SQ * l_a * beta2 * cut_bandwidth_hz
+    half = pump.bandwidth_hz / 2.0
+    return 0.5 * (
+        math.asinh(k * (pump.offset_hz + half)) - math.asinh(k * (pump.offset_hz - half))
+    ) * l_eff * l_eff / (2.0 * math.pi * beta2 * l_a)
+
+
+def self_channel_nli_power(fiber: FiberSpan, power_w: float, bandwidth_hz: float) -> float:
+    """NLI the channel generates on itself in one fiber, at the fiber input.
+
+    Poggiolini 2014 Eqs. 120/123 with the channel as its own pump (Δf = 0):
+
+        P_NLI = (16/27) · γ² · ψ(0) / B² · P³,
+        ψ(0) = asinh((π²/2) |β₂| L_a B²) · L_eff² / (2π |β₂| L_a)
+
+    which is the single-channel GN closed form
+    (8/27) γ² P³ L_eff² asinh((π²/2)|β₂| L_a B²) / (π |β₂| L_a B²).
+    """
+    if fiber.attenuation_neper_per_m <= 0.0 or fiber.length_m <= 0.0:
+        return 0.0
+    psi = _psi(fiber, bandwidth_hz, Neighbour(0.0, power_w, bandwidth_hz))
+    return _SPM_WEIGHT * fiber.gamma_per_w_per_m ** 2 * psi / bandwidth_hz ** 2 * power_w ** 3
+
+
+def cross_channel_nli_power(
+    fiber: FiberSpan,
+    cut_power_w: float,
+    cut_bandwidth_hz: float,
+    neighbours: list[Neighbour],
+) -> float:
+    """NLI the other channels in the fiber generate on the channel under test.
+
+    Incoherent GN model, Poggiolini 2014 Eq. 120 with the ψ of Eq. 123,
+    written as GNPy's ``_gn_analytic`` writes it:
+
+        P_NLI = Σ_pump (32/27) · γ² · ψ(Δf) / B_pump² · P_cut · P_pump²
+
+    All powers are at the fiber input.
+    """
+    if fiber.attenuation_neper_per_m <= 0.0 or fiber.length_m <= 0.0:
+        return 0.0
+    gamma_sq = fiber.gamma_per_w_per_m ** 2
+    return sum(
+        _XPM_WEIGHT * gamma_sq * _psi(fiber, cut_bandwidth_hz, pump)
+        / pump.bandwidth_hz ** 2 * cut_power_w * pump.power_w ** 2
+        for pump in neighbours
+    )
 
 
 @dataclass(frozen=True)
 class PathQoT:
-    """Aggregated link-noise results returned by ``accumulate_path_noise``."""
+    """Accumulated noise of one channel along a path, in dB."""
 
-    gsnr_db: float           # 10·log10(P_signal / (P_ASE + P_NLI))
-    osnr_ase_db: float       # 10·log10(P_signal / P_ASE)
-    p_ase_w: float           # Total accumulated ASE power [W]
-    p_nli_w: float           # Total accumulated NLI power [W]
+    gsnr_db: float       # signal / (ASE + NLI)
+    osnr_ase_db: float   # signal / ASE, in the channel bandwidth
+    snr_nli_db: float    # signal / NLI
 
 
-def accumulate_path_noise(
-    spans: list[SpanInputs],
-    *,
-    launch_power_w: float,
-    bandwidth_hz: float,
-    centre_frequency_hz: float,
-    neighbours: list[Neighbour] | None = None,
-) -> PathQoT:
-    """Aggregate ASE and NLI over a chain of amplified spans.
+@dataclass
+class NoiseBudget:
+    """Inverse SNRs of one channel, accumulated element by element.
 
-    Noise powers add linearly in this model (the inter-span correlation
-    is neglected — Carena 2012 §IV) so the per-span contributions
-    accumulate directly. GSNR is then the launch power divided by the
-    total accumulated noise, in dB.
-
-    ``centre_frequency_hz`` is the channel's own frequency (the photon energy
-    in the ASE term). ``neighbours`` are the other channels of the line, each
-    launched into every span at its own power; without them the channel is
-    alone and only self-channel NLI applies.
+    Each noise power is compared with the channel's own power where the
+    noise is added, so the sum holds whatever the power levels along the
+    line are (Carena 2012 §IV).
     """
-    if launch_power_w <= 0.0:
-        raise ValueError("launch_power_w must be positive")
-    if not spans:
-        # Empty path (e.g. TRX-attached SIP-to-SIP with no fiber) — no
-        # propagation loss, no noise; return an idealised SNR floor.
-        return PathQoT(gsnr_db=float("inf"), osnr_ase_db=float("inf"),
-                       p_ase_w=0.0, p_nli_w=0.0)
 
-    p_ase_total = 0.0
-    p_nli_total = 0.0
-    for span in spans:
-        p_ase_total += per_span_ase_power(
-            span, bandwidth_hz, centre_frequency_hz,
-        )
-        p_nli_total += per_span_self_nli_power(
-            span, launch_power_w, bandwidth_hz,
-        )
-        p_nli_total += per_span_cross_channel_nli_power(
-            span, launch_power_w, bandwidth_hz, neighbours or [],
-        )
+    inverse_osnr: float = field(default=0.0)
+    inverse_snr_nli: float = field(default=0.0)
 
-    osnr_ase_db = (
-        10.0 * math.log10(launch_power_w / p_ase_total)
-        if p_ase_total > 0.0 else float("inf")
-    )
-    total_noise = p_ase_total + p_nli_total
-    gsnr_db = (
-        10.0 * math.log10(launch_power_w / total_noise)
-        if total_noise > 0.0 else float("inf")
-    )
-    return PathQoT(
-        gsnr_db=gsnr_db,
-        osnr_ase_db=osnr_ase_db,
-        p_ase_w=p_ase_total,
-        p_nli_w=p_nli_total,
-    )
+    def add_ase(self, ase_w: float, signal_w: float) -> None:
+        self.inverse_osnr += ase_w / signal_w
+
+    def add_nli(self, nli_w: float, signal_w: float) -> None:
+        self.inverse_snr_nli += nli_w / signal_w
+
+    def result(self) -> PathQoT:
+        """The accumulated SNRs; infinite for a noiseless path."""
+
+        def db(inverse: float) -> float:
+            return -10.0 * math.log10(inverse) if inverse > 0.0 else math.inf
+
+        return PathQoT(
+            gsnr_db=db(self.inverse_osnr + self.inverse_snr_nli),
+            osnr_ase_db=db(self.inverse_osnr),
+            snr_nli_db=db(self.inverse_snr_nli),
+        )

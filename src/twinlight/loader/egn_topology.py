@@ -7,12 +7,12 @@ JSON instead describes a chain of Transceiver → Roadm → (Fiber, Edfa)*
 → Roadm → Transceiver, with the noise figure living on the EDFAs.
 
 This module walks the GNPy graph and builds a backend-neutral
-``EgnTopologyData`` dataclass: a list of EGN-style links plus an index
-that lets the /config plane resolve a GNPy UID (a fiber or EDFA) back
-to its (link, span) location in EGN-space. The actual EGN
-``TopologyModel`` instance is constructed by ``EgnBackend`` in M4 from
-this data — keeping this module free of any ``optical_networking_gym``
-imports so the converter can be unit-tested without the EGN extra.
+``EgnTopologyData`` dataclass: a list of EGN-style links (an optional
+booster amplifier, then fiber spans each followed by its amplifier) plus
+an index that lets the /config plane resolve a GNPy UID (a fiber or EDFA)
+back to its (link, span) location in EGN-space. It carries what the JSON
+says about each element — fiber losses, amplifier operating points — and
+nothing from the equipment library, so it can be unit-tested on its own.
 """
 
 from __future__ import annotations
@@ -26,28 +26,56 @@ from twinlight.loader.gnpy_topology import GnpyTopology
 # Default span attenuation when a fiber doesn't declare loss_coef
 # (matches the GNPy SSMF default). Used as a fallback only.
 _DEFAULT_ATTENUATION_DB_PER_KM = 0.2
-# Default EDFA noise figure when an EDFA element doesn't expose nf0
-# (e.g. the std_medium_gain variety uses nf_min/nf_max instead — we
-# pick a representative mid-range value).
-_DEFAULT_NF_DB = 6.0
+# Noise figure of an amplifier whose JSON gives none (no nf0, no
+# nf_min/nf_max) and whose type is not in an equipment library — and of
+# the implicit amplifier assumed after a fiber that has none.
+DEFAULT_NF_DB = 6.0
+# ``EgnNodeKind.span_index`` of a link's booster, which precedes its spans.
+BOOSTER_INDEX = -1
+
+
+@dataclass(frozen=True)
+class EgnAmplifierData:
+    """One EDFA and the operating point the topology (or GNPy's design)
+    gives it.
+
+    ``delta_p_db`` set means power mode: the amplifier holds each channel's
+    output at the reference power plus ``delta_p_db``. Otherwise
+    ``gain_target_db`` fixes its gain (gain mode); with neither, the
+    amplifier restores the level its span lost.
+    """
+
+    uid: str
+    noise_figure_db: float
+    gain_target_db: float | None = None
+    delta_p_db: float | None = None
+    in_voa_db: float = 0.0
+    out_voa_db: float = 0.0
 
 
 @dataclass(frozen=True)
 class EgnSpanData:
-    """One fiber segment plus the EDFA that terminates it.
-
-    The noise figure is the EDFA *after* this span — EGN's QoT engine
-    accumulates ASE per-span using this attribute, so the mapping is:
-    ``span_i.noise_figure_db = nf(EDFA_after_fiber_i)`` (or the default
-    when no EDFA follows, e.g. the last span before a ROADM).
-    """
+    """One fiber and the amplifier that follows it (None when the fiber runs
+    straight into the next terminal)."""
 
     length_km: float
     attenuation_db_per_km: float
-    noise_figure_db: float
-    # Originating GNPy element UIDs for the /config reverse-map.
     fiber_uid: str
-    edfa_uid: str | None
+    amplifier: EgnAmplifierData | None = None
+    # Lumped losses [dB]: connectors at each end, and the padding
+    # attenuator at the input (GNPy Fiber params con_in, con_out, att_in).
+    con_in_db: float = 0.0
+    con_out_db: float = 0.0
+    att_in_db: float = 0.0
+
+    @property
+    def edfa_uid(self) -> str | None:
+        return self.amplifier.uid if self.amplifier else None
+
+    @property
+    def noise_figure_db(self) -> float:
+        """The JSON noise figure of the following amplifier, else the default."""
+        return self.amplifier.noise_figure_db if self.amplifier else DEFAULT_NF_DB
 
 
 @dataclass(frozen=True)
@@ -59,6 +87,8 @@ class EgnLinkData:
     target_name: str
     length_km: float
     spans: tuple[EgnSpanData, ...]
+    # The amplifier between the source terminal and the first fiber.
+    booster: EgnAmplifierData | None = None
 
 
 @dataclass(frozen=True)
@@ -67,7 +97,8 @@ class EgnNodeKind:
 
     # "fiber" | "edfa" | "roadm" | "transceiver"
     kind: Literal["fiber", "edfa", "roadm", "transceiver"]
-    # Only set for fiber/edfa: which EGN (link_id, span_index) they map to.
+    # Only set for fiber/edfa: which EGN (link_id, span_index) they map to;
+    # a booster has span_index BOOSTER_INDEX.
     link_id: int | None = None
     span_index: int | None = None
 
@@ -100,16 +131,19 @@ def _walk_through_inline(
     start_uid: str,
     next_neighbour: dict[str, str],
     elements_by_uid: dict,
-) -> tuple[list[str], list[str | None], str] | None:
+) -> tuple[str | None, list[str], list[str | None], str] | None:
     """Walk from a terminal out along ``next_neighbour`` through Fiber/Edfa
     elements until reaching the next terminal.
 
-    Returns ``(fiber_uids, edfa_uids_per_fiber, target_terminal_uid)``
-    where ``edfa_uids_per_fiber[i]`` is the EDFA immediately following
-    ``fiber_uids[i]`` (or ``None`` if the fiber connects directly to
-    the next terminal). Returns ``None`` if the walk dead-ends, loops,
-    or hits an unsupported element type (Fused / RamanFiber).
+    Returns ``(booster_uid, fiber_uids, edfa_uids_per_fiber,
+    target_terminal_uid)`` where ``booster_uid`` is an EDFA between the
+    terminal and the first fiber (or None) and ``edfa_uids_per_fiber[i]``
+    is the EDFA immediately following ``fiber_uids[i]`` (or ``None`` if the
+    fiber connects directly to the next terminal). A second EDFA in a row is
+    not modelled and is skipped. Returns ``None`` if the walk dead-ends,
+    loops, or hits an unsupported element type (Fused / RamanFiber).
     """
+    booster: str | None = None
     fibers: list[str] = []
     edfas: list[str | None] = []
 
@@ -134,9 +168,9 @@ def _walk_through_inline(
             pending_fiber = cur
         elif kind == "Edfa":
             if pending_fiber is None:
-                # EDFA before any span on this leg — typically a booster
-                # straight out of the ROADM. Out of scope for the MVP.
-                pass
+                if not fibers and booster is None:
+                    # The booster straight out of the source terminal.
+                    booster = cur
             else:
                 fibers.append(pending_fiber)
                 edfas.append(cur)
@@ -145,7 +179,7 @@ def _walk_through_inline(
             if pending_fiber is not None:
                 fibers.append(pending_fiber)
                 edfas.append(None)
-            return fibers, edfas, cur
+            return booster, fibers, edfas, cur
         else:
             return None
         cur = next_neighbour.get(cur)
@@ -183,15 +217,33 @@ def _fiber_loss_coef(el) -> float:
 
 
 def _edfa_nf(el) -> float:
+    """The noise figure the JSON gives, for when no equipment model applies:
+    nf0, else the mean of nf_min/nf_max, else the default."""
     params = el.params or {}
     nf0 = params.get("nf0")
     if nf0 is not None:
         return float(nf0)
-    # Average nf_min/nf_max if the type-variety model uses those instead.
     nf_min, nf_max = params.get("nf_min"), params.get("nf_max")
     if nf_min is not None and nf_max is not None:
         return float((nf_min + nf_max) / 2.0)
-    return _DEFAULT_NF_DB
+    return DEFAULT_NF_DB
+
+
+def _optional_float(value) -> float | None:
+    return None if value is None else float(value)
+
+
+def _amplifier(el) -> EgnAmplifierData:
+    """An EDFA's noise figure and operating point (GNPy ``operational``)."""
+    op = el.operational or {}
+    return EgnAmplifierData(
+        uid=el.uid,
+        noise_figure_db=_edfa_nf(el),
+        gain_target_db=_optional_float(op.get("gain_target")),
+        delta_p_db=_optional_float(op.get("delta_p")),
+        in_voa_db=float(op.get("in_voa") or 0.0),
+        out_voa_db=float(op.get("out_voa") or 0.0),
+    )
 
 
 def convert(gnpy_topo: GnpyTopology) -> EgnTopologyData:
@@ -200,9 +252,9 @@ def convert(gnpy_topo: GnpyTopology) -> EgnTopologyData:
     Conventions:
     * One EGN ``Link`` per directed terminal→terminal walk (so each
       bidirectional fiber pair becomes two EGN links).
-    * Each ``Fiber`` between the two terminals becomes one ``Span``;
-      the ``EDFA`` immediately following it (if any) supplies its
-      ``noise_figure_db``.
+    * Each ``Fiber`` between the two terminals becomes one ``Span`` with
+      the ``EDFA`` immediately following it (if any); an EDFA before the
+      first fiber is the link's booster.
     * ``node_names`` is the de-duplicated list of terminal UIDs
       (ROADMs + Transceivers) in declaration order.
     """
@@ -251,7 +303,7 @@ def convert(gnpy_topo: GnpyTopology) -> EgnTopologyData:
             )
             if walk is None:
                 continue
-            fiber_uids, edfa_uids, target_uid = walk
+            booster_uid, fiber_uids, edfa_uids, target_uid = walk
             if not fiber_uids:
                 # TRX→ROADM access or any other walk with no fiber — EGN
                 # only models inter-terminal spans, so skip.
@@ -260,21 +312,28 @@ def convert(gnpy_topo: GnpyTopology) -> EgnTopologyData:
             spans: list[EgnSpanData] = []
             for fiber_uid, edfa_uid in zip(fiber_uids, edfa_uids):
                 fiber_el = elements_by_uid[fiber_uid]
-                length_km = _fiber_length_km(fiber_el)
-                loss = _fiber_loss_coef(fiber_el)
-                if edfa_uid is not None:
-                    nf = _edfa_nf(elements_by_uid[edfa_uid])
-                else:
-                    nf = _DEFAULT_NF_DB
+                params = fiber_el.params or {}
                 spans.append(EgnSpanData(
-                    length_km=length_km,
-                    attenuation_db_per_km=loss,
-                    noise_figure_db=nf,
+                    length_km=_fiber_length_km(fiber_el),
+                    attenuation_db_per_km=_fiber_loss_coef(fiber_el),
                     fiber_uid=fiber_uid,
-                    edfa_uid=edfa_uid,
+                    amplifier=(
+                        _amplifier(elements_by_uid[edfa_uid])
+                        if edfa_uid is not None else None
+                    ),
+                    con_in_db=float(params.get("con_in") or 0.0),
+                    con_out_db=float(params.get("con_out") or 0.0),
+                    att_in_db=float(params.get("att_in") or 0.0),
                 ))
+            booster = (
+                _amplifier(elements_by_uid[booster_uid]) if booster_uid is not None else None
+            )
 
             link_id = len(links)
+            if booster is not None:
+                uid_index[booster.uid] = EgnNodeKind(
+                    kind="edfa", link_id=link_id, span_index=BOOSTER_INDEX,
+                )
             for span_idx, span in enumerate(spans):
                 uid_index[span.fiber_uid] = EgnNodeKind(
                     kind="fiber",
@@ -294,6 +353,7 @@ def convert(gnpy_topo: GnpyTopology) -> EgnTopologyData:
                 target_name=target_uid,
                 length_km=sum(s.length_km for s in spans),
                 spans=tuple(spans),
+                booster=booster,
             ))
 
     # First walk wins for a duplicated terminal pair, matching the

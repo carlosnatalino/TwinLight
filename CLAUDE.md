@@ -139,6 +139,11 @@ Details that are easy to get wrong and cost a debugging cycle:
   power alone is erased at the first ROADM.
 - `si.pmd` and `si.latency` are per-channel arrays, not scalars.
 - Deep-copy path elements before propagating; propagation mutates element state.
+- An amplifier's NF at a given gain is `Edfa._calc_nf(avg=True)` after setting
+  `effective_gain` (and `pin_db`/`nch`/`slot_width` for the OpenROADM types);
+  the EGN backend uses it on the designed elements so both backends share the
+  equipment model. Designed EDFA objects report `operational.gain_target` /
+  `delta_p` as None; `network_to_json` carries the values.
 - GNPy has no k-shortest-path function. `compute_constrained_path` runs
   `networkx.shortest_simple_paths(network, weight="weight")`, where an edge's
   weight is the length (m) of the fiber it leaves and 0.01 otherwise
@@ -164,6 +169,14 @@ The same method bumps the running revision (the transparent controller's ETag)
 and captures the startup value its reverts restore; twin-config changes go
 through `apply_twin_overrides` for the same reasons.
 
+Under a backend with `uses_line_load` (EGN), a baseline also depends on the
+lightpaths sharing its fibers: `add_service` re-evaluates them and
+`delete_service` invalidates them (`_sharing_services`). The reverse index
+holds the backend's designed UIDs too (`_note_baseline`), since a route's
+UIDs are the topology's as written. A service's `operational-state` is
+derived from its baseline in `get_or_compute_baseline`; T-API reads call
+`refresh_operational_states` so it reflects whatever was invalidated.
+
 A new runtime-writable attribute needs a case in
 `tests/test_physics/test_element_params_propagation.py` proving that
 propagation reads it: a knob that is accepted but never read is worse than
@@ -185,7 +198,8 @@ endpoint reference resolves to a physical element.
 ## Not yet implemented
 
 Soft-decision post-FEC BER (GMI/NGMI are reported, but not mapped through a
-per-code NGMI threshold); multi-band (C-band only); the EGN correction on cross-channel NLI and
-ROADM noise in the EGN kernel; eye and constellation *rendering* in the UI (the backend synthesis
+per-code NGMI threshold); multi-band (C-band only); the EGN correction on cross-channel NLI
+(both backends are the plain GN model); the actual line load under the GNPy backend (it
+assumes a full SI comb; EGN uses the lit lightpaths); eye and constellation *rendering* in the UI (the backend synthesis
 exists); an event-driven simulation clock; T-API notification, OAM, fault and
 virtual-network modules; gNMI Get/Set; authentication on any interface.

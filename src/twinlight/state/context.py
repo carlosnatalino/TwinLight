@@ -37,7 +37,7 @@ from twinlight.algorithms.spectrum_assignment import first_fit, path_uids_to_edg
 from twinlight.config import TwinConfig
 from twinlight.loader.gnpy_topology import load_gnpy_topology
 from twinlight.loader.tapi_builder import TapiBuilder
-from twinlight.models.common import ServiceInterfacePoint
+from twinlight.models.common import OperationalState, ServiceInterfacePoint
 from twinlight.models.connectivity import ConnectivityService
 from twinlight.models.equipment import PhysicalContext
 from twinlight.models.path_computation import PathCompService
@@ -47,6 +47,7 @@ from twinlight.models.topology import (
     NodeEdgePoint,
     Topology,
 )
+from twinlight.physics.backend import LitChannel
 from twinlight.physics.backend import element_kind_name as _kind_name
 from twinlight.physics.modulation import ModulationFormat
 from twinlight.state.spectrum_state import SpectrumState
@@ -223,6 +224,10 @@ class TapiContext:
         self._route_cache: dict[tuple[str, str], list[str]] = {}
         self._baseline_cache: dict[str, OpmBaseline] = {}
         self._propagation_lock: asyncio.Lock = asyncio.Lock()
+        # service_uuid -> the fibers its last baseline traversed (the
+        # backend's UIDs, design-split sub-spans included): which lightpaths
+        # share a fiber, for a backend whose baselines depend on the load.
+        self._service_fibers: dict[str, frozenset[str]] = {}
 
         # -- EDFA stateful reservoir tracker (Bononi exponential step) ------
         from twinlight.physics.transients.edfa_reservoir import (
@@ -438,6 +443,8 @@ class TapiContext:
         # now depends on this service's baseline.
         for uid in path:
             self._element_to_services.setdefault(uid, set()).add(svc.uuid)
+        if baseline is not None:
+            self._note_baseline(svc, baseline)
 
         # Notify EDFA tracker of channel add (Bononi reservoir model)
         if baseline is not None:
@@ -447,6 +454,12 @@ class TapiContext:
                 self._edfa_tracker.notify_channel_change(
                     edfa_uids, +1, self._config.transients.edfa_reservoir,
                 )
+
+        # The new channel is a neighbour of every lightpath sharing a fiber
+        # with it: their GSNR drops, possibly below what their format needs.
+        for uuid in self._sharing_services(svc.uuid):
+            self.invalidate_baseline(uuid)
+            await self.get_or_compute_baseline(self._services[uuid])
 
     async def _admit(
         self, svc: ConnectivityService, paths: list[list[str]],
@@ -505,6 +518,8 @@ class TapiContext:
         guard_slots = self._config.rmsa.default_guardband_slots
         margin = self._config.rmsa.qot_margin_db
         power_dbm = self._launch_power_for(svc)
+        # The lightpaths already lit; the candidate joins them.
+        line_load = self._line_load()
         memo: dict[tuple[tuple[str, ...], int, int, float, float], OpmBaseline | None] = {}
         attempts: list[str] = []
         spectrum_found = False
@@ -555,6 +570,7 @@ class TapiContext:
                             centre_frequency_hz=centre_hz,
                             media_channel_width_hz=upper - lower,
                             launch_power_dbm=power_dbm,
+                            line_load=line_load,
                         )
                 baseline = memo[key]
                 if baseline is None:
@@ -916,7 +932,15 @@ class TapiContext:
         }
 
     def delete_service(self, uuid: str) -> bool:
-        """Remove service and release its spectrum allocation."""
+        """Remove service and release its spectrum allocation.
+
+        The lightpaths that shared a fiber with it lose a neighbour, so their
+        baselines are invalidated; :meth:`refresh_operational_states`
+        re-evaluates them.
+        """
+        for other in self._sharing_services(uuid):
+            self.invalidate_baseline(other)
+        self._service_fibers.pop(uuid, None)
         allocation = self._service_allocation.pop(uuid, None)
         self._service_launch_power.pop(uuid, None)
         if allocation is not None:
@@ -1308,12 +1332,102 @@ class TapiContext:
     async def get_or_compute_baseline(
         self, svc: ConnectivityService
     ) -> OpmBaseline | None:
-        """Return a cached OpmBaseline, computing it on first access.
+        """Return a cached OpmBaseline, computing it on first access, and
+        set the service's operational-state from it.
 
         Propagation is serialised through ``_propagation_lock`` so that
         multiple concurrent OPM requests don't flood GNPy with simultaneous
         deep-copy + propagation calls.
         """
+        baseline = await self._baseline_for(svc)
+        self._apply_operational_state(svc, baseline)
+        return baseline
+
+    async def refresh_operational_states(self) -> None:
+        """Bring every service's operational-state up to date.
+
+        Baselines still cached are reused, so this only propagates the ones
+        a change invalidated (a parameter write, a failure, a lightpath
+        added or removed next to it).
+        """
+        for svc in list(self._services.values()):
+            await self.get_or_compute_baseline(svc)
+
+    def _apply_operational_state(
+        self, svc: ConnectivityService, baseline: OpmBaseline | None,
+    ) -> None:
+        """DISABLED while the lightpath cannot carry its format, ENABLED
+        otherwise.
+
+        T-API defines DISABLED as "unable to meet the SLA of the user of the
+        resource". A lightpath cannot when its route is failed or its GSNR is
+        below the format's required GSNR. The admission margin
+        (``rmsa.qot_margin_db``) is planning headroom, not part of the test:
+        a lightpath that eats into it still works. Without a baseline (no
+        physics backend) the state is left as it is.
+        """
+        if baseline is None:
+            return
+        from twinlight.physics.modulation import get_params
+
+        works = (
+            baseline.status != "link-failed"
+            and baseline.gsnr_db >= get_params(svc.modulation_format).req_gsnr_db
+        )
+        svc.operational_state = (
+            OperationalState.ENABLED if works else OperationalState.DISABLED
+        )
+
+    def _note_baseline(self, svc: ConnectivityService, baseline: OpmBaseline) -> None:
+        """Index the elements a baseline was computed over.
+
+        The route holds the topology's UIDs as written; the baseline holds
+        the backend's, which may differ (GNPy's design splits fibers into
+        sub-spans and adds boosters and preamplifiers). Indexing both lets a
+        /config write to any of them invalidate this service, and records
+        the fibers it shares with other lightpaths.
+        """
+        for uid in (*baseline.fiber_uids, *baseline.edfa_uids):
+            self._element_to_services.setdefault(uid, set()).add(svc.uuid)
+        if baseline.fiber_uids:
+            self._service_fibers[svc.uuid] = frozenset(baseline.fiber_uids)
+
+    def _sharing_services(self, uuid: str) -> set[str]:
+        """The other lightpaths that share a fiber with ``uuid``'s, when the
+        backend's baselines depend on the line load; empty otherwise."""
+        if not self._backend.uses_line_load:
+            return set()
+        fibers = self._service_fibers.get(uuid, frozenset())
+        return {
+            other for other, theirs in self._service_fibers.items()
+            if other != uuid and not fibers.isdisjoint(theirs)
+        }
+
+    def _line_load(self, exclude: str | None = None) -> list[LitChannel]:
+        """The admitted lightpaths' channels (all but ``exclude``), for a
+        backend that models the actual line load; empty for one that
+        assumes a fully loaded line."""
+        if not self._backend.uses_line_load:
+            return []
+        from twinlight.physics.modulation import get_params
+
+        load: list[LitChannel] = []
+        for uuid, svc in self._services.items():
+            path = self._allocated_path_uids(uuid)
+            if uuid == exclude or not path:
+                continue
+            centre_hz, _width_hz, power_dbm = self._service_channel(svc, path)
+            load.append(LitChannel(
+                path_uids=tuple(path),
+                centre_frequency_hz=centre_hz,
+                baud_rate_hz=get_params(svc.modulation_format).baud_rate_hz,
+                launch_power_dbm=power_dbm,
+            ))
+        return load
+
+    async def _baseline_for(self, svc: ConnectivityService) -> OpmBaseline | None:
+        """The cached baseline, else one propagated now (see
+        :meth:`get_or_compute_baseline`)."""
         if not self._gnpy_available:
             return None
 
@@ -1359,10 +1473,12 @@ class TapiContext:
                 path, svc.modulation_format.value,
                 centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
                 launch_power_dbm=power_dbm,
+                line_load=self._line_load(exclude=svc.uuid),
             )
             if baseline is None:
                 return None
             self._baseline_cache[svc.uuid] = baseline
+            self._note_baseline(svc, baseline)
             logger.debug(
                 "Computed baseline for service %s: GSNR=%.2f dB",
                 svc.uuid,
@@ -1739,6 +1855,7 @@ class TapiContext:
                             path, svc.modulation_format.value,
                             centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
                             launch_power_dbm=power_dbm,
+                            line_load=self._line_load(exclude=svc.uuid),
                         )
             finally:
                 for uid, attr, token in reversed(tokens):
@@ -1948,8 +2065,6 @@ class TapiContext:
         Raises:
             KeyError: ``fiber_uid`` is not a Fiber in the GNPy network.
         """
-        from twinlight.models.common import OperationalState
-
         if not self._backend.is_fiber(fiber_uid):
             raise KeyError(
                 f"{fiber_uid!r} is not a Fiber (link failure only applies "
@@ -2143,6 +2258,7 @@ class TapiContext:
                 centre_frequency_hz=centre_hz,
                 media_channel_width_hz=self._block_width(fmt) * self._slot_hz(),
                 launch_power_dbm=power_dbm,
+                line_load=self._line_load(),
             )
         return None if baseline is None else (baseline, centre_hz, power_dbm)
 

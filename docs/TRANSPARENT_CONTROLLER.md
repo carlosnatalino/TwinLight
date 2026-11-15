@@ -274,8 +274,9 @@ Every writable attribute is read on every propagation.
 attributes added for the transparent controller and checks that the propagated
 result moves; the original ones have their own tests in `tests/test_state/`.
 
-Under **EGN**: Fiber `loss_coef`, `att_in` (accepted, no effect), `failed`;
-Edfa `nf0`.
+Under **EGN**: Fiber `loss_coef`, `att_in`, `failed`; Edfa `nf0` (boosters
+included), which reads as the noise figure at the amplifier's operating gain
+and, when written, replaces it.
 
 **Twin configuration**: every scalar field of `transients`, `rmsa` and `fec` —
 the sections read live on each OPM sample or admission (34 fields). Bounds and

@@ -236,7 +236,9 @@ per-channel power the amplifiers are designed for; GNPy's bundled library when
 `qot_margin_db` is the main admission-strictness knob, and is also exposed at
 run time — through `POST /config/set` or `/transparent/data/Config/rmsa` — so a
 single process can sweep it. All three fields are runtime-mutable; they affect
-future admissions only, never a service already admitted.
+future admissions only, never a service already admitted. The margin is not
+part of a lightpath's `operational-state`, which goes `DISABLED` only below
+the format's required GSNR itself.
 
 ## `fec` — post-FEC BER models
 

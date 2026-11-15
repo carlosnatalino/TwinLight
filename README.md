@@ -434,7 +434,7 @@ available, selected by `physics.backend` or `--physics-backend`:
 | Backend | Method | Notes |
 |---------|--------|-------|
 | `gnpy` (default) | Split-step propagation over the designed network; the service channel on the equipment library's SI comb | Needs a GNPy equipment library; the reference implementation of the GN/EGN model [[10]](#ref-10) |
-| `egn` | Closed-form GN/EGN kernel in `physics/egn_kernel.py` | Follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9), with cross-channel NLI from Poggiolini *et al.* [[33]](#ref-33). Reuses GNPy's amplifier design when an equipment library is configured, so both backends propagate over the same spans; works without one too |
+| `egn` | Closed-form GN kernel in `physics/egn_kernel.py`; the lightpaths actually lit load the line | Follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9), with the NLI of Poggiolini *et al.* [[33]](#ref-33). Reuses GNPy's amplifier design, operating points and noise-figure models when an equipment library is configured, and matches the GNPy backend within 0.05–0.25 dB at the same load; works without one too |
 
 Both produce a backend-agnostic `OpmBaseline` that the transient layer perturbs,
 so results stay comparable across backends.

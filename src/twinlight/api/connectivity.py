@@ -263,6 +263,9 @@ def _connectivity_service_payload(ctx, svc) -> dict:
 async def get_services(request: Request) -> dict:
     """Return all connectivity services, with assigned spectrum when held."""
     ctx = request.app.state.context
+    # operational-state follows the current QoT: re-evaluate what a change
+    # (a parameter write, a failure, a neighbour) invalidated.
+    await ctx.refresh_operational_states()
     return {
         "tapi-connectivity:connectivity-context": {
             "connectivity-service": [
@@ -281,6 +284,7 @@ async def get_service(uuid: str, request: Request) -> dict:
         raise HTTPException(
             status_code=404, detail=f"Service {uuid} not found"
         )
+    await ctx.get_or_compute_baseline(svc)  # current operational-state
     return {
         "tapi-connectivity:connectivity-service": _connectivity_service_payload(ctx, svc)
     }
@@ -348,6 +352,7 @@ async def update_service(
         svc.administrative_state = body.administrative_state
     if body.lifecycle_state is not None:
         svc.lifecycle_state = body.lifecycle_state
+    await ctx.get_or_compute_baseline(svc)  # current operational-state
     return {
         "tapi-connectivity:connectivity-service": _connectivity_service_payload(
             ctx, svc
@@ -366,3 +371,5 @@ async def delete_service(uuid: str, request: Request) -> None:
         raise HTTPException(
             status_code=404, detail=f"Service {uuid} not found"
         )
+    # The lightpaths that shared a fiber with it lost a neighbour.
+    await ctx.refresh_operational_states()

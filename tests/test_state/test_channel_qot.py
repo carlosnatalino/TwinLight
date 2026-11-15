@@ -86,25 +86,3 @@ def test_path_info_reports_the_evaluated_channel(mesh_app) -> None:
         "sip_a": refs.sip("trx A"), "sip_z": refs.sip("trx C"), "modulation": "DP-8PSK",
     })
     assert bad.status_code == 422
-
-
-def test_egn_loaded_line_is_below_the_lone_channel(tmp_path) -> None:
-    """The cross-channel term is active under EGN: the same channel with the
-    SI comb present has a lower GSNR than alone (no comb, no band)."""
-    from tests.conftest import _mesh_config
-    from twinlight.physics.egn_kernel import accumulate_path_noise
-    from twinlight.state.context import TapiContext
-
-    ctx = TapiContext(_mesh_config(tmp_path, "egn"))
-    (path,) = ctx.candidate_paths("trx A", "trx C")
-    loaded = asyncio.run(ctx._backend.compute_baseline(
-        path, "DP-QPSK", centre_frequency_hz=193.1e12, media_channel_width_hz=56.25e9,
-        launch_power_dbm=0.0,
-    ))
-    spans, _fibers, _edfas = ctx._backend._spans_for_path(path)
-    alone = accumulate_path_noise(
-        [ctx._backend._span_inputs_for_key(key) for key in spans],
-        launch_power_w=1e-3, bandwidth_hz=32e9, centre_frequency_hz=193.1e12,
-    )
-    assert loaded.gsnr_db < alone.gsnr_db - 1.0
-    assert loaded.osnr_ase_db == pytest.approx(alone.osnr_ase_db)

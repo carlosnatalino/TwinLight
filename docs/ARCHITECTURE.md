@@ -114,7 +114,7 @@ src/twinlight/
     backend.py             PhysicalBackend Protocol (structural, not inherited)
     gnpy_backend.py        GNPy split-step implementation
     egn_backend.py         Closed-form GN/EGN implementation
-    egn_kernel.py          The GN-model kernel itself (Carena 2012/2014)
+    egn_kernel.py          The GN-model kernel itself (Poggiolini 2014, Carena 2012)
     gnpy_adapter.py        build_gnpy_network(), compute_path_baseline(), OpmBaseline
     element_params.py      Per-element parameter read/write for the /config plane
     modulation.py          ModulationFormat enum and per-format parameters
@@ -217,9 +217,17 @@ src/twinlight_client/    Companion client library and CLI
    end-points.
 5. If no candidate passes, the request is refused with a RESTCONF error body
    explaining which constraint failed.
+6. Under a backend whose baselines depend on the line load
+   (`backend.uses_line_load`, the EGN backend), the new channel is a
+   neighbour of every lightpath sharing a fiber with it: their baselines are
+   recomputed with it lit, and their `operational-state` follows (`DISABLED`
+   below the format's required GSNR). Admission evaluates the candidate with
+   the existing lightpaths lit (`_line_load`).
 
 Deletion reverses this: slots are released, `invalidate_baseline(uuid)` drops
-the cached propagation, and the EDFA tracker records the drop event.
+the cached propagation, the EDFA tracker records the drop event, and under
+the EGN backend the lightpaths that shared a fiber with it are invalidated
+too; T-API reads re-evaluate them (`refresh_operational_states`).
 
 ### Reading OPM
 

@@ -80,54 +80,84 @@ and what propagation uses.
   transmitter power alone would be erased at the first ROADM; the offset
   survives, and the channel runs that many dB above or below its neighbours
   along the line, whose absolute level stays the one the design chose.
-- **EGN.** The GN model has no ROADM equalisation: P is the channel's launch
-  power into every span.
+- **EGN.** The same offset: the channel runs `P − SI power_dbm` above the
+  reference channel at every amplifier and fiber input. The reference levels
+  are the design's (booster and inline amplifiers at SI `power_dbm` plus
+  their `delta_p`), so both backends put the channel at the same power
+  everywhere.
 
 ### EGN backend
 
 A closed-form Gaussian-Noise model implemented directly in
 [`physics/egn_kernel.py`](../src/twinlight/physics/egn_kernel.py), with no
-dependency beyond NumPy. For a channel over a chain of amplified spans:
+dependency beyond NumPy. Each noise source is compared with the channel's
+power where the source adds it, and the inverse SNRs add along the path
+(incoherent accumulation, Carena *et al.* 2012 `[Carena_2012]`
+[[8]](../README.md#ref-8); the lightpath-GSNR abstraction of Curri 2022
+`[Curri_2022]` [[10]](../README.md#ref-10)):
 
 ```
-GSNR = P_signal / (P_ASE + P_NLI)
+1/GSNR = Σ_amplifiers NF·h·ν·B / P_in  +  Σ_fibers P_NLI / P_in
 ```
 
-with per-span contributions accumulated linearly in the noise-power domain
-(Carena *et al.* 2012, Eq. 1–3 `[Carena_2012]` [[8]](../README.md#ref-8)), the
-EGN correction from Carena *et al.* 2014 `[Carena_2014]`
-[[9]](../README.md#ref-9), and the lightpath-GSNR abstraction of Curri 2022
-`[Curri_2022]` [[10]](../README.md#ref-10).
-
-Standard SSMF parameters are used as defaults: |β₂| = 21.3 ps²/km,
-γ = 1.3 W⁻¹km⁻¹.
+- **ASE** is GNPy's amplifier convention (`Edfa.noise_profile`): `NF·h·ν·B`
+  referred to the amplifier input, at the channel's own frequency.
+- **NLI** is the incoherent GN model, Poggiolini *et al.* 2014
+  `[Poggiolini_2014]` [[33]](../README.md#ref-33), Eq. 120 with ψ from
+  Eq. 123 of the arXiv version, for the channel on itself (weight 16/27,
+  Δf = 0) and for every co-propagating channel (weight 32/27). It is the
+  expression GNPy's `gn_model_analytic` evaluates, written here with the
+  kernel's field attenuation (α_power = 2α); both terms are checked against
+  `gnpy.core.science_utils.NliSolver._psi` to 1e-9 in the tests. Each
+  fiber's own γ and |β₂| come from the equipment library (GNPy's SSMF:
+  γ = 1.265 W⁻¹km⁻¹, |β₂| = 21.3 ps²/km, also the defaults without one).
+- The EGN correction of Carena *et al.* 2014 `[Carena_2014]`
+  [[9]](../README.md#ref-9) to the cross-channel term is not applied (see
+  [Known limitations](#known-limitations)); like GNPy's `gn_model_analytic`,
+  the kernel is the plain GN model.
 
 The kernel's structure derives from the Cython QoT kernel in
 [optical-networking-gym][ong] [[18]](../README.md#ref-18), a project by the same
 author.
 
-**Loaded line.** The service channel sees the same SI comb as under GNPy
-(`line_comb`). Its own NLI is Carena 2012's self-channel closed form; the
-other channels add the incoherent GN model's cross-channel term, Poggiolini
-*et al.* 2014 `[Poggiolini_2014]` [[33]](../README.md#ref-33), Eq. 120 with ψ
-from Eq. 123 of the arXiv version — the expression GNPy's `gn_model_analytic`
-evaluates, here with the kernel's field attenuation (α_power = 2α), and
-checked against `gnpy.core.science_utils.NliSolver._psi` in the tests. ASE
-is evaluated at the channel's own frequency (the photon energy hν).
+**Power budget per link.** Each terminal-to-terminal link is walked once for
+a reference channel at SI `power_dbm`: the booster after the source ROADM,
+then each fiber with its connector losses (`con_in`, `con_out`) and input
+padding (`att_in`), then the amplifier after it. An amplifier in power mode
+holds its output at the reference plus its `delta_p`; one in gain mode
+applies `gain_target`; the booster's gain is its designed `gain_target`
+(the ROADM's output to the booster's target). An amplifier's noise figure is
+GNPy's own model for its type at that operating gain (`Edfa._calc_nf`), so a
+fiber whose loss rises raises the next amplifier's gain and moves its NF the
+way GNPy's would. A channel launched at P sits `P − SI power_dbm` above the
+reference everywhere (see [Launch power](#launch-power)).
 
-**Shared amplifier placement.** The GN model charges ASE *per span*, on the
-assumption that each span ends in an amplifier that restores the launch power.
-A topology of bare fiber spans therefore cannot be fed to the kernel directly —
-a single un-split 336 km span would be modelled as one amplifier making up
-~67 dB, and GSNR would land hundreds of dB below anything physical.
+**Line load: the lit lightpaths.** A channel's neighbours are the admitted
+lightpaths, not an assumed comb. Each one adds cross-channel NLI in exactly
+the fibers both routes traverse, at its own frequency, symbol rate and power,
+and nowhere else. Lighting a lightpath therefore lowers the GSNR of every
+lightpath it shares a fiber with, and removing it restores them; the twin
+re-evaluates those lightpaths on each admission and removal. Under the GNPy
+backend every channel is evaluated on the fully loaded SI comb (GNPy
+propagates one path at a time and cannot place a channel that joins or leaves
+mid-route), so another lightpath does not change its result. Given the same
+load, the two backends agree: within 0.05 dB on the test mesh, and within
+0.25 dB over CORONET routes up to 2,850 km (the residual is GNPy's frequency
+dependence, which EGN evaluates at one frequency).
+
+**Shared amplifier placement.** The GN model needs every fiber to end in an
+amplifier: a single un-split 336 km span would be modelled as one amplifier
+making up ~67 dB, and GSNR would land far below anything physical.
 
 To avoid that, when an equipment library is configured the EGN backend runs the
 topology through GNPy's `designed_network()` — the same amplifier placement the
 GNPy backend uses — and consumes the result. `designed_network()` splits long
-fibers into ~90 km sub-spans and inserts an EDFA after each, and the designed
-network is serialised back to GNPy JSON (via `network_to_json`) so the EGN
-converter reads it unchanged. Both backends therefore propagate over *identical*
-spans and amplifiers; they differ only in the noise model applied to them.
+fibers into ~90 km sub-spans, inserts boosters and preamplifiers, and sets
+every amplifier's operating point, and the designed network is serialised
+back to GNPy JSON (via `network_to_json`) so the EGN converter reads it
+unchanged. Both backends therefore propagate over *identical* fibers and
+amplifiers at identical operating points; they differ only in how the noise
+is computed.
 
 The GNPy-format topology remains the single source of truth: `TapiContext`
 parses it for the T-API model and routing exactly as before, and the designed,
@@ -136,7 +166,11 @@ the twin sees the split spans.
 
 Without an equipment library the design step is skipped and the topology is used
 as written, which stays correct for topologies that already specify their own
-amplifiers and keeps the backend usable with no equipment file at all.
+amplifiers and keeps the backend usable with no equipment file at all. The
+amplifiers then use the noise figure their JSON gives (`nf0`, else the mean of
+`nf_min`/`nf_max`, else 6 dB); a fiber with no amplifier after it is charged
+an implicit one with that default, restoring the level its span lost; and the
+first fiber of a link without a booster is launched at the reference power.
 
 ## 2. Transient layer
 
@@ -441,16 +475,16 @@ used for research.
 | **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop, linear dB cascade | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events |
 | **EDFA excursion visibility** | τ_e is 10–100 µs, so a wall-clock poll essentially always samples the relaxed state and the model reads ~0 dB between events | Same physics — this *is* what AGC does | Low, but easy to mistake for an inactive model: to see the excursion you must sample near an add/drop, which the twin only produces on service create/delete |
 | **EDFA excursion magnitude** | Excursion scales with the absolute load step, `gain_per_channel_db × \|Δchannels\|` | Sun 1997 scales it with the *fraction* of channels added or dropped, so one channel added to a full C-band perturbs far less than one added to an empty one | Low at the loadings the bundled scenarios reach; refine before claiming excursion magnitudes on heavily loaded spans |
-| **EGN kernel** | Self-channel NLI in Carena 2012's closed form (asinh argument π²/4·\|β₂\|·B²·L_a, L_eff in place of L_eff²/L_a) plus the incoherent GN cross-channel term of Poggiolini 2014 Eq. 120/123; no EGN correction on the cross-channel term; no ROADM add/drop or transceiver noise | GNPy evaluates every channel pair, SCI included, with the Eq. 120/123 ψ, and adds ROADM and transceiver noise | **Moderate** — the two NLI terms come from slightly different normalisations of the same model. EGN GSNR runs ~1.2–1.8 dB above the GNPy backend on CORONET routes of 2.4–3.2 Mm on the same designed spans, and ~4 dB above on 80–160 km mesh routes, where ROADM noise dominates. Use the GNPy backend for absolute GSNR |
+| **EGN kernel** | The incoherent GN model (Poggiolini 2014 Eq. 120/123) for the channel itself and each co-propagating lightpath, over GNPy's designed amplifiers at their operating points and noise figures; γ, \|β₂\| and the NF at one frequency; no EGN correction on the cross-channel term; no ROADM or transceiver noise (GNPy adds none on these paths either: the adapter's transmitter is ideal) | GNPy evaluates each channel at its own frequency, with gain and NF ripple and the dispersion slope | Low — with the same load the backends agree within 0.05 dB on 80–160 km routes and 0.25 dB at 2,850 km. Before this revision the self-channel term used π²/4 inside the asinh (≈2 dB too little NLI) and the boosters, connector losses and operating-gain NF were missing, which put EGN OSNR ~7 dB above GNPy |
 | **Phase noise (EEPN)** | Shieh & Ho Eq. 33–41, contributing ≈ −0.1 dB at 2150 km on CORONET | Same | None — implemented per the reference; the penalty scales with accumulated dispersion as Shieh & Ho predict |
 | **PMD drift** | Sinusoidal, 10 % amplitude, 90 s period | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — magnitude and quadrature accumulation are right; the trajectory shape is an approximation |
 | **PDL ensemble** | Deterministic incommensurate drift covers the alignment ensemble over time | Explicit Monte-Carlo over hinge alignments | Low — equivalent in the long run, and reproducible, but a short window is not a fair ensemble sample |
-| **EDFA noise figure at runtime (GNPy)** | `nf_offset` adds a frequency-flat dB offset to the NF GNPy's equipment model computes, by folding it into the per-channel NF ripple (`Edfa._calc_nf`); the gain dependence of a variable-gain NF is kept. `nf0` is not a GNPy knob: `params.nf0` is an equipment-library input that propagation never reads. The EGN backend exposes the NF itself as `nf0` | An ageing amplifier's NF rises by a different amount across the band and with gain | Low — a flat offset is the usual first-order model of NF degradation; the equipment model's `nf_min`/`nf_max`/`nf0` are not runtime-mutable |
+| **EDFA noise figure at runtime (GNPy)** | `nf_offset` adds a frequency-flat dB offset to the NF GNPy's equipment model computes, by folding it into the per-channel NF ripple (`Edfa._calc_nf`); the gain dependence of a variable-gain NF is kept. `nf0` is not a GNPy knob: `params.nf0` is an equipment-library input that propagation never reads. The EGN backend exposes the NF itself as `nf0`: a write replaces the equipment model's figure at the operating gain | An ageing amplifier's NF rises by a different amount across the band and with gain | Low — a flat offset is the usual first-order model of NF degradation; the equipment model's `nf_min`/`nf_max`/`nf0` are not runtime-mutable |
 | **Post-FEC BER, threshold model** | A step at the configured pre-FEC BER limit; beyond it the input passes through | Measured waterfall per code | Low for planning, where the step is the convention; it says nothing about how close to the cliff a link is — read `q-factor-db` against the limit for that |
 | **Post-FEC BER, hard-decision model** | Sklar's decoded symbol error rate, converted to bits at the channel ratio p/p_s | Sklar Ch. 8 converts at 2^(m−1)/(2^m − 1), treating wrong output symbols as random | Low — the channel ratio matches the published RS(255,239) coding gain; both ignore miscorrection and burst errors, and neither describes concatenated or soft-decision codes (CFEC, oFEC) |
 | **Soft-decision post-FEC BER** | GMI and NGMI are reported but not mapped to a post-FEC BER | Per-code NGMI threshold or waterfall (Alvarado *et al.* 2015) | Known gap — needs per-code NGMI data, which specifications rarely publish |
 | **Admission thresholds** | Required GSNRs sit at pre-FEC BERs of 3.9e-3 (QPSK), 6.6e-3 (16QAM), 6.1e-3 (64QAM) | One FEC limit for every format: 8.5 / 15.2 / 21.1 dB at 3.8e-3 | **Moderate** — 16QAM and 64QAM admission is 0.6–0.7 dB optimistic against the 7% HD-FEC limit, absorbed by the default 1.5 dB `qot_margin_db`. The values are unchanged so admission behaves as before |
-| **Launch power** | GNPy: a per-channel offset (`delta_pdb`) against a line designed for SI `power_dbm`. EGN: the absolute power into every span, equal for all spans | Per-span launch power from the amplifier design, which GNPy may vary span by span (`delta_p`) | Low — the backends agree when the design runs every span at SI `power_dbm`; where GNPy's design sets per-span offsets, EGN does not see them |
+| **Line load** | GNPy: every channel on the fully loaded SI comb. EGN: the admitted lightpaths, each in the fibers it shares with the channel under test; a lightpath through a failed fiber still counts as lit | Network-wide propagation of the actual spectrum, light stopping at a cut | Low — the GNPy number is the worst case the line is designed for; the EGN number follows the network's load, and the two agree at full load |
 | **Spectral scope** | C-band only | C+L, multi-band | Known gap — the grid is parameterised but the physics is not |
 | **Filtering / ROADM penalties** | Not modelled beyond PDL | Cascaded filter narrowing penalties | Known gap |
 | **BER conversion** | Textbook Gaussian approximation per format | Curri 2022 uses measured back-to-back thresholds | Low — standard practice |

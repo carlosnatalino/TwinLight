@@ -221,6 +221,16 @@ the whole grid is assignable.
 in 0.01 dBm, as a number or decimal string; end-points that carry it must
 agree. A malformed value is a `422`.
 
+**Operational state.** `operational-state` reports whether the lightpath can
+carry its format now: `DISABLED` while its route has a failed fiber or its
+GSNR is below the format's required GSNR (T-API: "unable to meet the SLA of
+the user"), `ENABLED` otherwise. The admission margin `rmsa.qot_margin_db` is
+not part of the test, since a lightpath that has used up its margin still
+works. The state follows the current QoT: a parameter write, a failure, or,
+under the EGN backend, a lightpath lit or removed on a shared fiber changes
+it. Under EGN a new lightpath is admitted on its own merits even when it
+pushes a co-propagating one below threshold; that one then reads `DISABLED`.
+
 ### Path computation
 
 | Method | Path |
@@ -422,8 +432,9 @@ bare `/data/…` paths and omits these three resources.
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
 
 Every OPM figure is the service's own channel — at its assigned central
-frequency and launch power, on a line fully loaded with the equipment
-library's SI comb — not the worst channel of the line (see
+frequency and launch power — not the worst channel of the line. The rest of
+the line is the equipment library's SI comb, fully loaded, under the GNPy
+backend, and the lightpaths actually lit under the EGN backend (see
 [PHYSICS.md § 1](PHYSICS.md#1-qot-baseline)).
 
 **OPM response — all services** (`GET /internal/opm`) wraps a list:

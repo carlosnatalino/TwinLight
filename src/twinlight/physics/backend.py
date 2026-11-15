@@ -21,6 +21,8 @@ implementations don't have to inherit from it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -28,6 +30,21 @@ if TYPE_CHECKING:
 
     from twinlight.physics.channel_plan import SpectralDefaults
     from twinlight.physics.gnpy_adapter import OpmBaseline
+
+
+@dataclass(frozen=True)
+class LitChannel:
+    """An admitted lightpath's channel, as another channel's neighbour.
+
+    What a backend that models the actual line load needs to place it: the
+    route (to find the fibers it shares with the channel under test), where
+    it sits, how wide its signal is, and its launch power.
+    """
+
+    path_uids: tuple[str, ...]
+    centre_frequency_hz: float
+    baud_rate_hz: float
+    launch_power_dbm: float
 
 
 class PhysicalBackend(Protocol):
@@ -53,6 +70,12 @@ class PhysicalBackend(Protocol):
     # The equipment library's SI.default: reference comb, symbol rate, design
     # launch power (physics/channel_plan.py).
     spectral_defaults: SpectralDefaults
+    # True when a baseline depends on the other lightpaths (``line_load``):
+    # the context then passes the admitted channels and re-evaluates the
+    # lightpaths sharing fibers with one that is added or removed. False
+    # when the backend assumes a fully loaded line, so baselines do not
+    # depend on what else is lit.
+    uses_line_load: bool
 
     async def compute_baseline(
         self,
@@ -62,6 +85,7 @@ class PhysicalBackend(Protocol):
         centre_frequency_hz: float,
         media_channel_width_hz: float,
         launch_power_dbm: float,
+        line_load: Sequence[LitChannel] = (),
     ) -> OpmBaseline | None:
         """Return a static QoT baseline for the path, or ``None`` if
         propagation is not possible (engine unavailable, missing element).
@@ -69,8 +93,11 @@ class PhysicalBackend(Protocol):
 
         The metrics are the service channel's: at ``centre_frequency_hz`` in a
         media channel ``media_channel_width_hz`` wide, launched at
-        ``launch_power_dbm``, with the rest of the line fully loaded by the
-        SI comb (``physics/channel_plan.py:line_comb``).
+        ``launch_power_dbm``. The rest of the line is either the other
+        admitted lightpaths, ``line_load`` (backends with
+        ``uses_line_load``), or the SI comb fully loaded
+        (``physics/channel_plan.py:line_comb``), in which case ``line_load``
+        is ignored.
         """
 
     def amplifier_bands(self, path_uids: list[str]) -> list[tuple[float, float]] | None:
