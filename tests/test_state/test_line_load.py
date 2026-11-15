@@ -273,3 +273,23 @@ class TestAFailedLightpath:
         loaded = _gsnr(egn, cut)
         egn.set_link_failed("fiber (B → C)", True)
         assert _gsnr(egn, cut) == pytest.approx(loaded, abs=1e-9)
+
+    def test_repair_after_a_restore(self, egn: TapiContext, tmp_path: Path) -> None:
+        """A lightpath restored on a cut route has no propagated baseline, only
+        the failure sentinel; repairing the cut must still re-evaluate the
+        lightpaths it lights again."""
+        cut = _admit(egn, "trx B", "trx C", start_slot=100)
+        neighbour = _admit(egn, "trx A", "trx C", start_slot=109)
+        loaded = _gsnr(egn, cut)
+        egn.set_link_failed("fiber (A → B)", True)
+        dark = _gsnr(egn, cut)
+        assert dark > loaded
+
+        snapshot = egn.snapshot(tmp_path / "cut.json")
+        egn.restore_from(snapshot)
+        assert _gsnr(egn, egn._services[cut.uuid]) == pytest.approx(dark, abs=1e-9)
+        assert asyncio.run(egn.get_or_compute_baseline(
+            egn._services[neighbour.uuid])).status == "link-failed"
+
+        egn.set_link_failed("fiber (A → B)", False)
+        assert _gsnr(egn, egn._services[cut.uuid]) == pytest.approx(loaded, abs=1e-9)

@@ -184,6 +184,11 @@ class GnpyBackend:
 
         return isinstance(self.uid_map.get(uid), Fiber)
 
+    def route_fibers(self, path_uids: list[str]) -> list[str]:
+        """Routes are over the designed network, so its fibers are the
+        route's own."""
+        return [uid for uid in path_uids if self.is_fiber(uid)]
+
     def notify_fiber_failed(self, uid: str, failed: bool) -> None:
         """Called by ``TapiContext.set_link_failed`` after the routing
         graphs are mutated. The GNPy backend learns about failure

@@ -1555,23 +1555,37 @@ class TapiContext:
         The route holds the topology's UIDs as written; the baseline holds
         the backend's, which may differ (GNPy's design splits fibers into
         sub-spans and adds boosters and preamplifiers). Indexing both lets a
-        /config write to any of them invalidate this service, and records
-        the fibers it shares with other lightpaths.
+        /config write to any of them invalidate this service.
         """
         for uid in (*baseline.fiber_uids, *baseline.edfa_uids):
             self._element_to_services.setdefault(uid, set()).add(svc.uuid)
-        if baseline.fiber_uids:
-            self._service_fibers[svc.uuid] = frozenset(baseline.fiber_uids)
+
+    def _fibers_of(self, uuid: str) -> frozenset[str]:
+        """The backend's fibers on the service's allocated route.
+
+        Resolved from the route, not recorded from a propagated baseline: a
+        service whose baseline is a failure sentinel (one restored on a cut
+        route, say) still shares its fibers, and must be re-evaluated when a
+        neighbour on them changes.
+        """
+        fibers = self._service_fibers.get(uuid)
+        if fibers is None:
+            path = self._allocated_path_uids(uuid)
+            if not path:
+                return frozenset()  # no route recorded (yet): nothing to cache
+            fibers = frozenset(self._backend.route_fibers(path))
+            self._service_fibers[uuid] = fibers
+        return fibers
 
     def _sharing_services(self, uuid: str) -> set[str]:
         """The other lightpaths that share a fiber with ``uuid``'s, when the
         backend's baselines depend on the line load; empty otherwise."""
         if not self._backend.uses_line_load:
             return set()
-        fibers = self._service_fibers.get(uuid, frozenset())
+        fibers = self._fibers_of(uuid)
         return {
-            other for other, theirs in self._service_fibers.items()
-            if other != uuid and not fibers.isdisjoint(theirs)
+            other for other in self._services
+            if other != uuid and not fibers.isdisjoint(self._fibers_of(other))
         }
 
     def _out_of_band(self, uuid: str) -> bool:
@@ -2671,7 +2685,8 @@ class TapiContext:
 
         Version 1 (written before the amplifier band bounded spectrum
         assignment) is deprecated: it is restored, then the file is replaced
-        by the same state in the current version. A restored service whose
+        by the same state in the current version (when the twin can write
+        it; otherwise a warning says so). A restored service whose
         block lies outside its amplifier band keeps it, and reports
         ``out-of-band`` and DISABLED.
 
@@ -2773,10 +2788,20 @@ class TapiContext:
                 )
                 svc.operational_state = OperationalState.DISABLED
         if version == 1:
-            self.snapshot(path)
+            # The state is already restored: a file the twin cannot write (a
+            # read-only mount, say) must not fail the restore, only the
+            # migration, which the next restore of the file retries.
+            try:
+                self.snapshot(path)
+                outcome = f"rewritten in place as version {SNAPSHOT_VERSION}"
+            except OSError as exc:
+                outcome = (
+                    f"could not be rewritten as version {SNAPSHOT_VERSION} "
+                    f"({exc.strerror or exc}), so it stays at version 1"
+                )
             warnings.insert(0, (
                 f"snapshot {path} used the deprecated format version 1; it was "
-                f"restored and rewritten in place as version {SNAPSHOT_VERSION}"
+                f"restored and {outcome}"
             ))
         for warning in warnings:
             logger.warning("Restore: %s", warning)

@@ -420,6 +420,12 @@ class EgnBackend:
                 result.setdefault(uid, []).append(entry)
         return result
 
+    def route_fibers(self, path_uids: list[str]) -> list[str]:
+        """The designed spans of the route's links: the ``fiber_uids`` a
+        baseline of the route reports."""
+        link_ids = self._links_for_path(path_uids) or []
+        return [f.uid for link_id in link_ids for f in self._link_plan(link_id).fibers]
+
     def _lit_fibers(self, path_uids: list[str]) -> list[str]:
         """The fibers of a route its light reaches, in order: all of them, or
         those before the first failed one (the transmitter still emits; the

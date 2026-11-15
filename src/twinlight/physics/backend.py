@@ -114,6 +114,14 @@ class PhysicalBackend(Protocol):
         Spectrum outside them is dropped by an EDFA, so it is not assignable.
         """
 
+    def route_fibers(self, path_uids: list[str]) -> list[str]:
+        """The fibers the backend models on the route, under the UIDs its
+        baselines report (``OpmBaseline.fiber_uids``), failed or not.
+
+        Needs no propagation, so the context can tell which lightpaths share
+        a fiber even for one whose baseline is a failure sentinel.
+        """
+
     def read_attribute(self, uid: str, attr: str) -> Any:
         """Read a /config-mutable attribute as a JSON-friendly user value."""
 
