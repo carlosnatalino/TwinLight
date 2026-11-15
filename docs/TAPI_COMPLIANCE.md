@@ -76,7 +76,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 | **Normalized measurement types (§6.3.8)** | ✓ | `CHROM_DISP`, `POL_MODE_DISP`, `FEC_PRE_FEC_BER`, `FEC_POST_FEC_BER`; the rest native with units |
 | **Value qualifiers (ST-6.3)** | ✓ | `MISSING` for a link-failed or unsampleable service, `INVALID` for a non-finite value |
 | **Resume (§6.3.4 history, ST-6.4)** | ✓ | `range.start` replays from the log; see §2.5 for the edge cases |
-| **Authentication (ST-0.1)** | ◐ | Optional pre-shared bearer token on every gNMI call — see §2.5 |
+| **Authentication (ST-0.1)** | ◐ | Optional pre-shared bearer tokens, required on every gNMI call and REST request alike — see §2.5 |
 
 ### 1.7 TAPI OAM
 
@@ -165,7 +165,7 @@ or is not followed, with the reason for each.
 
 | Topic | TR-548 | TwinLight | Reason |
 |-------|--------|-----------|--------|
-| Auth token (ST-0.1) | Client acquires a token, e.g. from an authorisation service (§7.11.2) | Optional pre-shared token, `streaming.auth_token`, sent as `authorization: Bearer <token>` gRPC metadata; `UNAUTHENTICATED` otherwise. No token service, no TLS | Lab tool; the token keeps an unintended client off the stream without an identity provider |
+| Auth token (ST-0.1) | Client acquires a token, e.g. from an authorisation service (§7.11.2) | Optional pre-shared tokens from `TWINLIGHT_API_TOKENS`, sent as `authorization: Bearer <token>` gRPC metadata; `UNAUTHENTICATED` otherwise. The same tokens gate the RESTCONF discovery (ST-0.2). No token service, no TLS | Lab tool; the tokens keep unintended clients off the twin without an identity provider |
 | `log-record-strategy` | May be omitted when it is the default (`WHOLE_ENTITY`) | Stated explicitly | A client can match all six §6.2.2 properties without knowing YANG defaults |
 | `connection-address` | `grpc://<host-fqdn>:<port>` | `streaming.advertised_address`, else `grpc://<FQDN>:<grpc_port>` | The FQDN is wrong behind NAT or a Compose port mapping, so it can be overridden |
 
@@ -206,7 +206,7 @@ or is not followed, with the reason for each.
 
 ### 2.6 Security
 
-Neither interface implements authorization or TLS, and RESTCONF has no authentication. The gNMI stream can require a pre-shared bearer token (`streaming.auth_token`, §2.5). T-API deployments normally sit behind an authenticating gateway; TwinLight is designed for lab and Compose use. See [SECURITY.md](../SECURITY.md).
+Neither interface implements authorization scopes or TLS. Authentication is opt-in: with `TWINLIGHT_API_TOKENS` set, RESTCONF (every path but `/health`) and gNMI both require one of those pre-shared bearer tokens (RFC 6750; a rejected RESTCONF request gets 401 with an RFC 8040 `access-denied` error). T-API deployments normally sit behind an authenticating gateway; TwinLight is designed for lab and Compose use. See [SECURITY.md](../SECURITY.md).
 
 ---
 
@@ -219,7 +219,7 @@ Neither interface implements authorization or TLS, and RESTCONF has no authentic
 | **Data model** | Core topology + connectivity + SIP, per-SIP spectrum capability, standard modulation and assigned-spectrum augments, link latency-characteristic | Separate Connection resource, routing/resilience/cost constraints, richer topology quality attributes |
 | **Behaviour** | Create/read/update/delete connectivity with QoT-aware admission; path computation; snapshot/restore | State and lifecycle semantics are stored but not enforced; the modulation format is immutable after create; QoT is exposed non-standardly |
 | **gNMI** | TR-548 measurement stream: Capabilities, the §6.3.4 Subscribe, history-extension resume, PROTO records | Get, Set, other streams |
-| **Security** | Optional bearer token on gNMI | REST authentication, authorization, TLS |
+| **Security** | Optional bearer-token authentication on RESTCONF and gNMI | Authorization scopes, TLS, token service |
 
 ---
 

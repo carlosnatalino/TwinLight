@@ -94,6 +94,8 @@ src/twinlight/
   main.py                Entry point — REST + gRPC on one event loop
   cli.py                 Argparse CLI; load_config() merges YAML and flags
   config.py              Pydantic TwinConfig tree (validated, documented)
+  auth.py                API tokens: TWINLIGHT_API_TOKENS parsing, the shared
+                         TokenAuthenticator (SHA-256 digests, constant-time)
   example_data.py        twinlight-fetch-examples: provisions GNPy topologies
 
   models/                Pydantic models of the T-API wire format
@@ -150,13 +152,15 @@ src/twinlight/
     record_log.py          RecordLog interface + in-process truncated log
     records.py             OPM sample ↔ tapi.MeasurementDetails, oam-job paths
     gnmi_service.py        TapiGnmiServicer: Capabilities + TR-548 Subscribe
-                           (validation, ST-6.4 resume); bearer-token interceptor
+                           (validation, ST-6.4 resume)
+    interceptors.py        TokenAuthInterceptor: bearer token on every RPC
     proto/                 Vendored gNMI and TAPI .proto files and their
                            generated code (committed, not linted)
   output/
     eye_diagram.py         Statistical eye synthesis from OPM
     constellation.py       Statistical constellation synthesis from OPM
-  grpc_server.py         Builds and runs the gRPC server (auth when configured)
+  grpc_server.py         Builds and runs the gRPC server (interceptor only
+                         when API tokens are configured)
 
 src/twinlight_client/    Companion client library and CLI
   client.py                TapiClient — async REST wrapper (named for the
@@ -323,11 +327,14 @@ observe the tentative values; nothing is cached.
 
 ## Middleware
 
-Two Starlette middlewares, applied in `app.py` (order matters — the last added
-runs innermost):
+Starlette middlewares, applied in `app.py`. Order matters: the last one added
+runs outermost, so a request meets them bottom-up in this table (CORS first,
+then authentication, then the rest):
 
 | Middleware | Purpose |
 |------------|---------|
+| `CORSMiddleware` | Answers preflights and adds CORS headers, including to a 401, so a browser client can read it. |
+| `TokenAuthMiddleware` | Only when API tokens are configured. A pure ASGI middleware that rejects every request without a valid bearer token (401, RFC 6750 challenge, RFC 8040 `access-denied` body) before routing; `/health` is the one exemption. Without tokens it is not installed. Its gRPC counterpart, `streaming/interceptors.py:TokenAuthInterceptor`, checks the same `app.state.authenticator` and is likewise installed only with tokens. |
 | `PathDecodeMiddleware` | URL-decodes `%3A` → `:` before routing. Browsers percent-encode colons in paths per the WHATWG URL spec, but T-API RESTCONF paths contain literal colons. |
 | `RestconfContentTypeMiddleware` | Sets `Content-Type: application/yang-data+json` on all `/data/` responses, as RESTCONF requires. |
 

@@ -99,4 +99,4 @@ spans. See [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir).
 | gNMI `Get` and `Set` | Return `UNIMPLEMENTED`; `Subscribe` serves the TR-548 measurement stream. The transparent controller's tree (`/transparent`) is the natural model for them to serve |
 | Transparent controller: YANG module, locking, confirmed commit | The tree is described by a JSON schema (`/transparent/schema`), not YANG; the candidate is shared without a lock (use `If-Match`); there is no confirmed-commit rollback timer, since the twin keeps no clock for parameter changes |
 | Transparent controller in the web UI | Driven through REST, `twinlight-transparent` or `TransparentClient` only |
-| Authentication and TLS | No TLS anywhere and no REST authentication; gNMI takes an optional pre-shared bearer token (`streaming.auth_token`); see [SECURITY.md](../SECURITY.md) |
+| TLS and authorization | No TLS anywhere. Authentication is opt-in (`TWINLIGHT_API_TOKENS`) and all-or-nothing: any accepted token may use every REST path and gNMI; there are no per-token scopes. See [SECURITY.md](../SECURITY.md) |

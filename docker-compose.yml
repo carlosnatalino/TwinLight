@@ -29,6 +29,11 @@
 # Override the twin config (default: CORONET CONUS):
 #   docker compose run --rm twin twinlight \
 #       --config /app/examples/twin_config.yaml --rest-host 0.0.0.0
+#
+# Authentication (off by default): set TWINLIGHT_API_TOKENS in a .env file
+# next to this one — see .env.example — and the twin requires a bearer token
+# on REST and gNMI. Then enter a token under Settings in the web UI, and give
+# Prometheus one as described in docker/prometheus.yml.
 
 services:
 
@@ -73,6 +78,11 @@ services:
     # Give the twin time to write its checkpoint before SIGKILL. Docker's
     # default is 10s, which is tight for a large topology.
     stop_grace_period: 30s
+    environment:
+      # Compose fills this in from ./.env. Unset there, it arrives empty,
+      # which the twin treats as unset: authentication stays off. Only this
+      # variable is passed, not the whole .env file.
+      TWINLIGHT_API_TOKENS: ${TWINLIGHT_API_TOKENS:-}
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
@@ -119,6 +129,8 @@ services:
       - "9090:9090"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # With authentication on: uncomment, and see docker/prometheus.yml.
+      # - ./docker/prometheus.token:/etc/prometheus/twinlight.token:ro
       - prometheus-data:/prometheus
     depends_on:
       twin:

@@ -160,6 +160,8 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+# Prometheus's copy of a TwinLight API token (see docker/prometheus.yml).
+docker/prometheus.token
 .venv
 env/
 venv/

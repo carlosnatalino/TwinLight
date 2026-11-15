@@ -172,6 +172,29 @@ in docs/TAPI_COMPLIANCE.md § 2.5). Three rules keep it honest:
   and trims through that interface; keep it that way so a shared backend can
   replace the in-process log.
 
+## Authentication
+
+Opt-in, switched on by `TWINLIGHT_API_TOKENS` (environment or `.env`, never
+YAML; see `twinlight/auth.py`). One `TokenAuthenticator` on `app.state` serves
+both interfaces: `TokenAuthMiddleware` for HTTP, `TokenAuthInterceptor` for
+gRPC.
+
+- **Installed only when tokens exist.** `create_app` and `build_grpc_server`
+  add the middleware and the interceptor only if the token set is non-empty,
+  so an open twin runs no authentication code. Do not add per-request
+  "is auth on?" checks; do not install either unconditionally.
+- **Deny by default.** A new route is protected automatically. `/health` is
+  the only public path (`app.py:PUBLIC_PATHS`); adding one needs a reason as
+  good as the Compose healthcheck's.
+- **No side doors.** Anything that serves the API on another interface or
+  port must check the same `app.state.authenticator`.
+- **Never log, echo or serialise a token.** `TwinConfig.api_tokens` is
+  `exclude=True, repr=False` (so `/transparent` never shows it), and parse
+  errors name entries by position.
+- **Tests stay hermetic.** `conftest.py` clears the token variables and
+  points `twinlight.auth.DEFAULT_ENV_FILE` away from the developer's own
+  `.env`. A test that wants tokens sets `api_tokens` explicitly.
+
 ## SIP ↔ GNPy UID mapping
 
 `TapiBuilder` stores each GNPy element's UID in the SIP's name list:
@@ -189,5 +212,5 @@ Soft-decision post-FEC BER (GMI/NGMI are reported, but not mapped through a
 per-code NGMI threshold); multi-band (C-band only); XPM/FWM in the EGN kernel (self-channel
 NLI only); an event-driven simulation clock; T-API notification, fault and
 virtual-network modules, and OAM beyond the stream's read-only jobs; T-API entity
-and alarm streams; gNMI Get/Set; authentication on REST (gNMI has an optional
-bearer token).
+and alarm streams; gNMI Get/Set; TLS and per-token authorization scopes
+(authentication is opt-in and all-or-nothing).

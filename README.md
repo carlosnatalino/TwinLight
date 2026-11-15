@@ -57,6 +57,7 @@ way a deployed coherent receiver's telemetry moves.
   - [Rehearse soft failures](#rehearse-soft-failures)
   - [Drive the transparent controller](#drive-the-transparent-controller)
   - [Checkpoint and restore](#checkpoint-and-restore)
+  - [Require API tokens](#require-api-tokens)
 - [Architecture](#architecture)
 - [Physics](#physics)
   - [QoT baseline](#qot-baseline)
@@ -92,7 +93,10 @@ way a deployed coherent receiver's telemetry moves.
   TR-548 over gNMI: discovered through `tapi-streaming:stream-context`, one
   protobuf `MeasurementDetails` record per service per tick under the service's
   `tapi-oam` job, a truncated log that lets a client resume after a dropped
-  connection, and an optional bearer token.
+  connection.
+- **Optional token authentication** — set `TWINLIGHT_API_TOKENS` in the
+  environment or a `.env` file and every REST request and gNMI call needs one
+  of those bearer tokens; leave it unset and both interfaces stay open.
 - **Observability out of the box** — Prometheus `/metrics` plus a provisioned
   Grafana dashboard in the Compose stack.
 - **Web UI** — a React SPA for topology, services, spectrum occupancy, path
@@ -315,7 +319,7 @@ The companion client library and CLI ship in the same distribution:
 ```bash
 twinlight-client                                   # localhost defaults
 twinlight-client --rest-url http://host:8080       # stream address comes from discovery
-twinlight-client --gnmi-target host:50051 --token "$TOKEN"   # override the address; auth
+twinlight-client --gnmi-target host:50051          # override the advertised address
 ```
 
 It lists the active services and lets you pick one, then discovers the T-API
@@ -395,6 +399,46 @@ twinlight --config examples/twin_config.yaml --restore-latest
 
 Both kinds record the physical-layer backend that produced them; restoring one
 under a different backend is rejected rather than silently reinterpreted.
+
+### Require API tokens
+
+Authentication is off until you configure tokens. Once `TWINLIGHT_API_TOKENS`
+is set, every REST request and every gNMI RPC must carry one of them as a bearer
+token; only `GET /health` stays public, for liveness probes. The same token
+works on both interfaces. The twin reads the variable from the environment or
+from `./.env`:
+
+```bash
+cp .env.example .env
+python -c 'import secrets; print(secrets.token_urlsafe(32))'   # once per client
+```
+
+```dotenv
+# .env: the tokens the twin accepts, optionally named for the logs
+TWINLIGHT_API_TOKENS=ui:<token-1>,onos:<token-2>
+# the token twinlight-client, twinlight-soft-failure and demo_services.py present
+TWINLIGHT_API_TOKEN=<token-1>
+```
+
+```bash
+twinlight --config examples/twin_config.yaml       # logs "bearer token required on REST and gNMI"
+curl -H "Authorization: Bearer <token-1>" http://localhost:8080/internal/whoami
+# {"principal":"ui","authentication":"bearer-token"}
+twinlight-client                                   # REST and gNMI, token from ./.env
+```
+
+A request without a valid token gets `401` with a `WWW-Authenticate: Bearer`
+challenge; a gNMI call gets `UNAUTHENTICATED`. With no tokens configured the
+check is not installed at all, so an open twin pays nothing for it. In the web
+UI, enter the token under **Settings → API Token**. In the Compose stack, put
+`TWINLIGHT_API_TOKENS` in a `.env` next to `docker-compose.yml`; Compose passes
+it to the twin. To keep Prometheus scraping, follow the comment in
+[`docker/prometheus.yml`](docker/prometheus.yml).
+
+Tokens are sent in clear text: the twin does not terminate TLS, so terminate it
+in front of the twin for anything beyond a lab network. Details are in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md#authentication--api-tokens) and
+[docs/API.md](docs/API.md#authentication).
 
 ## Architecture
 

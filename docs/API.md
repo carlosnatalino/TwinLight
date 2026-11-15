@@ -1,6 +1,6 @@
 # API reference
 
-TwinLight exposes 73 REST operations plus a gNMI gRPC service carrying the
+TwinLight exposes 74 REST operations plus a gNMI gRPC service carrying the
 T-API performance-measurement stream. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
@@ -23,6 +23,75 @@ Endpoints fall into two groups, kept strictly apart (see
 > `/data/…` mount is kept for clients written against earlier releases and is
 > scheduled for removal — see [ROADMAP.md](ROADMAP.md). New clients should use
 > the RESTCONF root.
+
+## Authentication
+
+Authentication is off unless the twin was started with API tokens
+(`TWINLIGHT_API_TOKENS`, see
+[CONFIGURATION.md](CONFIGURATION.md#authentication--api-tokens)). With tokens,
+every REST request and every gNMI RPC must present one as an
+[RFC 6750](https://www.rfc-editor.org/rfc/rfc6750) bearer token. Both
+interfaces accept the same tokens.
+
+```bash
+curl -H "Authorization: Bearer $TWINLIGHT_API_TOKEN" \
+     http://localhost:8080/restconf/data/tapi-common:context
+```
+
+`GET /health` is the only public path, so that liveness probes (the Compose
+healthcheck, load balancers) work without credentials. It is an exact match:
+`/health/` and `/healthz` are protected. Everything else needs a token — the
+T-API modules, the RESTCONF root and `/.well-known/host-meta`, `/internal/`,
+`/admin/`, `/config/`, `/transparent/`, `/metrics`, the OpenAPI schema with
+`/docs` and `/redoc`, and paths that do not exist (they answer 401, not 404).
+A rejected request never reaches a route, so it has no side effect:
+
+```
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer realm="twinlight", error="invalid_token"
+Content-Type: application/yang-data+json
+
+{"ietf-restconf:errors": {"error": [{"error-type": "protocol",
+  "error-tag": "access-denied",
+  "error-message": "The bearer token is not valid for this twin."}]}}
+```
+
+`error="invalid_token"` appears only when a token was presented and not
+recognised. A request with no credentials, or with another scheme such as
+`Basic`, gets the bare `Bearer realm="twinlight"` challenge (RFC 6750 §3.1).
+The scheme name is case-insensitive. CORS preflights never need a token, and
+401 responses carry CORS headers so a browser client can read them.
+
+**gNMI** carries the same credential as call metadata,
+`authorization: Bearer <token>`. Without a valid one, every RPC, `Capabilities`
+included, ends with `UNAUTHENTICATED` before the servicer runs, so a
+`Subscribe` opens no stream.
+
+**One check, in one place per interface.** REST requests pass through a single
+ASGI middleware and gNMI calls through a single server interceptor, both
+consulting the same token set. With no tokens configured, neither is installed:
+an open twin runs no authentication code at all.
+
+**Which token am I?** `GET /internal/whoami` returns the principal name a
+request authenticated as:
+
+```json
+{"principal": "ui", "authentication": "bearer-token"}
+```
+
+With authentication off, it returns `{"principal": null, "authentication":
+"disabled"}`. With authentication on, a request without a valid token gets 401,
+which makes it a cheap credential check. The web UI uses it as its connection
+probe.
+
+When tokens are configured, the OpenAPI schema declares the bearer scheme
+(`components.securitySchemes.bearerAuth`) and marks `/health` `security: []`.
+The schema and Swagger UI themselves need a token, so open them through a client
+that sends one, or read the schema with `curl -H "Authorization: Bearer …"`.
+
+> The twin does not terminate TLS, so a token crosses the network in clear
+> text. Beyond a lab network, put a TLS-terminating proxy in front of both
+> ports.
 
 ## T-API v2.6.0 endpoints
 
@@ -296,7 +365,8 @@ then on (TR-548 ST-1.1). Both UUIDs are name-based and stable across restarts.
 
 Errors under `/data/` use the RESTCONF format of
 [RFC 8040](https://www.rfc-editor.org/rfc/rfc8040), served as
-`application/yang-data+json`:
+`application/yang-data+json`. A rejected token uses the same body with
+`error-tag: access-denied` (see [Authentication](#authentication)):
 
 ```json
 {
@@ -347,6 +417,7 @@ bare `/data/…` paths and omits these three resources.
 | GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service |
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
+| GET | `/internal/whoami` | The principal the request authenticated as; see [Authentication](#authentication) |
 
 The OPM endpoints and the [gNMI measurement stream](#gnmi-streaming) share one
 computation (`sample_service_opm`): at the same instant both report identical
@@ -659,6 +730,8 @@ The gRPC server on `server.grpc_port` (50051) carries one stream: the T-API
 v2.6.0 performance-measurement stream of TR-548 §6, discovered as described in
 [Streaming discovery](#streaming-discovery). Configuration is the
 [`streaming`](CONFIGURATION.md#streaming--the-t-api-measurement-stream) section.
+With API tokens configured, every RPC needs `authorization: Bearer <token>`
+metadata; see [Authentication](#authentication).
 
 | RPC | Behaviour |
 |-----|-----------|
@@ -758,25 +831,20 @@ logged at or after `start` (so the records at `start` arrive again), sends
 - `start` in the future: live records only.
 - `range.end` must be omitted; `snapshot_time` is rejected.
 
-### Authentication
-
-With `streaming.auth_token` set, every call — `Capabilities` included — must
-carry `authorization: Bearer <token>` metadata (the scheme is
-case-insensitive); otherwise the call fails with `UNAUTHENTICATED`. An empty
-token disables the check. The transport is plaintext gRPC either way.
-
 ### Consuming it
 
 ```bash
 twinlight-client                                   # localhost defaults
 twinlight-client --rest-url http://host:8080       # address from discovery
-twinlight-client --gnmi-target host:50051 --token "$TOKEN"   # override; auth
+twinlight-client --gnmi-target host:50051          # override the address
+TWINLIGHT_API_TOKEN=<token> twinlight-client       # a twin with tokens
 ```
 
 `twinlight-client` lists the services, discovers the stream and the chosen
 service's oam-job over RESTCONF, and prints that job's records, resuming
-automatically after a dropped connection. `--token` defaults to
-`$TWINLIGHT_STREAM_TOKEN`.
+automatically after a dropped connection. The one token serves the REST
+lookups and the stream; `--token` overrides `TWINLIGHT_API_TOKEN` (environment
+or `./.env`).
 
 Programmatically:
 
@@ -784,7 +852,7 @@ Programmatically:
 from twinlight_client import TapiClient, TapiStreamClient
 from twinlight_client.streaming import discover_stream, oam_job_for_service
 
-async with TapiClient("http://host:8080") as rest:
+async with TapiClient("http://host:8080", token=token) as rest:
     endpoint = await discover_stream(rest)            # ST-0.2
     job = await oam_job_for_service(rest, service_uuid)
 async with TapiStreamClient(endpoint.target, token) as stream:
@@ -794,7 +862,9 @@ async with TapiStreamClient(endpoint.target, token) as stream:
 
 `record.measurements` is keyed by the OPM keys of `GET /internal/opm`, with
 `None` for a MISSING measure; `record.details` is the decoded
-`tapi.MeasurementDetails`.
+`tapi.MeasurementDetails`. Any other gNMI client must send the token as plain
+call metadata: gRPC's own call credentials refuse to travel over an insecure
+channel, and the twin serves no other.
 
 ### Migrating from the earlier gNMI interface
 
@@ -810,6 +880,7 @@ are gone:
 | `sample_interval` chosen per subscription | One twin-wide cadence, `streaming.sample_interval_s` |
 | ONCE / POLL, or subscribing to context or topology paths | Read them over RESTCONF |
 | `GnmiConsumer(target)` | `TapiStreamClient(target, token)`, with the target from `discover_stream()` |
+| `streaming.auth_token` (gNMI only) | The twin-wide `TWINLIGHT_API_TOKENS`, required on REST and gNMI alike |
 | `twinlight-client --gnmi-target` required | Optional; the address comes from the stream-context |
 | Link-failed BER reported as 1.0 | Every measure `MISSING` (`None` once decoded) |
 
@@ -822,6 +893,6 @@ T-API v2.6.0. The main gaps:
   alarm streams, gNMI Get and Set are not implemented.
 - Notification, fault and virtual-network T-API modules are not implemented,
   and OAM only as the read-only jobs that anchor the stream.
-- No TLS on either interface, and the only authentication is the optional
-  bearer token on gNMI — TwinLight is designed to run inside a lab network or
-  a Compose stack, not exposed to the internet.
+- No TLS on either interface, and authentication is all-or-nothing: any
+  accepted token may do anything, `/admin/` and `/config/` included. TwinLight
+  is designed for a lab network or a Compose stack, not the open internet.

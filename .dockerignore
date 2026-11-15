@@ -4,6 +4,13 @@
 venv/
 .venv/
 
+# Secrets. The Dockerfile copies named paths only, so these could not reach
+# the image anyway; listed so that stays true if a COPY is ever widened.
+# Tokens reach the container at run time, through the environment.
+.env
+.env.*
+docker/prometheus.token
+
 # React frontend — the image is backend-only.
 twinlight-ui/
 

@@ -82,6 +82,54 @@ absolute; a trailing slash is trimmed. The modules stay reachable at the bare
 moving one — set it to `""` to serve only the bare paths and omit the root
 resource and `host-meta` entirely.
 
+## Authentication — API tokens
+
+Authentication is the one setting that has no YAML section, on purpose. Scenario
+files get committed next to their topologies, so a token in one would end up in
+git history. The token set comes from **`TWINLIGHT_API_TOKENS`** instead, read once
+at startup:
+
+1. from the process environment, else
+2. from a dotenv file: `./.env` in the working directory, or the file named by
+   `--env-file`.
+
+An environment variable wins over the same name in the file. An *empty* variable
+counts as unset, so it falls through to the file: a stray `export
+TWINLIGHT_API_TOKENS=`, or Compose's `${TWINLIGHT_API_TOKENS:-}`, cannot
+silently turn authentication off. A YAML file with an `api_tokens` key is
+rejected at startup.
+
+**Tokens configured** means REST and gNMI both require one on every call. **None
+configured** means both are open and the startup log warns; the HTTP middleware
+and the gRPC interceptor are then not installed at all, so no authentication
+code runs per request.
+
+```dotenv
+# Comma- or whitespace-separated; each entry is `token` or `name:token`.
+TWINLIGHT_API_TOKENS=ui:Zm9vYmFyLXVpLXRva2VuLTAx,onos:Zm9vYmFyLW9ub3MtdG9rZW4
+```
+
+| Rule | Why |
+|------|-----|
+| At least 16 characters | Rejects placeholders such as `changeme`. Generate tokens with `python -c 'import secrets; print(secrets.token_urlsafe(32))'` |
+| Letters, digits and `-._~+/`, optional trailing `=` | RFC 6750 §2.1 `b64token`: what may legally follow `Bearer ` in a header |
+| Names: 1–64 of letters, digits, `.`, `_`, `-` | A name is what the logs and `GET /internal/whoami` report. An unnamed token is reported as `token-<8 hex>`, a SHA-256 fingerprint that is safe to log |
+| No duplicate tokens or names | Each token names one client, so one client can be revoked without touching the others |
+
+A malformed value stops startup with every problem listed by position or name.
+The message never contains a token.
+
+Nothing else is configurable. The one public path, `GET /health`, is fixed (the
+Compose healthcheck calls it without credentials); everything else, including
+`/.well-known/host-meta`, `/metrics` and the OpenAPI docs, needs a token. Every
+accepted token grants full access: there are no per-token scopes. See
+[API.md § Authentication](API.md#authentication) for the wire behaviour.
+
+The clients read **`TWINLIGHT_API_TOKEN`** (singular): the one token they present,
+from the environment or `./.env`, overridden by `--token`. A single `.env` can
+hold both variables when the twin and its clients run in one directory, as in
+[`.env.example`](../.env.example).
+
 ## `simulation` — clock and checkpoints
 
 ```yaml
@@ -276,7 +324,6 @@ ITU-T G.694.1 anchor at 193.1 THz.
 streaming:
   sample_interval_s: 1.0
   record_retention_min: 5
-  auth_token: ""
   advertised_address: ""
 ```
 
@@ -288,11 +335,11 @@ discovery, subscription and the record format.
 |-------|---------|---------|
 | `sample_interval_s` | `1.0` | Seconds between ticks. Each tick takes one OPM sample of every connectivity service — the same computation `GET /internal/opm` serves — and appends one record per OAM job to the log, whether or not a client is subscribed. Also reported as each record's `sample-interval`. |
 | `record_retention_min` | `5` | Minutes a record stays in the truncated log, published as the stream type's `record-retention`. A client that reconnects within this window and asks to resume from its last record's timestamp loses nothing (TR-548 ST-6.4). |
-| `auth_token` | `""` | Empty disables authentication. Otherwise every gNMI call must carry `authorization: Bearer <token>` metadata, and a missing or wrong token is answered with `UNAUTHENTICATED`. The value is never logged and the transparent controller shows it masked. It protects the gRPC port only — the REST interfaces have no authentication. |
 | `advertised_address` | `""` | The `connection-address` published on the available-stream, as `grpc://<host>:<port>`. Empty derives it from the host's FQDN and `server.grpc_port`; set it when clients reach the twin through another name or a mapped port (Compose port mappings, NAT). |
 
-All four are restart-only. The effective values (with the token reported only
-as set or unset) are logged at startup.
+All three are restart-only, and the effective values are logged at startup. The
+stream has no token of its own: gNMI accepts the twin-wide API tokens
+([Authentication](#authentication--api-tokens)).
 
 ## `logging`
 
@@ -319,6 +366,7 @@ corresponding YAML field.
 | `--physics-backend {gnpy,egn}` | `physics.backend` |
 | `--num-slots`, `--slot-width-ghz`, `--center-frequency-thz` | `spectrum.*` |
 | `-v` / `-vv`, `--log-level`, `--log-format` | `logging.*` |
+| `--env-file FILE` | — (dotenv file to read `TWINLIGHT_API_TOKENS` from, instead of `./.env`; see [Authentication](#authentication--api-tokens)) |
 | `--restore` | restore the shutdown checkpoint |
 | `--restore SNAPSHOT.json` | restore this snapshot file |
 | `--reset` | ignore the checkpoint and start from scratch |
