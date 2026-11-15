@@ -1,12 +1,31 @@
 import { useConnectionStore } from "@/store/connection";
-import { AlertTriangle, WifiOff } from "lucide-react";
+import { AlertTriangle, Lock, WifiOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 export default function ConnectionBanner() {
-  const { status, baseUrl } = useConnectionStore();
+  const { status, baseUrl, apiToken } = useConnectionStore();
   const navigate = useNavigate();
 
   if (status === "connected" || status === "checking") return null;
+
+  if (status === "unauthorized") {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-amber-50 text-amber-800 border-b border-amber-200">
+        <Lock className="h-4 w-4 shrink-0" />
+        <span>
+          {apiToken
+            ? `The DT at ${baseUrl} rejected the API token.`
+            : `The DT at ${baseUrl} requires an API token.`}
+        </span>
+        <button
+          onClick={() => navigate("/settings")}
+          className="ml-auto underline hover:no-underline"
+        >
+          Settings
+        </button>
+      </div>
+    );
+  }
 
   const isStale = status === "stale";
 

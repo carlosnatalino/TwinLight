@@ -1,19 +1,32 @@
 import { useState } from "react";
 import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
-import { createClient } from "@/api/client";
+import { createClient, isAuthError } from "@/api/client";
+import { checkConnection } from "@/hooks/useConnectionCheck";
 import { cachePurgeByPrefix, cacheUsageBytes } from "@/lib/cache";
 import { clearAllSeries } from "@/lib/time-series";
-import { CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { CheckCircle, XCircle, Loader2, Eye, EyeOff } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 type TestResult = "idle" | "testing" | "ok" | "error";
 
 export default function SettingsPage() {
-  const { baseUrl, pollInterval, setBaseUrl, setPollInterval, setStatus, setLastSuccess } = useConnectionStore();
-  const { clearCache } = useTopologyStore();
+  const {
+    baseUrl,
+    apiToken,
+    pollInterval,
+    setBaseUrl,
+    setApiToken,
+    setPollInterval,
+    setStatus,
+    setLastSuccess,
+  } = useConnectionStore();
+  const { clearCache, fetchTopology } = useTopologyStore();
 
   const [urlInput, setUrlInput] = useState(baseUrl);
+  const [tokenInput, setTokenInput] = useState(apiToken);
+  const [showToken, setShowToken] = useState(false);
+  const [tokenMessage, setTokenMessage] = useState("");
   const [testResult, setTestResult] = useState<TestResult>("idle");
   const [testMessage, setTestMessage] = useState("");
   const [clearMessage, setClearMessage] = useState("");
@@ -24,24 +37,63 @@ export default function SettingsPage() {
   async function handleTestConnection() {
     const url = urlInput.trim();
     if (!url) return;
+    const token = tokenInput.trim();
+    // The global connection status only describes the saved settings.
+    const testingSaved = url === baseUrl && token === apiToken;
     setTestResult("testing");
     setTestMessage("");
     try {
-      const client = createClient(url);
+      // Test the token as typed, before it is saved.
+      const client = createClient(url, token);
       const result = await client.health();
+      let identity = "";
+      try {
+        const who = await client.whoami();
+        identity =
+          who.authentication === "disabled"
+            ? " · authentication is disabled on this DT"
+            : ` · authenticated as "${who.principal}"`;
+      } catch (err) {
+        if (isAuthError(err)) {
+          setTestResult("error");
+          setTestMessage(
+            token
+              ? "The DT is reachable but rejected this API token."
+              : "The DT is reachable but requires an API token."
+          );
+          if (testingSaved) setStatus("unauthorized");
+          return;
+        }
+        // Anything else (e.g. a DT that predates /internal/whoami) leaves
+        // reachability — what /health proved — as the result.
+      }
       setTestResult("ok");
-      setTestMessage(`Connected. Status: ${result.status}`);
-      if (url === baseUrl) setLastSuccess();
+      setTestMessage(`Connected. Status: ${result.status}${identity}`);
+      if (testingSaved) setLastSuccess();
     } catch (err) {
       setTestResult("error");
       setTestMessage(err instanceof Error ? err.message : "Connection failed");
-      if (url === baseUrl) setStatus("disconnected");
+      if (testingSaved) setStatus("disconnected");
     }
   }
 
   function handleSaveUrl() {
     setBaseUrl(urlInput.trim());
     setTestResult("idle");
+    setTestMessage("");
+  }
+
+  function handleSaveToken() {
+    const token = tokenInput.trim();
+    setApiToken(token);
+    setTestResult("idle");
+    setTestMessage("");
+    setTokenMessage(token ? "API token saved." : "API token cleared.");
+    setTimeout(() => setTokenMessage(""), 3000);
+    // Re-check and refetch now: the status and any page loaded before the
+    // token was set still reflect the old one until the next poll.
+    void checkConnection();
+    if (baseUrl) void fetchTopology(baseUrl);
   }
 
   function handleClearAll() {
@@ -88,6 +140,50 @@ export default function SettingsPage() {
           <p className="mt-1.5 text-xs text-gray-400">
             Make sure the DT has CORS configured to allow requests from this origin.
           </p>
+        </div>
+
+        <div>
+          <label htmlFor="api-token" className="block text-sm font-medium text-gray-700 mb-1">
+            API Token
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="api-token"
+              type={showToken ? "text" : "password"}
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              placeholder="Leave empty if the DT has no authentication"
+              autoComplete="off"
+              spellCheck={false}
+              className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <button
+              type="button"
+              onClick={() => setShowToken((v) => !v)}
+              aria-label={showToken ? "Hide token" : "Show token"}
+              className="rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-500 hover:bg-gray-50 transition-colors"
+            >
+              {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+            <button
+              onClick={handleSaveToken}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+            >
+              Save token
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-gray-400">
+            Needed when the DT sets{" "}
+            <code className="bg-gray-100 px-1 rounded">TWINLIGHT_API_TOKENS</code>. Sent as{" "}
+            <code className="bg-gray-100 px-1 rounded">Authorization: Bearer …</code> on every
+            request and kept in this browser&apos;s local storage.
+          </p>
+          {tokenMessage && (
+            <p className="mt-1.5 text-sm text-green-600 flex items-center gap-1">
+              <CheckCircle className="h-4 w-4" />
+              {tokenMessage}
+            </p>
+          )}
         </div>
 
         <div>

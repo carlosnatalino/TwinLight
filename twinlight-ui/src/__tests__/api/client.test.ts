@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { TapiApiClient, ApiError, NetworkError } from "@/api/client";
+import {
+  TapiApiClient,
+  ApiError,
+  NetworkError,
+  isAuthError,
+  setTokenProvider,
+} from "@/api/client";
 
 const mockFetch = vi.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,5 +64,82 @@ describe("TapiApiClient", () => {
     mockFetch.mockResolvedValueOnce(makeResponse(opmResp));
     const result = await client.getAllOpm();
     expect(result.services).toEqual([]);
+  });
+});
+
+describe("TapiApiClient authentication", () => {
+  afterEach(() => setTokenProvider(() => undefined));
+
+  function sentHeaders(call = 0): Record<string, string> {
+    return mockFetch.mock.calls[call][1].headers as Record<string, string>;
+  }
+
+  it("sends no Authorization header without a token", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ status: "ok" }));
+    await new TapiApiClient("http://dt").health();
+    expect(sentHeaders()).not.toHaveProperty("Authorization");
+  });
+
+  it("sends the constructor token as a bearer token", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({}));
+    await new TapiApiClient("http://dt", "tok-123").getContext();
+    expect(sentHeaders().Authorization).toBe("Bearer tok-123");
+  });
+
+  it("falls back to the registered token provider", async () => {
+    setTokenProvider(() => "saved-token");
+    mockFetch.mockResolvedValueOnce(makeResponse({}));
+    await new TapiApiClient("http://dt").getContext();
+    expect(sentHeaders().Authorization).toBe("Bearer saved-token");
+  });
+
+  it("lets an explicit empty token override the saved one", async () => {
+    setTokenProvider(() => "saved-token");
+    mockFetch.mockResolvedValueOnce(makeResponse({ status: "ok" }));
+    await new TapiApiClient("http://dt", "").health();
+    expect(sentHeaders()).not.toHaveProperty("Authorization");
+  });
+
+  it("keeps Content-Type alongside Authorization on writes", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({}));
+    await new TapiApiClient("http://dt", "tok-123").createConnectivityService(
+      {} as never
+    );
+    expect(sentHeaders()).toMatchObject({
+      Authorization: "Bearer tok-123",
+      "Content-Type": "application/yang-data+json",
+    });
+  });
+
+  it("calls /internal/whoami", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ principal: "ui", authentication: "bearer-token" })
+    );
+    const who = await new TapiApiClient("http://dt", "tok").whoami();
+    expect(mockFetch.mock.calls[0][0]).toBe("http://dt/internal/whoami");
+    expect(who.principal).toBe("ui");
+  });
+
+  it("turns a 401 into a message the user can act on", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ "ietf-restconf:errors": { error: [] } }, 401)
+    );
+    const err = await new TapiApiClient("http://dt").getContext().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(401);
+    expect(err.message).toBe("HTTP 401: The DT requires a valid API token. Set one in Settings.");
+  });
+
+  it("keeps the raw body for other errors, which pages parse", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ detail: "busy" }, 409));
+    const err = await new TapiApiClient("http://dt").getContext().catch((e) => e);
+    expect(err.message).toBe('HTTP 409: {"detail":"busy"}');
+  });
+
+  it("classifies 401 and 403 as authentication errors", () => {
+    expect(isAuthError(new ApiError(401, "x"))).toBe(true);
+    expect(isAuthError(new ApiError(403, "x"))).toBe(true);
+    expect(isAuthError(new ApiError(404, "x"))).toBe(false);
+    expect(isAuthError(new NetworkError("x"))).toBe(false);
   });
 });
