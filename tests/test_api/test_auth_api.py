@@ -88,6 +88,24 @@ class TestRejection:
                 "/data/tapi-connectivity:connectivity-context"
                 "/connectivity-service=x"
             )),
+            ("PUT", (
+                "/data/tapi-connectivity:connectivity-context"
+                "/connectivity-service=x"
+            )),
+            # Path computation, inventory and the ranked-candidates endpoint.
+            ("POST", "/internal/compute-path"),
+            ("GET", "/internal/path-info"),
+            ("GET", (
+                "/data/tapi-path-computation:path-computation-context"
+                "/path-comp-service"
+            )),
+            ("POST", (
+                "/data/tapi-path-computation:path-computation-context"
+                "/path-comp-service"
+            )),
+            ("GET", "/data/tapi-path-computation:path-computation-context/path"),
+            ("GET", "/data/tapi-equipment:physical-context/device"),
+            ("GET", "/data/tapi-equipment:physical-context/physical-span"),
             # Unknown paths too: a 404 would map the API for an anonymous probe.
             ("GET", "/no/such/route"),
             # Exact matches only.
@@ -99,6 +117,21 @@ class TestRejection:
         self, secured: TestClient, method: str, path: str
     ) -> None:
         assert secured.request(method, path).status_code == 401
+
+    def test_every_registered_route_is_protected(self, secured: TestClient) -> None:
+        """Deny by default, checked against every operation the app declares
+        (its OpenAPI schema, read in-process): a route added later is covered
+        without anyone remembering to list it."""
+        checked = 0
+        for route, operations in secured.app.openapi()["paths"].items():
+            if route in PUBLIC_PATHS:
+                continue
+            path = route.replace("{", "").replace("}", "")  # params → literals
+            for method in operations:
+                resp = secured.request(method.upper(), path)
+                assert resp.status_code == 401, (method, route)
+                checked += 1
+        assert checked > 50  # the walk did reach the API
 
     def test_a_rejected_request_has_no_side_effect(
         self, secured: TestClient
