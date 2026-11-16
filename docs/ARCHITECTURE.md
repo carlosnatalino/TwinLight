@@ -18,7 +18,7 @@ How TwinLight is put together, and why. For the endpoint catalogue see
 │  streaming/    T-API measurement stream: sampler + record log   │
 │  transparent/  transparent controller: paths, tree, datastores  │
 │  physics/      QoT baseline + four transient models             │
-│  algorithms/   routing (k-shortest) and spectrum assignment     │
+│  algorithms/   routing, constraints, spectrum assignment        │
 │  loader/       GNPy JSON → internal elements → T-API objects    │
 │  models/       Pydantic models of the T-API wire format         │
 └─────────────────────────────────────────────────────────────────┘
@@ -76,7 +76,7 @@ separate module:
 
 | Prefix | Module | Contents |
 |--------|--------|----------|
-| `/internal/` | `api/internal.py`, `api/diagrams.py` | OPM readings, service path metadata, path-info estimates, eye/constellation synthesis |
+| `/internal/` | `api/internal.py`, `api/diagrams.py` | OPM readings, service path metadata, path-info estimates, ranked candidate paths, eye/constellation synthesis |
 | `/admin/` | `api/admin.py` | Snapshot and restore |
 | `/config/` | `api/config.py`, `api/parameters.py` | Runtime parameter overrides (fiber loss, EDFA NF, link failure); path-addressed, all-or-nothing parameter batches |
 | `/transparent/` | `api/transparent.py` (logic in `transparent/`) | The fully transparent controller view: every element and parameter as one data tree, ns-3-style paths, RESTCONF-shaped datastores and operations — see [TRANSPARENT_CONTROLLER.md](TRANSPARENT_CONTROLLER.md) |
@@ -102,7 +102,7 @@ src/twinlight/
     common.py              Context, ServiceInterfacePoint, NameAndValue, states
     topology.py            Topology, Node, Link, NodeEdgePoint
     connectivity.py        ConnectivityService, endpoints, photonic augments
-    equipment.py           Equipment context objects
+    equipment.py           Physical context: device, equipment, physical-span
     path_computation.py    Path-computation service objects
     oam.py                 tapi-oam oam-job (provider-managed, read-only)
 
@@ -124,10 +124,11 @@ src/twinlight/
     backend.py             PhysicalBackend Protocol (structural, not inherited)
     gnpy_backend.py        GNPy split-step implementation
     egn_backend.py         Closed-form GN/EGN implementation
-    egn_kernel.py          The GN-model kernel itself (Carena 2012/2014)
+    egn_kernel.py          The GN-model kernel itself (Poggiolini 2014, Carena 2012)
     gnpy_adapter.py        build_gnpy_network(), compute_path_baseline(), OpmBaseline
     element_params.py      Per-element parameter read/write for the /config plane
     modulation.py          ModulationFormat enum and per-format parameters
+    channel_plan.py        SI defaults and amplifier bands from the GNPy equipment library
     ber_conversion.py      GSNR → pre-FEC BER → Q-factor (Gaussian approximation)
     fec.py                 Pre-FEC → post-FEC BER: threshold and hard-decision models
     gmi.py                 GSNR → GMI / NGMI (Gauss–Hermite quadrature)
@@ -143,7 +144,9 @@ src/twinlight/
 
   algorithms/
     routing.py             k_shortest_paths() over the NetworkX graph
-    spectrum_assignment.py First-fit slot allocation with guard bands
+    path_constraints.py    T-API routing/topology constraints → supported subset
+    spectrum_assignment.py First-fit slot allocation with guard bands, within an
+                           assignable-slot mask (the amplifier band)
 
   api/                   Routers (see the table above)
   streaming/             The T-API performance-measurement stream (TR-548 §6)
@@ -202,24 +205,75 @@ src/twinlight_client/    Companion client library and CLI
 1. Resolve both endpoint SIP UUIDs to GNPy element UIDs via
    `TapiContext._sip_to_gnpy_uid` (populated at build time — `TapiBuilder`
    stores each element's UID in the SIP's name list).
-2. Compute candidate paths: GNPy's `compute_constrained_path` when an equipment
-   library is loaded, otherwise `algorithms/routing.py:k_shortest_paths`.
-   Results are memoised in `_route_cache`.
-3. For each candidate, in order: assign spectrum first-fit
-   (`algorithms/spectrum_assignment.py`), propagate the path through the active
-   backend to obtain an `OpmBaseline`, and check
-   `GSNR ≥ required_gsnr(format) + rmsa.qot_margin_db`.
-4. The first candidate that satisfies both spectrum and QoT is admitted. The
-   baseline is cached in `_baseline_cache` keyed by service UUID, the EDFA
-   tracker is told a channel was added, and the T-API object is returned with
-   the assigned spectrum on its end-points.
+2. Compute candidate paths under the service's `routing-constraint` and
+   `topology-constraint` (`TapiContext.candidate_paths`;
+   `algorithms/path_constraints.py` decides what is supported). Exclusions
+   are applied by searching a `networkx.restricted_view` that hides the
+   excluded nodes and links. Without includes, and with a GNPy network,
+   GNPy's `compute_constrained_path` gives the best route; GNPy has no
+   k-shortest function, so the other candidates come from the search
+   `compute_constrained_path` itself runs —
+   `networkx.shortest_simple_paths(network, weight="weight")`, the weight
+   being the length of the fiber an edge leaves — and candidate 1 is
+   therefore GNPy's route. With includes, `compute_constrained_path` filters
+   every simple path for them with no bound (it ran past 45 s on CORONET), so
+   `algorithms/routing.py:waypoint_paths` runs a branch and bound instead. It
+   extends the route one junction (ROADM, end transceiver, include) at a time,
+   with each link direction's amplifiers and fibers contracted into one arc.
+   It drops a partial route once its length plus a lower bound on the rest
+   cannot beat the k-th best found. The bound is the shortest distance once
+   every include is visited, and before that a min-cost flow over the
+   remaining includes on the node-split graph. With one include left, that
+   flow is Suurballe's disjoint pair, exact when links cost the same both
+   ways. A bound never exceeds the true length, so the answer is exact: the k
+   shortest routes, or none when none exists. Each search has a budget of
+   3,000 bound evaluations (about 1.6 s on CORONET), with a 3 s time
+   backstop. If the budget runs out first, the request is a `409` saying so,
+   never a route that may not be the best and never "no route". On CORONET,
+   one include takes at most about 0.1 s for k = 5. Two or three includes in
+   random order across the continent sometimes run out of budget, mostly when
+   proving that no route exists. Without a GNPy network (the EGN backend) the same searches run on
+   the parsed topology graph, whose edges carry the same fiber-length weight.
+   The unconstrained best route is memoised in `_route_cache`.
+3. For each of the `rmsa.k_shortest_paths` candidates, in order, and on each
+   for the requested format — or every format from the highest spectral
+   efficiency down when none is requested (`TapiContext._admit`): find a
+   block — the requested one, checked against the grid once and against the
+   path's amplifier band and occupancy per candidate, or else first-fit
+   (`algorithms/spectrum_assignment.py`) restricted to the slots inside the
+   band every amplifier on the path passes (`backend.amplifier_bands`,
+   GNPy's `find_elements_common_range`) — propagate the path
+   through the active backend to obtain an `OpmBaseline`, and check
+   `GSNR ≥ required_gsnr(format) + rmsa.qot_margin_db`. A propagation that
+   fails (`PropagationError`, or no result) skips that (path, format) with the
+   reason in the refusal; nothing is admitted without a verdict. Propagations are
+   memoised for the duration of one admission, keyed by path, central
+   frequency, launch power and symbol rate, so formats occupying the same
+   block share one.
+4. The first (candidate, format, block) that passes is admitted: the block is
+   allocated, the format in effect is written onto the service, its
+   propagation seeds `_baseline_cache`, the EDFA tracker is told a channel was
+   added, and the T-API object is returned with the assigned spectrum on its
+   end-points.
 5. If no candidate passes, the request is refused with a RESTCONF error body
    explaining which constraint failed.
+6. Under a backend whose baselines depend on the line load
+   (`backend.uses_line_load`, the EGN backend), the new channel is a
+   neighbour of every lightpath sharing a fiber with it: their baselines are
+   recomputed with it lit, and their `operational-state` follows (`DISABLED`
+   below the format's required GSNR). Admission evaluates the candidate with
+   the existing lightpaths lit (`_line_load`).
+
+All of this runs under `_admission_lock`, so concurrent admissions never
+pick the same block. A replacement (`replace_service`, the T-API `PUT`)
+detaches the old service, admits the new one, and on refusal reattaches the
+old one unchanged.
 
 Admission also creates the service's `tapi-oam` oam-job, the anchor of its
-records on the measurement stream. Deletion reverses all of this: slots are
-released, `invalidate_baseline(uuid)` drops the cached propagation, the EDFA
-tracker records the drop event, and the oam-job is removed.
+records on the measurement stream. Deletion reverses all of this: slots are released, `invalidate_baseline(uuid)` drops the cached
+propagation, the EDFA tracker records the drop event, the oam-job is removed,
+and under the EGN backend the lightpaths that shared a fiber with it are
+invalidated too; T-API reads re-evaluate them (`refresh_operational_states`).
 
 ### Reading OPM
 

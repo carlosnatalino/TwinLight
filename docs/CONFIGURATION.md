@@ -52,7 +52,7 @@ physics:
 
 | Backend | Method | Requires |
 |---------|--------|----------|
-| `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | `gnpy.equipment` |
+| `gnpy` (default) | Split-step propagation over the designed network; the service channel on the equipment library's SI comb | `gnpy.equipment` |
 | `egn` | Closed-form GN/EGN kernel (`physics/egn_kernel.py`) | nothing beyond the topology |
 
 This is a **startup choice**: all baselines in a process come from one backend,
@@ -267,12 +267,26 @@ rmsa:
 |-------|---------|---------|
 | `k_shortest_paths` | `3` | Candidate paths evaluated per request. Raise it for large meshes (the CORONET example uses 5) |
 | `qot_margin_db` | `1.5` | System margin added to the format's required GSNR before admission |
-| `default_guardband_slots` | `1` | Guard band in 6.25 GHz slots on each side of an allocation |
+| `default_guardband_slots` | `1` | Guard slots added to each media channel (8 + 1 = 9 slots for a 50 GHz channel). The carrier is centred in the media channel, so the guard is shared between its two edges |
+
+At startup the twin logs the settings in effect — margin, `k_shortest_paths`,
+guard slots and the default launch power with the equipment file it came
+from — as one `RMSA settings: …` line at INFO, so a run's admission decisions
+can be reproduced from its log.
+
+There is no launch-power key here. The default launch power is a property of
+the line and comes from the equipment library's `SI` entry (`power_dbm`, the
+per-channel power the amplifiers are designed for; GNPy's bundled library when
+`gnpy.equipment` is unset). A service can ask for its own through the T-API
+`otsi-config/channel-output-power` leaf, in 0.01 dBm — see
+[PHYSICS.md § Launch power](PHYSICS.md#launch-power).
 
 `qot_margin_db` is the main admission-strictness knob, and is also exposed at
 run time — through `POST /config/set` or `/transparent/data/Config/rmsa` — so a
 single process can sweep it. All three fields are runtime-mutable; they affect
-future admissions only, never a service already admitted.
+future admissions only, never a service already admitted. The margin is not
+part of a lightpath's `operational-state`, which goes `DISABLED` only below
+the format's required GSNR itself.
 
 ## `fec` — post-FEC BER models
 
@@ -317,6 +331,12 @@ spectrum:
 
 Defaults describe the standard C-band: 768 × 6.25 GHz = 4.8 THz centred on the
 ITU-T G.694.1 anchor at 193.1 THz.
+
+The grid is the spectrum the twin *accounts* for; what it *assigns* on a route
+is further limited to the band every amplifier on the route passes, which comes
+from the equipment library (each EDFA type's `f_min`/`f_max`, GNPy's
+`find_elements_common_range`). With GNPy's reference EDFAs that band starts at
+191.275 THz, so the lowest ~90 slots of the default grid are never assigned.
 
 ## `streaming` — the T-API measurement stream
 

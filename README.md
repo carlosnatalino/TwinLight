@@ -79,16 +79,17 @@ way a deployed coherent receiver's telemetry moves.
 ## Feature overview
 
 - **T-API v2.6.0 northbound** — context, topology, connectivity-service CRUD,
-  path computation, equipment and photonic-media spectrum contexts, with
+  path computation, physical inventory and photonic-media spectrum, with
   RESTCONF-style errors and `application/yang-data+json` responses.
 - **Two interchangeable physical-layer backends** — GNPy split-step propagation
   (default) or a dependency-free closed-form GN/EGN kernel, selected at startup.
 - **Four time-varying impairment models** — EDFA gain-reservoir transients,
   polarization (PMD drift + PDL hinge model), equalization-enhanced phase noise,
   and environmental/thermal drift, each traceable to a published formulation.
-- **QoT-aware RMSA** — k-shortest-path routing, first-fit spectrum assignment on
-  a 6.25 GHz flexi-grid, and admission control against the required GSNR of the
-  requested modulation format.
+- **QoT-aware RMSA** — k-shortest-path routing ranked by fiber length as GNPy
+  ranks it, first-fit spectrum assignment on a 6.25 GHz flexi-grid, and
+  admission control against the required GSNR of the modulation format,
+  choosing the densest format that closes the link when none is requested.
 - **Streaming telemetry** — the T-API v2.6.0 performance-measurement stream of
   TR-548 over gNMI: discovered through `tapi-streaming:stream-context`, one
   protobuf `MeasurementDetails` record per service per tick under the service's
@@ -264,13 +265,14 @@ curl -X POST http://localhost:8080/data/tapi-connectivity:connectivity-context/c
 
 The modulation format is carried where T-API v2.6.0 puts it: a
 `tapi-photonic-media` augment on the end-point, with the ONF identities
-`MT_DP-QPSK`, `MT_DP-QAM16` and `MT_DP-QAM64`. Omit it and the service defaults
-to DP-QPSK. A bare top-level `modulation-format` key is not part of T-API and is
+`MT_DP-QPSK`, `MT_DP-QAM16` and `MT_DP-QAM64`. Omit it and admission picks the
+densest format whose QoT passes (DP-QPSK when no physics backend is loaded). A bare top-level `modulation-format` key is not part of T-API and is
 rejected with a `422` that names the standard location.
 
-The twin computes candidate paths, assigns spectrum first-fit, and admits the
-request only if the propagated GSNR clears the format's required GSNR plus the
-configured system margin.
+The twin computes candidate paths, assigns the requested spectrum or else
+first-fit inside the amplifier band, and admits the request only if the
+propagated GSNR clears the format's required GSNR plus the configured system
+margin.
 
 ### Populate the twin with demo services
 
@@ -492,8 +494,8 @@ available, selected by `physics.backend` or `--physics-backend`:
 
 | Backend | Method | Notes |
 |---------|--------|-------|
-| `gnpy` (default) | Split-step propagation over the designed network, 88-channel C-band comb | Needs a GNPy equipment library; the reference implementation of the GN/EGN model [[10]](#ref-10) |
-| `egn` | Closed-form GN/EGN kernel in `physics/egn_kernel.py` | Follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9). Reuses GNPy's amplifier design when an equipment library is configured, so both backends propagate over the same spans; works without one too |
+| `gnpy` (default) | Split-step propagation over the designed network; the service channel on the equipment library's SI comb | Needs a GNPy equipment library; the reference implementation of the GN/EGN model [[10]](#ref-10) |
+| `egn` | Closed-form GN kernel in `physics/egn_kernel.py`; the lightpaths actually lit load the line | Follows Carena *et al.* [[8]](#ref-8) [[9]](#ref-9), with the NLI of Poggiolini *et al.* [[33]](#ref-33). Reuses GNPy's amplifier design, operating points and noise-figure models when an equipment library is configured, and matches the GNPy backend within 0.05–0.25 dB at the same load; works without one too |
 
 Both produce a backend-agnostic `OpmBaseline` that the transient layer perturbs,
 so results stay comparable across backends.
@@ -710,6 +712,7 @@ implement. Citation keys used in code comments are shown in brackets.
 30. <a id="ref-30"></a>B. P. Smith, A. Farhood, A. Hunt, F. R. Kschischang, and J. Lodge, "Staircase codes: FEC for 100 Gb/s OTN," *IEEE/OSA Journal of Lightwave Technology*, vol. 30, no. 1, pp. 110–117, 2012. — the 6.2 dB net coding gain of RS(255,239) at 1e-15 that the hard-decision model is validated against.
 31. <a id="ref-31"></a>A. Alvarado, E. Agrell, D. Lavery, R. Maher, and P. Bayvel, "Replacing the soft-decision FEC limit paradigm in the design of optical communication systems," *IEEE/OSA Journal of Lightwave Technology*, vol. 33, no. 20, pp. 4338–4352, 2015. — GMI as the predictor of post-FEC BER for soft-decision decoding.
 32. <a id="ref-32"></a>ITU-T Recommendation G.709, *Interfaces for the optical transport network*. — the RS(255,239) GFEC, default code of the hard-decision model.
+33. <a id="ref-33"></a>P. Poggiolini, G. Bosco, A. Carena, V. Curri, Y. Jiang, and F. Forghieri, "The GN-model of fiber non-linear propagation and its applications," *IEEE/OSA Journal of Lightwave Technology*, vol. 32, no. 4, pp. 694–721, 2014 (arXiv:1209.0394). `[Poggiolini_2014]` — incoherent closed form (Eq. 120/123) for the EGN kernel's cross-channel NLI, as GNPy's `gn_model_analytic` implements it.
 
 ## License and acknowledgements
 

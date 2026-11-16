@@ -269,11 +269,18 @@ SERVICE_LEAVES = (
     _state("num_slots", "integer", "Allocated slots, guard band included"),
     _state("central_frequency_thz", "number", "Centre frequency", "THz"),
     _state("slot_width_ghz", "number", "Allocated bandwidth", "GHz"),
+    _state("launch_power_dbm", "number",
+           "Launch power in effect: requested, else the SI default", "dBm"),
     _state("required_gsnr_db", "number",
            "GSNR the format needs (before the admission margin)", "dB"),
+    _state("operational_state", "string",
+           "ENABLED, or DISABLED when the path is cut, the channel is outside "
+           "the amplifier band, or the GSNR is below required_gsnr_db"),
 )
 QOT_LEAVES = (
-    _state("status", "string", "'ok', or 'link-failed' when a fiber on the path is cut"),
+    _state("status", "string",
+           "'ok'; 'link-failed' when a fiber on the path is cut; 'out-of-band' "
+           "when the channel lies outside the band its amplifiers pass"),
     _state("gsnr_db", "number", "Static GSNR of the allocated path", "dB"),
     _state("osnr_db", "number", "ASE-only OSNR in the signal bandwidth", "dB"),
     _state("margin_db", "number", "gsnr_db - required_gsnr_db", "dB"),
@@ -285,7 +292,9 @@ QOT_LEAVES = (
 MODULATION_LEAVES = (
     _state("baud_rate_gbaud", "number", "Symbol rate", "GBd"),
     _state("spacing_ghz", "number", "Channel spacing", "GHz"),
-    _state("tx_power_dbm", "number", "Launch power per channel", "dBm"),
+    _state("tx_power_dbm", "number",
+           "Default launch power per channel: the equipment library's SI "
+           "power_dbm, the same for every format", "dBm"),
     _state("req_gsnr_db", "number", "Required GSNR for admission", "dB"),
     _state("bits_per_symbol", "integer", "Bits per symbol per polarization"),
 )
@@ -543,6 +552,16 @@ class TreeBuilder:
             )
         return self._baselines[uuid]
 
+    def _operational_state_reader(self, uuid: str) -> Callable[[], Awaitable[Any]]:
+        """The state the current QoT implies (computing the baseline sets it)."""
+
+        async def read() -> Any:
+            await self._baseline(uuid)
+            svc = self.ctx.get_service(uuid)
+            return svc.operational_state.value if svc else None
+
+        return read
+
     def service_entry(self, uuid: str) -> Branch:
         from twinlight.physics.modulation import get_params
 
@@ -564,7 +583,9 @@ class TreeBuilder:
             "num_slots": lambda: alloc[2] if alloc else None,
             "central_frequency_thz": lambda: spectrum.get("nominal-central-frequency"),
             "slot_width_ghz": lambda: spectrum.get("slot-width"),
+            "launch_power_dbm": lambda: ctx._service_launch_power.get(uuid),
             "required_gsnr_db": lambda: required,
+            "operational_state": self._operational_state_reader(uuid),
         }
 
         def qot_reader(name: str) -> Callable[[], Awaitable[Any]]:
@@ -572,10 +593,9 @@ class TreeBuilder:
                 b = await self._baseline(uuid)
                 if b is None:
                     return None
-                failed = b.status == "link-failed"
                 if name == "status":
                     return b.status or "ok"
-                if failed:
+                if b.status is not None:  # link-failed, out-of-band: no signal
                     return None
                 values = {
                     "gsnr_db": b.gsnr_db, "osnr_db": b.osnr_ase_db,
@@ -612,7 +632,7 @@ class TreeBuilder:
             values = {
                 "baud_rate_gbaud": p.baud_rate_hz / 1e9,
                 "spacing_ghz": p.spacing_hz / 1e9,
-                "tx_power_dbm": p.tx_power_dbm,
+                "tx_power_dbm": self.ctx.default_launch_power_dbm,
                 "req_gsnr_db": p.req_gsnr_db,
                 "bits_per_symbol": p.bits_per_symbol,
             }

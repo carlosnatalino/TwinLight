@@ -1,0 +1,68 @@
+"""The requests the web UI sends are accepted by the API.
+
+The UI builds them in twinlight-ui/src/lib/serviceRequest.ts and pins their
+exact JSON in fixtures (its own tests check the builder produces them); here
+the same fixtures, placeholders replaced by real UUIDs, are posted to the
+backend. A change on either side that breaks the other fails a test.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from tests.conftest import MeshRefs, _mesh_config
+from twinlight.app import create_app
+from twinlight.models.connectivity import OTSIA_CSEP_SPEC
+
+_FIXTURES = Path(__file__).parents[2] / "twinlight-ui" / "src" / "__tests__" / "fixtures"
+_SVC = "/data/tapi-connectivity:connectivity-context/connectivity-service"
+
+
+def _request(name: str, ctx) -> dict:
+    """A UI fixture with its placeholders resolved against the mesh."""
+    refs = MeshRefs(ctx)
+    text = (_FIXTURES / f"add-service-request.{name}.json").read_text()
+
+    def resolve(match: re.Match) -> str:
+        kind, uid = match.group(1), match.group(2)
+        if kind == "SIP":
+            return refs.sip(uid)
+        return refs.node(uid)["node-uuid"]
+
+    text = re.sub(r"<(SIP|NODE) ([^>]+)>", resolve, text)
+    topology = refs.node("roadm A")["topology-uuid"]
+    return json.loads(text.replace("<TOPOLOGY>", topology))
+
+
+@pytest.fixture(params=["gnpy", "egn"])
+def client(request, tmp_path: Path) -> TestClient:
+    return TestClient(create_app(_mesh_config(tmp_path, request.param)))
+
+
+def test_the_default_form_is_admitted(client: TestClient) -> None:
+    ctx = client.app.state.context
+    resp = client.post(_SVC, json=_request("defaults", ctx))
+    assert resp.status_code == 201, resp.text
+    service = resp.json()["tapi-connectivity:connectivity-service"]
+    assert [ep["direction"] for ep in service["end-point"]] == ["SOURCE", "SINK"]
+    # Automatic format: whatever admission chose is reported.
+    cfg = service["end-point"][0]["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0]
+    assert cfg["modulation"]["standard-modulation-technique"].startswith("MT_DP-")
+
+
+def test_every_option_of_the_form_is_honoured(client: TestClient) -> None:
+    ctx = client.app.state.context
+    resp = client.post(_SVC, json=_request("full", ctx))
+    assert resp.status_code == 201, resp.text
+    service = resp.json()["tapi-connectivity:connectivity-service"]
+    cfg = service["end-point"][0]["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0]
+    assert cfg["modulation"]["standard-modulation-technique"] == "MT_DP-QAM16"
+    assert cfg["central-frequency"] == 191_306_250_000_000
+    assert cfg["channel-output-power"] == 150
+    path = ctx._allocated_path_uids(service["uuid"])
+    assert "roadm B" in path and "roadm D" not in path

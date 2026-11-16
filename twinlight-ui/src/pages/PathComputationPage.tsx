@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
 import { createClient, ApiError } from "@/api/client";
@@ -11,6 +11,9 @@ import type {
 } from "@/api/types";
 import { Loader2, Route, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { topologyConstraint, type RouteConstraints } from "@/lib/serviceRequest";
+import { RouteConstraintsPicker } from "@/components/common/RouteConstraintsPicker";
+import { routableNodes } from "@/lib/routableNodes";
 
 const MODULATION_OPTIONS: ModulationFormat[] = [
   "DP-QPSK",
@@ -33,6 +36,9 @@ export default function PathComputationPage() {
   const [sipA, setSipA] = useState<string>("");
   const [sipZ, setSipZ] = useState<string>("");
   const [maxCandidates, setMaxCandidates] = useState(1);
+  const [constraints, setConstraints] = useState<RouteConstraints>({ include: [], exclude: [] });
+  const topologies = useTopologyStore((s) => s.data?.topologies);
+  const nodes = useMemo(() => routableNodes(topologies ?? []), [topologies]);
   const [modulation, setModulation] = useState<ModulationFormat>("DP-QPSK");
   const [paths, setPaths] = useState<PathCandidate[] | null>(null);
   const [pathInfo, setPathInfo] = useState<PathInfoResponse | null>(null);
@@ -62,8 +68,11 @@ export default function PathComputationPage() {
           { "service-interface-point": { "service-interface-point-uuid": sipZ } },
         ],
         "max-candidates": maxCandidates,
+        ...(topologyConstraint(constraints)
+          ? { "topology-constraint": topologyConstraint(constraints) }
+          : {}),
       });
-      const pathList = res["tapi-path-computation:output"].path ?? [];
+      const pathList = res.path ?? [];
       setPaths(pathList);
       if (pathList.length > 0) {
         setPathInfoLoading(true);
@@ -93,7 +102,7 @@ export default function PathComputationPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Path Computation</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Compute path(s) between two service interface points (T-API path computation API).
+          Ranked candidate paths between two service interface points, shortest fiber length first.
         </p>
       </div>
 
@@ -169,6 +178,11 @@ export default function PathComputationPage() {
               ))}
             </select>
           </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-gray-700 mb-2">Route constraints</p>
+          <RouteConstraintsPicker nodes={nodes} value={constraints} onChange={setConstraints} />
         </div>
 
         <button
@@ -380,6 +394,8 @@ export default function PathComputationPage() {
                   <p className="text-xs text-gray-500 mt-2">
                     Links: {(path.link ?? []).length} · Nodes:{" "}
                     {(path.node ?? []).length}
+                    {path["fiber-length-km"] != null &&
+                      ` · Fiber: ${path["fiber-length-km"].toFixed(1)} km`}
                   </p>
                 </div>
               ))}

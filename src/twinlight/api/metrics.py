@@ -227,6 +227,13 @@ async def _populate_opm_gauges(
         ("service_uuid", "service_name"),
         registry=registry,
     )
+    enabled_gauge = Gauge(
+        "twinlight_service_enabled",
+        "1 if the service's operational-state is ENABLED (it carries its "
+        "format), 0 if DISABLED",
+        ("service_uuid", "service_name"),
+        registry=registry,
+    )
 
     for svc in ctx.get_services():
         name_label = next(
@@ -241,9 +248,13 @@ async def _populate_opm_gauges(
         status_gauge.labels(
             service_uuid=svc.uuid, service_name=name_label,
         ).set(1 if link_failed else 0)
+        enabled_gauge.labels(
+            service_uuid=svc.uuid, service_name=name_label,
+        ).set(1 if svc.operational_state.value == "ENABLED" else 0)
 
-        if baseline is None or link_failed:
-            # No physics baseline (GNPy/EGN unavailable, or path failed).
+        if baseline is None or baseline.status is not None:
+            # No physics baseline (GNPy/EGN unavailable), or no signal (path
+            # failed, channel outside the amplifier band).
             # We deliberately do NOT export sentinel zeros for the metric
             # gauges — Prometheus dashboards render gaps naturally when
             # a series stops emitting samples.

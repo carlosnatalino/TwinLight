@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from twinlight.api.internal import _link_failed_measurements, _mock_measurements
+from twinlight.api.internal import _mock_measurements, _no_signal_measurements
 from twinlight.streaming.proto import gnmi_pb2
 from twinlight.streaming.proto import tapi_streaming_performance_pb2 as tapi
 from twinlight.streaming.records import (
@@ -16,7 +16,7 @@ from twinlight.streaming.records import (
 )
 
 T = 1_700_000_000.25
-OPM_KEYS = set(_link_failed_measurements())
+OPM_KEYS = set(_no_signal_measurements())
 
 
 def _sample(**overrides: object) -> dict:
@@ -82,7 +82,7 @@ def test_round_trip_through_the_wire() -> None:
 def test_link_failed_is_missing_without_value_or_units() -> None:
     details = _encode({
         "service-uuid": "svc", "timestamp": T, "status": "link-failed",
-        "measurements": _link_failed_measurements(),
+        "measurements": _no_signal_measurements(),
     })
     for qm in details.qualified_measurement:
         qv = qm.qualified_measured_value

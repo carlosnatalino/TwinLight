@@ -29,9 +29,11 @@ class TestGsnrToBer:
             _square_qam_ber(gsnr_db, order), rel=1e-12
         )
 
-    @pytest.mark.parametrize("gsnr_db", [6.0, 8.5, 12.0])
+    @pytest.mark.parametrize("gsnr_db", [6.0, 8.5, 12.0, 20.0, 25.0, 30.0])
     def test_qpsk_q_factor_equals_gsnr(self, gsnr_db):
-        """For QPSK the expression is exact and Q² = SNR, so Q [dB] = GSNR [dB]."""
+        """For QPSK the expression is exact and Q² = SNR, so Q [dB] = GSNR [dB].
+        Up to 30 dB, where the BER is ~1e-220: a healthy channel's Q must
+        still follow its GSNR (a 1e-20 BER floor once pinned it at 19.3 dB)."""
         assert ber_to_q_db(gsnr_to_ber(gsnr_db, "DP-QPSK")) == pytest.approx(
             gsnr_db, abs=1e-9
         )

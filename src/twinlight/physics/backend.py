@@ -21,12 +21,36 @@ implementations don't have to inherit from it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     import networkx as nx
 
+    from twinlight.physics.channel_plan import SpectralDefaults
     from twinlight.physics.gnpy_adapter import OpmBaseline
+
+
+class PropagationError(RuntimeError):
+    """The engine could not propagate a path (an element it rejects, a
+    numerical failure). Admission names it and skips the candidate; OPM
+    falls back to mock data."""
+
+
+@dataclass(frozen=True)
+class LitChannel:
+    """An admitted lightpath's channel, as another channel's neighbour.
+
+    What a backend that models the actual line load needs to place it: the
+    route (to find the fibers it shares with the channel under test), where
+    it sits, how wide its signal is, and its launch power.
+    """
+
+    path_uids: tuple[str, ...]
+    centre_frequency_hz: float
+    baud_rate_hz: float
+    launch_power_dbm: float
 
 
 class PhysicalBackend(Protocol):
@@ -49,15 +73,53 @@ class PhysicalBackend(Protocol):
     # computation; the EGN backend leaves this ``None`` (path computation
     # falls back to the TopologyGraph-based NetworkX k-shortest).
     network: nx.DiGraph | None
+    # The equipment library's SI.default: reference comb, symbol rate, design
+    # launch power (physics/channel_plan.py).
+    spectral_defaults: SpectralDefaults
+    # True when a baseline depends on the other lightpaths (``line_load``):
+    # the context then passes the admitted channels and re-evaluates the
+    # lightpaths sharing fibers with one that is added or removed. False
+    # when the backend assumes a fully loaded line, so baselines do not
+    # depend on what else is lit.
+    uses_line_load: bool
 
     async def compute_baseline(
         self,
         path_uids: list[str],
         modulation_format: str,
+        *,
+        centre_frequency_hz: float,
+        media_channel_width_hz: float,
+        launch_power_dbm: float,
+        line_load: Sequence[LitChannel] = (),
     ) -> OpmBaseline | None:
         """Return a static QoT baseline for the path, or ``None`` if
-        propagation is not possible (engine unavailable, missing element).
-        Returning ``None`` puts the OPM endpoint into mock-data fallback.
+        the engine is unavailable or has no model of the route; raise
+        :class:`PropagationError` when propagation failed. Either puts the OPM
+        endpoint into mock-data fallback, and makes admission skip the
+        candidate.
+
+        The metrics are the service channel's: at ``centre_frequency_hz`` in a
+        media channel ``media_channel_width_hz`` wide, launched at
+        ``launch_power_dbm``. The rest of the line is either the other
+        admitted lightpaths, ``line_load`` (backends with
+        ``uses_line_load``), or the SI comb fully loaded
+        (``physics/channel_plan.py:line_comb``), in which case ``line_load``
+        is ignored.
+        """
+
+    def amplifier_bands(self, path_uids: list[str]) -> list[tuple[float, float]] | None:
+        """Frequency ranges [Hz] every amplifier on the path passes, or None
+        when the backend has no amplifier model (then nothing is excluded).
+        Spectrum outside them is dropped by an EDFA, so it is not assignable.
+        """
+
+    def route_fibers(self, path_uids: list[str]) -> list[str]:
+        """The fibers the backend models on the route, under the UIDs its
+        baselines report (``OpmBaseline.fiber_uids``), failed or not.
+
+        Needs no propagation, so the context can tell which lightpaths share
+        a fiber even for one whose baseline is a failure sentinel.
         """
 
     def read_attribute(self, uid: str, attr: str) -> Any:

@@ -28,7 +28,10 @@ def _baseline(ctx: TapiContext) -> Any:
     by_trx = {ctx.get_gnpy_uid(s.uuid): s.uuid for s in ctx.sips}
     path = ctx.get_service_path(by_trx["trx Brest_1"], by_trx["trx Morlaix_1"])
     assert path and FWD_FIBER in path and EAST_AMP in path
-    baseline = asyncio.run(ctx._backend.compute_baseline(path, "DP-QPSK"))
+    baseline = asyncio.run(ctx._backend.compute_baseline(
+        path, "DP-QPSK", centre_frequency_hz=193.1e12, media_channel_width_hz=56.25e9,
+        launch_power_dbm=ctx.default_launch_power_dbm,
+    ))
     assert baseline is not None
     return baseline
 
@@ -146,3 +149,78 @@ def test_roadm_target_moves_inherited_degrees_only(gnpy_context: TapiContext) ->
     restore_attr(roadm, "target_pch_out_db", token)
     assert roadm.per_degree_pch_out_dbm == {degree: -20}
     assert roadm.params.per_degree_pch_out_db is roadm.per_degree_pch_out_dbm
+
+
+# -- EGN backend --------------------------------------------------------------
+# The attributes the EGN backend accepts, on the mesh's A → C route: the
+# fiber's attenuation and input padding, the noise figure of the
+# preamplifier after it and of the booster before it. Each must move the
+# OSNR (they all change ASE), and read back as written.
+
+EGN_FIBER = "fiber (A → B)"
+EGN_PREAMP = "Edfa_preamp_roadm B_from_fiber (A → B)"
+EGN_BOOSTER = "Edfa_booster_roadm A_to_fiber (A → B)"
+EGN_CASES = [
+    (EGN_FIBER, "loss_coef", 0.25),
+    (EGN_FIBER, "att_in", 3.0),
+    (EGN_PREAMP, "nf0", 9.0),
+    (EGN_BOOSTER, "nf0", 9.0),
+]
+
+
+@pytest.fixture
+def egn_mesh(tmp_path) -> TapiContext:
+    from tests.conftest import _mesh_config
+
+    return TapiContext(_mesh_config(tmp_path, "egn"))
+
+
+def _egn_baseline(ctx: TapiContext) -> Any:
+    (path,) = ctx.candidate_paths("trx A", "trx C")
+    baseline = asyncio.run(ctx._backend.compute_baseline(
+        path, "DP-QPSK", centre_frequency_hz=193.1e12, media_channel_width_hz=56.25e9,
+        launch_power_dbm=ctx.default_launch_power_dbm,
+    ))
+    assert baseline is not None
+    assert {EGN_PREAMP, EGN_BOOSTER} <= set(baseline.edfa_uids)
+    return baseline
+
+
+@pytest.mark.parametrize(("uid", "attr", "value"), EGN_CASES)
+def test_egn_writable_attribute_reaches_propagation(
+    egn_mesh: TapiContext, uid: str, attr: str, value: float,
+) -> None:
+    before = _egn_baseline(egn_mesh)
+    egn_mesh._backend.write_attribute(uid, attr, value)
+    assert egn_mesh._backend.read_attribute(uid, attr) == pytest.approx(value)
+    after = _egn_baseline(egn_mesh)
+    assert after.osnr_ase_db < before.osnr_ase_db - 1e-6, (attr, before, after)
+
+
+def test_egn_att_in_lowers_the_fiber_launch(egn_mesh: TapiContext) -> None:
+    """Padding at the fiber input lowers the power the fiber sees (less
+    NLI) and the power the next amplifier receives (more ASE)."""
+    be = egn_mesh._backend
+    (link_id,) = be._links_for_path(["roadm A", "roadm B"])
+    before = be._link_plan(link_id)
+    be.write_attribute(EGN_FIBER, "att_in", 3.0)
+    after = be._link_plan(link_id)
+    assert after.fibers[0].input_dbm == pytest.approx(before.fibers[0].input_dbm - 3.0)
+    preamp_before, preamp_after = (
+        next(a for a in plan.amplifiers if a.uid == EGN_PREAMP) for plan in (before, after)
+    )
+    assert preamp_after.input_dbm == pytest.approx(preamp_before.input_dbm - 3.0)
+    assert preamp_after.gain_db == pytest.approx(preamp_before.gain_db + 3.0)
+
+
+@pytest.mark.parametrize(("uid", "attr", "value"), EGN_CASES)
+def test_egn_capture_restore_round_trips(
+    egn_mesh: TapiContext, uid: str, attr: str, value: float,
+) -> None:
+    backend = egn_mesh._backend
+    original = backend.read_attribute(uid, attr)
+    token = backend.capture_attribute(uid, attr)
+    backend.write_attribute(uid, attr, value)
+    assert backend.read_attribute(uid, attr) != pytest.approx(original)
+    backend.restore_attribute(uid, attr, token)
+    assert backend.read_attribute(uid, attr) == pytest.approx(original)

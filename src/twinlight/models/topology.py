@@ -40,7 +40,12 @@ class NodeEdgePointRef(BaseModel):
 
 
 class LatencyCharacteristic(BaseModel):
-    """TAPI/TE latency characteristic: propagation delay from fiber length."""
+    """tapi-topology latency-characteristic: propagation delay from fiber length.
+
+    v2.6.0 types ``fixed-latency-characteristic`` as a string with no unit.
+    The twin writes microseconds, the unit tapi-path-computation uses for
+    ``max-allowed-delay``, as a decimal string with nanosecond resolution.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -48,11 +53,15 @@ class LatencyCharacteristic(BaseModel):
         default="propagation-delay",
         alias="traffic-property-name",
     )
-    total_size: int = Field(
-        default=0,
-        alias="total-size",
-        description="Propagation delay in nanoseconds (fiber length / (c/n)).",
+    fixed_latency_characteristic: str = Field(
+        ...,
+        alias="fixed-latency-characteristic",
+        description="Propagation delay in microseconds (fiber length / (c/n)).",
     )
+
+    @classmethod
+    def from_seconds(cls, delay_s: float) -> LatencyCharacteristic:
+        return cls(fixed_latency_characteristic=f"{delay_s * 1e6:.3f}")
 
 
 class NodeEdgePoint(BaseModel):

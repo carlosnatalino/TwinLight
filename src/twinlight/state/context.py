@@ -15,30 +15,48 @@ algorithms/spectrum_assignment.py).
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
+import math
+import uuid as uuid_lib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
+from twinlight.algorithms.path_constraints import (
+    NO_CONSTRAINTS,
+    ConstraintError,
+    LinkRef,
+    NodeRef,
+    PathConstraints,
+)
+from twinlight.algorithms.spectrum_assignment import first_fit, path_uids_to_edges
 from twinlight.config import TwinConfig
 from twinlight.loader.gnpy_topology import load_gnpy_topology
 from twinlight.loader.tapi_builder import TapiBuilder
-from twinlight.models.common import ServiceInterfacePoint
+from twinlight.models.common import OperationalState, ServiceInterfacePoint
 from twinlight.models.connectivity import ConnectivityService
+from twinlight.models.equipment import PhysicalContext
 from twinlight.models.oam import (
     ConnectivityServiceEndPointRef,
     OamJob,
     oam_job_uuid,
     tapi_date_and_time,
 )
+from twinlight.models.path_computation import PathCompService
 from twinlight.models.topology import (
     Link,
     Node,
     NodeEdgePoint,
     Topology,
 )
+from twinlight.physics.backend import LitChannel, PropagationError
 from twinlight.physics.backend import element_kind_name as _kind_name
+from twinlight.physics.modulation import ModulationFormat
 from twinlight.state.spectrum_state import SpectrumState
 from twinlight.state.topology_state import TopologyGraph
 
@@ -60,12 +78,35 @@ class NoPathError(RmsaError):
     """No path exists between the requested SIPs."""
 
 
+class RouteSearchExhaustedError(NoPathError):
+    """The search through include constraints hit its bounds before finding
+    a route (``algorithms/routing.py``); a route may still exist."""
+
+
 class InsufficientSpectrumError(RmsaError):
     """No contiguous spectrum block available along the path."""
 
 
 class InsufficientQoTError(RmsaError):
     """Path GSNR below the format's required threshold plus the system margin."""
+
+
+class SpectrumRequestError(ValueError):
+    """A requested spectrum or central frequency that cannot be on the grid at
+    all (misaligned, outside it, the wrong width). A client error (422),
+    unlike a conflict with spectrum in use or the amplifier band (409)."""
+
+
+@dataclass(frozen=True)
+class _RouteQuery:
+    """Constraints resolved to element UIDs of the route graph."""
+
+    include: tuple[str, ...]                 # visited in this order
+    hidden_nodes: frozenset[str]             # removed from the search
+    hidden_edges: frozenset[tuple[str, str]]
+    # explicit-route: the terminal-to-terminal hops the request allows,
+    # or None when the route is free between includes.
+    explicit_pairs: frozenset[tuple[str, str]] | None
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +172,26 @@ def _adjustment_granularity(slot_width_ghz: float) -> str:
     return _ADJUSTMENT_GRANULARITIES.get(
         round(slot_width_ghz, 4), "ADJUSTMENT_GRANULARITY_UNCONSTRAINED"
     )
+
+
+# Snapshot format. 2: spectrum is assigned inside the amplifier band and each
+# allocation records its launch power. 1 (deprecated) is still restored and
+# rewritten as 2.
+SNAPSHOT_VERSION = 2
+
+
+@dataclass(frozen=True)
+class _DetachedService:
+    """A service taken out of the context, with what puts it back unchanged
+    (:meth:`TapiContext.replace_service`)."""
+
+    service: ConnectivityService
+    allocation: tuple[list[tuple[str, str]], int, int] | None
+    launch_power_dbm: float | None
+    baseline: OpmBaseline | None
+    indexed_uids: frozenset[str]
+    fibers: frozenset[str] | None
+    edfa_uids: list[str]
 
 
 class TapiContext:
@@ -199,6 +260,15 @@ class TapiContext:
         self._route_cache: dict[tuple[str, str], list[str]] = {}
         self._baseline_cache: dict[str, OpmBaseline] = {}
         self._propagation_lock: asyncio.Lock = asyncio.Lock()
+        # Serialises changes to the set of admitted services. Admission yields
+        # while it propagates; without this, two admissions could pick the
+        # same first-fit block, and a PUT's rollback could find its old block
+        # taken by a request that ran in between.
+        self._admission_lock: asyncio.Lock = asyncio.Lock()
+        # service_uuid -> the fibers its last baseline traversed (the
+        # backend's UIDs, design-split sub-spans included): which lightpaths
+        # share a fiber, for a backend whose baselines depend on the load.
+        self._service_fibers: dict[str, frozenset[str]] = {}
 
         # -- EDFA stateful reservoir tracker (Bononi exponential step) ------
         from twinlight.physics.transients.edfa_reservoir import (
@@ -213,12 +283,16 @@ class TapiContext:
         self._spectrum_state = SpectrumState(config.spectrum.num_slots)
         # service_uuid -> (path_edges, start_slot, block_width) for release on delete
         self._service_allocation: dict[str, tuple[list[tuple[str, str]], int, int]] = {}
+        # service_uuid -> launch power in effect [dBm] (requested or SI default)
+        self._service_launch_power: dict[str, float] = {}
 
         # -- Path computation: GNPy UID <-> TAPI topology refs -------------
         # gnpy_uid -> (topology_uuid, node_uuid)
         self._gnpy_uid_to_node_ref: dict[str, tuple[str, str]] = {}
         # (src_gnpy_uid, dst_gnpy_uid) -> (topology_uuid, link_uuid)
         self._gnpy_pair_to_link_ref: dict[tuple[str, str], tuple[str, str]] = {}
+        # and back: resolves the link refs of topology constraints
+        self._link_ref_to_pair: dict[tuple[str, str], tuple[str, str]] = {}
         self._build_gnpy_topology_ref_indexes()
 
         # -- /config plane runtime overrides --------------------------------
@@ -275,10 +349,42 @@ class TapiContext:
         # startup, exactly as the engine stored it (an unset value included).
         self._element_startup: dict[tuple[str, str], tuple[Any, Any]] = {}
 
+        # -- T-API path computation (path-comp-service and path lists) -------
+        # Results of what-if path computations. They commit no resources and
+        # are not part of snapshots: a computed path is a function of the
+        # topology at the time it was asked for.
+        self._path_comp_services: dict[str, PathCompService] = {}
+        self._paths: dict[str, dict[str, Any]] = {}
+
         # -- Transparent controller: candidate datastore ---------------------
         from twinlight.transparent.datastore import CandidateDatastore
 
         self.candidate = CandidateDatastore()
+
+        self._log_rmsa_settings()
+
+    def _log_rmsa_settings(self) -> None:
+        """Log the admission policy in effect, once, at startup.
+
+        These four values decide every admission, and two of them do not come
+        from the YAML file the operator is reading: the launch power is the
+        equipment library's SI default, and the margin and guard band may have
+        been left at their code defaults. Logging the resolved values makes a
+        run's admission decisions reproducible from its log alone.
+        """
+        rmsa = self._config.rmsa
+        defaults = self._backend.spectral_defaults
+        logger.info(
+            "RMSA settings: qot_margin_db=%.2f dB, k_shortest_paths=%d, "
+            "default_guardband_slots=%d (%.2f GHz), default launch power=%.2f dBm "
+            "(SI power_dbm from %s)",
+            rmsa.qot_margin_db,
+            rmsa.k_shortest_paths,
+            rmsa.default_guardband_slots,
+            rmsa.default_guardband_slots * self._config.spectrum.slot_width_ghz,
+            defaults.power_dbm,
+            defaults.source,
+        )
 
     # -- Backend pass-throughs ------------------------------------------
     # These three properties existed as direct attributes before the
@@ -328,83 +434,486 @@ class TapiContext:
         return self._nep_index.get(topo_uuid, {}).get(node_uuid, {}).get(nep_uuid)
 
     async def add_service(self, svc: ConnectivityService) -> None:
+        """Admit a connectivity service (see :meth:`_add_service`)."""
+        async with self._admission_lock:
+            await self._add_service(svc)
+
+    async def remove_service(self, uuid: str) -> bool:
+        """Delete a service and bring the others' operational-state up to
+        date (it may have been a neighbour of theirs)."""
+        async with self._admission_lock:
+            removed = self.delete_service(uuid)
+        await self.refresh_operational_states()
+        return removed
+
+    async def replace_service(self, svc: ConnectivityService) -> None:
+        """Replace the service with ``svc.uuid`` by ``svc``, or leave it as it
+        was.
+
+        The old service's resources are released so the new one can reuse
+        them, then the new one goes through admission. If admission fails for
+        any reason, the old service is put back exactly as it was — same
+        route, block, format and launch power — rather than re-admitted,
+        which could move it or, with no route left, lose it.
+
+        Raises:
+            KeyError: No service with that UUID.
+            Whatever admission raises, after the rollback.
+        """
+        async with self._admission_lock:
+            detached = self._detach_service(svc.uuid)
+            try:
+                await self._add_service(svc)
+            except BaseException:
+                if svc.uuid in self._services or svc.uuid in self._service_allocation:
+                    self.delete_service(svc.uuid)  # a partial admission
+                self._reattach_service(detached)
+                raise
+            # The old channel is gone for good: the amplifiers saw a drop.
+            if detached.edfa_uids and self._config.transients.edfa_reservoir.enabled:
+                self._edfa_tracker.notify_channel_change(
+                    detached.edfa_uids, -1, self._config.transients.edfa_reservoir,
+                )
+
+    def _detach_service(self, uuid: str) -> _DetachedService:
+        """Take a service out of every structure, keeping what puts it back.
+
+        Unlike :meth:`delete_service`, the EDFA tracker is not told: if the
+        service is reattached, no channel was ever dropped.
+        """
+        svc = self._services.get(uuid)
+        if svc is None:
+            raise KeyError(uuid)
+        detached = _DetachedService(
+            service=svc,
+            allocation=self._service_allocation.get(uuid),
+            launch_power_dbm=self._service_launch_power.get(uuid),
+            baseline=self._baseline_cache.get(uuid),
+            indexed_uids=frozenset(
+                uid for uid, users in self._element_to_services.items() if uuid in users
+            ),
+            fibers=self._service_fibers.get(uuid),
+            edfa_uids=self._service_edfa_uids.get(uuid, []),
+        )
+        for other in self._sharing_services(uuid):
+            self.invalidate_baseline(other)
+        if detached.allocation is not None:
+            path_edges, start, width = detached.allocation
+            self._spectrum_state.release(path_edges, start, width)
+        self._services.pop(uuid)
+        self._service_allocation.pop(uuid, None)
+        self._service_launch_power.pop(uuid, None)
+        self._baseline_cache.pop(uuid, None)
+        self._service_fibers.pop(uuid, None)
+        self._service_edfa_uids.pop(uuid, None)
+        for uid in detached.indexed_uids:
+            self._element_to_services[uid].discard(uuid)
+        return detached
+
+    def _reattach_service(self, detached: _DetachedService) -> None:
+        """Undo :meth:`_detach_service`. The block is free again: nothing else
+        was admitted while the admission lock was held."""
+        uuid = detached.service.uuid
+        if detached.allocation is not None:
+            path_edges, start, width = detached.allocation
+            self._spectrum_state.allocate(path_edges, start, width)
+            self._service_allocation[uuid] = detached.allocation
+        if detached.launch_power_dbm is not None:
+            self._service_launch_power[uuid] = detached.launch_power_dbm
+        if detached.baseline is not None:
+            self._baseline_cache[uuid] = detached.baseline
+        if detached.fibers is not None:
+            self._service_fibers[uuid] = detached.fibers
+        if detached.edfa_uids:
+            self._service_edfa_uids[uuid] = detached.edfa_uids
+        for uid in detached.indexed_uids:
+            self._element_to_services.setdefault(uid, set()).add(uuid)
+        self._services[uuid] = detached.service
+        # Its neighbours lost and regained it: their baselines were dropped
+        # on detach and are recomputed on the next read.
+        for other in self._sharing_services(uuid):
+            self.invalidate_baseline(other)
+
+    async def _add_service(self, svc: ConnectivityService) -> None:
         """Add a connectivity service with RMSA: path, spectrum, and QoT check.
 
-        Order: resolve path (k-shortest from NetworkX; GNPy does not provide
-        path computation), first-fit spectrum assignment, optional GSNR
-        check via GNPy propagation. Raises NoPathError, InsufficientSpectrumError,
-        or InsufficientQoTError on admission failure.
+        Order: route under the service's routing and topology constraints
+        (:meth:`candidate_paths`), first-fit spectrum assignment, then the
+        GSNR check against the active backend's propagation.
+
+        Raises:
+            ConstraintError: A constraint that does not resolve against the
+                topology (unsupported leaves are refused when the model is
+                parsed).
+            NoPathError, InsufficientSpectrumError, InsufficientQoTError:
+                Admission failed.
         """
         endpoints = svc.end_point
         if len(endpoints) < 2:
             raise NoPathError("Connectivity service requires two end-points")
         sip_a = endpoints[0].service_interface_point.service_interface_point_uuid
         sip_z = endpoints[1].service_interface_point.service_interface_point_uuid
-
-        path = self.get_service_path(sip_a, sip_z)
-        if not path:
+        src, dst = self.get_gnpy_uid(sip_a), self.get_gnpy_uid(sip_z)
+        if not src or not dst:
             raise NoPathError(f"No path between SIPs {sip_a!r} and {sip_z!r}")
 
-        from twinlight.algorithms.spectrum_assignment import (
-            first_fit,
-            path_uids_to_edges,
+        constraints = svc.path_constraints()
+        paths = self.candidate_paths(
+            src, dst, constraints, self._config.rmsa.k_shortest_paths,
         )
-        from twinlight.physics.modulation import (
-            get_params,
-            slots_required_for_modulation,
-        )
+        if not paths:
+            raise NoPathError(
+                f"No path between SIPs {sip_a!r} and {sip_z!r}"
+                + ("" if constraints.is_empty else " satisfies the constraints")
+            )
+        path, fmt, start, block_width, baseline = await self._admit(svc, paths)
 
         path_edges = path_uids_to_edges(path)
-        slot_width_hz = self._config.spectrum.slot_width_ghz * 1e9
-        slots_required = slots_required_for_modulation(
-            svc.modulation_format, slot_width_hz
-        )
-        guard_slots = self._config.rmsa.default_guardband_slots
-        start = first_fit(
-            self._spectrum_state,
-            path_edges,
-            slots_required,
-            guard_slots,
-        )
-        if start is None:
-            raise InsufficientSpectrumError(
-                "No contiguous spectrum block available along the path"
-            )
-
-        block_width = slots_required + guard_slots
         self._spectrum_state.allocate(path_edges, start, block_width)
         self._service_allocation[svc.uuid] = (path_edges, start, block_width)
-
-        # QoT admission: require GSNR >= req_gsnr + margin (rmsa.qot_margin_db)
-        if self._gnpy_available:
-            baseline = await self.get_or_compute_baseline(svc)
-            if baseline is not None:
-                req_gsnr = get_params(svc.modulation_format).req_gsnr_db
-                margin = self._config.rmsa.qot_margin_db
-                if baseline.gsnr_db < req_gsnr + margin:
-                    self._spectrum_state.release(path_edges, start, block_width)
-                    self._service_allocation.pop(svc.uuid, None)
-                    raise InsufficientQoTError(
-                        f"Path GSNR {baseline.gsnr_db:.1f} dB below required "
-                        f"{req_gsnr + margin:.1f} dB (req {req_gsnr} + margin {margin})"
-                    )
-
+        lower, upper = self._slot_range_hz(start, block_width)
+        power_dbm = self._launch_power_for(svc)
+        self._service_launch_power[svc.uuid] = power_dbm
+        svc.assign_channel(fmt, (lower + upper) // 2, power_dbm)
         self._services[svc.uuid] = svc
         self._add_oam_job(svc)
+        if baseline is not None:
+            # The admission propagation is the service's baseline: same path,
+            # channel and launch power. Seeding the cache saves a propagation.
+            self._baseline_cache[svc.uuid] = baseline
 
         # Reverse index for /config invalidation: every element on the path
         # now depends on this service's baseline.
         for uid in path:
             self._element_to_services.setdefault(uid, set()).add(svc.uuid)
+        if baseline is not None:
+            self._note_baseline(svc, baseline)
 
         # Notify EDFA tracker of channel add (Bononi reservoir model)
-        if self._gnpy_available and baseline is not None:
+        if baseline is not None:
             edfa_uids = baseline.edfa_uids
             self._service_edfa_uids[svc.uuid] = edfa_uids
             if edfa_uids and self._config.transients.edfa_reservoir.enabled:
                 self._edfa_tracker.notify_channel_change(
                     edfa_uids, +1, self._config.transients.edfa_reservoir,
                 )
+
+        # The new channel is a neighbour of every lightpath sharing a fiber
+        # with it: their GSNR drops, possibly below what their format needs.
+        for uuid in self._sharing_services(svc.uuid):
+            self.invalidate_baseline(uuid)
+            if (other := self._services.get(uuid)) is not None:
+                await self.get_or_compute_baseline(other)
+
+    async def _admit(
+        self, svc: ConnectivityService, paths: list[list[str]],
+    ) -> tuple[list[str], ModulationFormat, int, int, OpmBaseline | None]:
+        """Walk the candidates and formats; return the first that passes.
+
+        Candidates are tried in rank order. On each, the requested format is
+        tried, or — when the request names none — every format from the
+        highest spectral efficiency down, so the densest format that closes
+        the link wins. A (path, format) passes when a block is free on every
+        link and, with a physics backend loaded, the propagated GSNR reaches
+        the format's requirement plus ``rmsa.qot_margin_db``.
+
+        A requested spectrum (or central frequency) is checked against the
+        grid once, then used as is on each candidate: it must lie in the band
+        the path's amplifiers pass and be free on every link, or the
+        candidate is skipped with the conflict named. Without a request, the
+        block is first-fit within that band.
+
+        Without a physics backend there is no QoT to check, so a request that
+        names no format gets the most robust one rather than the densest:
+        the twin cannot know a denser format would close the link.
+
+        Propagations are memoised for this admission only, keyed by
+        (path, central frequency, launch power, symbol rate) — what the
+        propagation depends on — so formats that occupy the same block share
+        one. The memo never outlives the call, so it cannot go stale on a
+        parameter change.
+
+        Returns ``(path, format, start slot, block width, baseline)``.
+
+        Raises:
+            SpectrumRequestError: The requested spectrum does not fit the grid
+                or any format's width.
+            InsufficientSpectrumError: No candidate had a usable block for any
+                format tried. The message names each conflict.
+            InsufficientQoTError: Spectrum was found, but no (path, format)
+                reached its GSNR requirement. The message lists every attempt.
+        """
+        from twinlight.physics.modulation import (
+            formats_by_spectral_efficiency,
+            get_params,
+        )
+
+        qot_available = self._gnpy_available
+        if svc.requested_modulation is not None:
+            formats = [svc.requested_modulation]
+        elif qot_available:
+            formats = formats_by_spectral_efficiency()
+        else:
+            formats = formats_by_spectral_efficiency()[-1:]
+        requested = self._requested_starts(svc, formats)
+        if requested is not None:
+            formats = [f for f in formats if f in requested]
+
+        guard_slots = self._config.rmsa.default_guardband_slots
+        margin = self._config.rmsa.qot_margin_db
+        power_dbm = self._launch_power_for(svc)
+        # The lightpaths already lit; the candidate joins them.
+        line_load = self._line_load()
+        memo: dict[tuple[tuple[str, ...], int, int, float, float], OpmBaseline | str] = {}
+        attempts: list[str] = []
+        spectrum_found = False
+
+        for rank, path in enumerate(paths, start=1):
+            edges = path_uids_to_edges(path)
+            assignable = self._assignable_slots(path)
+            # One entry per candidate, naming the route once and each format's
+            # outcome after it, so a refusal stays readable on long routes.
+            outcomes: list[str] = []
+            attempts.append("")
+            for fmt in formats:
+                params = get_params(fmt)
+                block = self._block_width(fmt)
+                if requested is None:
+                    start = first_fit(
+                        self._spectrum_state, edges, block - guard_slots,
+                        guard_slots, assignable,
+                    )
+                    if start is None:
+                        outcomes.append(
+                            f"{fmt.value} no free {block}-slot block inside the "
+                            "amplifier band"
+                        )
+                        continue
+                else:
+                    start = requested[fmt]
+                    conflict = self._block_conflict(path, edges, start, block, assignable)
+                    if conflict is not None:
+                        outcomes.append(f"{fmt.value} {conflict}")
+                        continue
+                spectrum_found = True
+                if not qot_available:
+                    return path, fmt, start, block, None
+
+                lower, upper = self._slot_range_hz(start, block)
+                centre_hz = (lower + upper) // 2
+                # What the propagation depends on: the route, where the channel
+                # sits, how wide its media channel is (which comb neighbours it
+                # displaces), its power and its symbol rate. Formats sharing
+                # all of these share one propagation.
+                key = (tuple(path), centre_hz, upper - lower, power_dbm,
+                       params.baud_rate_hz)
+                if key not in memo:
+                    memo[key] = await self._admission_qot(
+                        path, fmt, centre_hz, upper - lower, power_dbm, line_load,
+                    )
+                baseline = memo[key]
+                if isinstance(baseline, str):
+                    # No QoT verdict: never admit on that. The next format or
+                    # route may still propagate.
+                    outcomes.append(f"{fmt.value} QoT could not be evaluated ({baseline})")
+                    continue
+                required = params.req_gsnr_db + margin
+                if baseline.gsnr_db >= required:
+                    return path, fmt, start, block, baseline
+                outcomes.append(
+                    f"{fmt.value} GSNR {baseline.gsnr_db:.1f} dB below "
+                    f"{required:.1f} dB"
+                )
+            attempts[-1] = (
+                f"candidate {rank} ({' > '.join(self._terminals(path))}): "
+                + ", ".join(outcomes)
+            )
+
+        error_type = InsufficientQoTError if spectrum_found else InsufficientSpectrumError
+        note = (
+            f" (required GSNR includes the {margin} dB qot_margin_db)"
+            if spectrum_found else ""
+        )
+        raise error_type("; ".join(attempts) + note)
+
+    async def _admission_qot(
+        self,
+        path: list[str],
+        fmt: ModulationFormat,
+        centre_hz: int,
+        width_hz: int,
+        power_dbm: float,
+        line_load: list[LitChannel],
+    ) -> OpmBaseline | str:
+        """Propagate a candidate channel; on failure, the reason instead.
+
+        A backend is loaded, so a lightpath is admitted only on a QoT verdict:
+        a propagation that raises (an element the engine rejects, a numerical
+        failure) or yields nothing is a reason to skip the candidate, not to
+        admit it unchecked.
+        """
+        try:
+            async with self._propagation_lock:
+                baseline = await self._backend.compute_baseline(
+                    path, fmt.value,
+                    centre_frequency_hz=centre_hz,
+                    media_channel_width_hz=width_hz,
+                    launch_power_dbm=power_dbm,
+                    line_load=line_load,
+                )
+        except Exception as exc:  # any engine failure is reported, not raised
+            logger.warning("Admission propagation failed on %s", path, exc_info=True)
+            return f"propagation failed: {exc}"
+        if baseline is None:
+            return f"the {self._backend.name} backend could not propagate this route"
+        if not math.isfinite(baseline.gsnr_db):
+            return f"the {self._backend.name} backend returned GSNR {baseline.gsnr_db}"
+        return baseline
+
+    def _launch_power_for(self, svc: ConnectivityService) -> float:
+        """The requested launch power, else the line default (SI power_dbm)."""
+        if svc.requested_launch_power_dbm is not None:
+            return svc.requested_launch_power_dbm
+        return self.default_launch_power_dbm
+
+    # -- Spectrum: grid, amplifier band, requested blocks ------------------
+
+    def _slot_hz(self) -> int:
+        return round(self._config.spectrum.slot_width_ghz * 1e9)
+
+    def _block_width(self, fmt: ModulationFormat) -> int:
+        """Slots of one media channel for ``fmt``: the channel plus guard."""
+        from twinlight.physics.modulation import slots_required_for_modulation
+
+        return (
+            slots_required_for_modulation(fmt, self._slot_hz())
+            + self._config.rmsa.default_guardband_slots
+        )
+
+    def _assignable_slots(self, path: list[str]) -> np.ndarray | None:
+        """Slots whose whole width lies in a band every amplifier on ``path``
+        passes — GNPy's ``is_in_band`` test, which is how an EDFA decides
+        which carriers to drop. None when the backend has no amplifier model.
+        """
+        bands = self._backend.amplifier_bands(path)
+        if bands is None:
+            return None
+        n = self._config.spectrum.num_slots
+        grid_lower, _ = self._slot_range_hz(0, n)
+        lower = grid_lower + np.arange(n) * self._slot_hz()
+        upper = lower + self._slot_hz()
+        mask = np.zeros(n, dtype=bool)
+        for f_min, f_max in bands:
+            mask |= (lower >= f_min) & (upper <= f_max)
+        return mask
+
+    def _requested_starts(
+        self, svc: ConnectivityService, formats: list[ModulationFormat],
+    ) -> dict[ModulationFormat, int] | None:
+        """Start slot of the requested media channel for each format it fits.
+
+        None when the request names no spectrum. The spectrum must sit on the
+        grid (edges on slot edges, a central frequency at a block centre),
+        inside it, and be exactly one media channel wide for the format —
+        the width the twin reports for an admitted service, so a GET's
+        spectrum can be sent back unchanged.
+
+        Raises:
+            SpectrumRequestError: Off-grid, outside the grid, a central
+                frequency that is not the spectrum's centre, a frequency
+                constraint other than the twin's grid, or no format of that
+                width.
+        """
+        edge = svc.requested_edge_frequency_constraint
+        if edge is not None:
+            ours = self._frequency_constraint()
+            for leaf, value in edge.items():
+                if ours.get(leaf) != value:
+                    raise SpectrumRequestError(
+                        f"edge-frequency-constraint/{leaf}={value!r} is not this "
+                        f"twin's grid ({leaf}={ours.get(leaf)!r})"
+                    )
+        spectrum = svc.requested_spectrum_hz
+        centre = svc.requested_central_frequency_hz
+        if spectrum is None and centre is None:
+            return None
+
+        slot = self._slot_hz()
+        n = self._config.spectrum.num_slots
+        grid_lower, grid_upper = self._slot_range_hz(0, n)
+        thz = 1e-12
+        starts: dict[ModulationFormat, int] = {}
+        widths: list[str] = []
+        for fmt in formats:
+            width = self._block_width(fmt)
+            widths.append(f"{fmt.value} {width} slots ({width * slot * 1e-9:g} GHz)")
+            start: int | None = None
+            if spectrum is not None:
+                lower, upper = spectrum
+                if (lower - grid_lower) % slot or (upper - lower) % slot:
+                    raise SpectrumRequestError(
+                        f"spectrum {lower}-{upper} Hz is not aligned to the "
+                        f"{slot * 1e-9:g} GHz grid: edges must sit at "
+                        f"{grid_lower} Hz + n x {slot} Hz"
+                    )
+                if (upper - lower) // slot != width:
+                    continue
+                start = (lower - grid_lower) // slot
+            if centre is not None:
+                twice = 2 * (centre - grid_lower) - width * slot
+                on_grid = twice % (2 * slot) == 0
+                if spectrum is not None and (not on_grid or start != twice // (2 * slot)):
+                    raise SpectrumRequestError(
+                        f"central-frequency {centre} Hz is not the centre of the "
+                        f"requested spectrum {spectrum[0]}-{spectrum[1]} Hz"
+                    )
+                if not on_grid:
+                    raise SpectrumRequestError(
+                        f"central-frequency {centre} Hz is not the centre of "
+                        f"any {width}-slot block on the {slot * 1e-9:g} GHz grid"
+                    )
+                start = twice // (2 * slot)
+            assert start is not None
+            if start < 0 or start + width > n:
+                lo, hi = self._slot_range_hz(start, width)
+                raise SpectrumRequestError(
+                    f"requested spectrum {lo * thz:.6f}-{hi * thz:.6f} THz lies "
+                    f"outside the grid {grid_lower * thz:.6f}-{grid_upper * thz:.6f} THz"
+                )
+            starts[fmt] = start
+        if not starts:
+            raise SpectrumRequestError(
+                f"requested spectrum is {(spectrum[1] - spectrum[0]) // slot} slots "
+                f"wide; a media channel is {', '.join(widths)} "
+                f"(channel plus {self._config.rmsa.default_guardband_slots} guard)"
+                if spectrum is not None else "no format fits the requested spectrum"
+            )
+        return starts
+
+    def _block_conflict(
+        self, path: list[str], edges: list[tuple[str, str]], start: int, width: int,
+        assignable: np.ndarray | None,
+    ) -> str | None:
+        """Why a requested block cannot be used on ``path``, or None if it can."""
+        lower, upper = self._slot_range_hz(start, width)
+        thz = 1e-12
+        where = f"requested {lower * thz:.6f}-{upper * thz:.6f} THz"
+        if assignable is not None and not assignable[start:start + width].all():
+            bands = self._backend.amplifier_bands(path) or []
+            passed = ", ".join(f"{lo * thz:.6f}-{hi * thz:.6f} THz" for lo, hi in bands)
+            return (
+                f"{where} is outside the band every amplifier on the path passes "
+                f"({passed or 'none'})"
+            )
+        if self._spectrum_state.is_available(edges, start, width):
+            return None
+        for uuid, (other_edges, other_start, other_width) in self._service_allocation.items():
+            overlaps = other_start < start + width and start < other_start + other_width
+            shared = set(edges).intersection(other_edges)
+            if overlaps and shared:
+                a, b = next(e for e in edges if e in shared)
+                return f"{where} is occupied by service {uuid} on {a} -> {b}"
+        return f"{where} is occupied on the path"
 
     def get_services(self) -> list[ConnectivityService]:
         return list(self._services.values())
@@ -643,8 +1152,17 @@ class TapiContext:
         }
 
     def delete_service(self, uuid: str) -> bool:
-        """Remove service and release its spectrum allocation."""
+        """Remove service and release its spectrum allocation.
+
+        The lightpaths that shared a fiber with it lose a neighbour, so their
+        baselines are invalidated; :meth:`refresh_operational_states`
+        re-evaluates them.
+        """
+        for other in self._sharing_services(uuid):
+            self.invalidate_baseline(other)
+        self._service_fibers.pop(uuid, None)
         allocation = self._service_allocation.pop(uuid, None)
+        self._service_launch_power.pop(uuid, None)
         if allocation is not None:
             path_edges, start, block_width = allocation
             self._spectrum_state.release(path_edges, start, block_width)
@@ -678,43 +1196,244 @@ class TapiContext:
         """Return the GNPy element UID for a given SIP UUID, or None."""
         return self._sip_to_gnpy_uid.get(sip_uuid)
 
-    def _get_path_via_gnpy(self, src_uid: str, dst_uid: str) -> list[str] | None:
-        """Use GNPy's compute_constrained_path for weighted shortest path.
+    # -- Route search ------------------------------------------------------
+    #
+    # GNPy has no k-shortest-path function. Its compute_constrained_path runs
+    # networkx.shortest_simple_paths(network, weight="weight") over the GNPy
+    # network, where an edge's weight is the length of the fiber it leaves
+    # (gnpy/tools/json_io.py, network_from_json; 0.01 for other edges, as
+    # gnpy/core/network.py also sets on the edges it adds). The k-list is
+    # built the same way: compute_constrained_path gives candidate 1,
+    # honouring ordered includes, and the same weighted Yen search over the
+    # same graph gives the rest. Exclusions are applied by searching a
+    # restricted view of the graph, which GNPy's search accepts like any
+    # other DiGraph. Without a GNPy network (the EGN backend) the search
+    # falls back to the parsed topology graph, weighted the same way
+    # (state/topology_state.py). See algorithms/path_constraints.py for which
+    # T-API constraints map onto this.
 
-        Returns list of element UIDs or None if GNPy path computation is
-        unavailable or finds no path. Uses fiber length as weight
-        (see https://gnpy.readthedocs.io/).
+    def _element_kind(self, uid: str) -> str:
+        """"Roadm"/"Transceiver"/"Fiber"/"Edfa"/… for an element UID."""
+        el = self._gnpy_uid_map.get(uid) if self._gnpy_uid_map else None
+        if el is not None:
+            return _kind_name(el)
+        parsed = self._topo_graph._gnpy_topo.elements_by_uid.get(uid)
+        return getattr(parsed, "type", "") if parsed else ""
+
+    def _terminals(self, path: list[str]) -> list[str]:
+        """The ROADMs and transceivers of a path, in order."""
+        return [
+            uid for uid in path
+            if self._element_kind(uid) in ("Roadm", "Transceiver")
+        ]
+
+    def _resolve_node(self, ref: NodeRef, where: str) -> str:
+        node = self.get_node(ref.topology_uuid, ref.node_uuid)
+        uid = next(
+            (n.value for n in node.name if n.value_name == "node-name"), None,
+        ) if node is not None else None
+        if uid is None:
+            raise ConstraintError(
+                f"{where}: node {ref.node_uuid} not found in topology "
+                f"{ref.topology_uuid}"
+            )
+        return uid
+
+    def _resolve_link(self, ref: LinkRef, where: str) -> tuple[str, str]:
+        pair = self._link_ref_to_pair.get((ref.topology_uuid, ref.link_uuid))
+        if pair is None:
+            raise ConstraintError(
+                f"{where}: link {ref.link_uuid} not found in topology "
+                f"{ref.topology_uuid}"
+            )
+        return pair
+
+    def _route_graph(self) -> tuple[Any, Any]:
+        """(graph searched for routes, node key of an element UID)."""
+        net = self._gnpy_network
+        if net is not None:
+            uid_map = self._gnpy_uid_map
+            return net, uid_map.get
+        graph = self._topo_graph.graph
+        return graph, lambda uid: uid if uid in graph else None
+
+    def _link_inline_elements(self, pair: tuple[str, str]) -> list[str]:
+        """Inline elements (fibers, amplifiers) of a terminal-to-terminal link,
+        in propagation order, as they appear in the route graph."""
+        return list(self._link_elements.get(pair, []))
+
+    def _resolve_route_query(
+        self, constraints: PathConstraints, src: str, dst: str,
+    ) -> _RouteQuery:
+        """Translate T-API refs to element UIDs of the route graph.
+
+        Raises:
+            ConstraintError: A reference that does not resolve, or an exclusion
+                that removes one of the request's own end-points.
         """
-        if self._gnpy_network is None:
-            return None
-        try:
-            from gnpy.topology.request import PathRequest, compute_constrained_path
+        include: list[str] = []
+        for ref in constraints.include_nodes:
+            include.append(self._resolve_node(ref, "include-node"))
+        for link_ref in constraints.include_links:
+            pair = self._resolve_link(link_ref, "include-link")
+            inline = self._link_inline_elements(pair)
+            # Any inline element pins the route to this link: each one belongs
+            # to exactly one directed link. A link with none (a transceiver's
+            # access link) is pinned by its two terminals.
+            include.extend(inline[:1] or [pair[0], pair[1]])
 
-            req = PathRequest(
-                source=src_uid,
-                destination=dst_uid,
-                nodes_list=[dst_uid],
-                loose_list=["STRICT"],
-            )
-            path_elements = compute_constrained_path(self._gnpy_network, req)
-            if path_elements and getattr(req, "blocking_reason", None) is None:
-                return [el.uid for el in path_elements]
-        except Exception:
-            logger.debug(
-                "GNPy path computation failed for %s -> %s; falling back to "
-                "the NetworkX k-shortest search",
-                src_uid, dst_uid, exc_info=True,
-            )
-        return None
+        hidden_nodes: set[str] = set()
+        for ref in constraints.exclude_nodes:
+            uid = self._resolve_node(ref, "exclude-node")
+            if uid in (src, dst):
+                raise ConstraintError(
+                    f"exclude-node {ref.node_uuid} is an end-point of the request"
+                )
+            hidden_nodes.add(uid)
+        hidden_edges: set[tuple[str, str]] = set()
+        for link_ref in constraints.exclude_links:
+            pair = self._resolve_link(link_ref, "exclude-link")
+            inline = self._link_inline_elements(pair)
+            if inline:
+                hidden_nodes.update(inline)
+            else:
+                hidden_edges.add(pair)
+
+        explicit_pairs: frozenset[tuple[str, str]] | None = None
+        if constraints.explicit_route:
+            if constraints.include_links:
+                explicit_pairs = frozenset(
+                    self._resolve_link(r, "include-link")
+                    for r in constraints.include_links
+                )
+            else:
+                nodes = [src, *include, dst]
+                explicit_pairs = frozenset(itertools.pairwise(nodes))
+        return _RouteQuery(
+            include=tuple(include),
+            hidden_nodes=frozenset(hidden_nodes),
+            hidden_edges=frozenset(hidden_edges),
+            explicit_pairs=explicit_pairs,
+        )
+
+    def _satisfies_explicit_route(
+        self, path: list[str], query: _RouteQuery, src: str, dst: str,
+    ) -> bool:
+        """With ``explicit-route``, every hop between terminals must be one the
+        request named. A transceiver's access link to its own ROADM need not
+        be listed: the end-points already fix it."""
+        if query.explicit_pairs is None:
+            return True
+        terminals = self._terminals(path)
+        for hop in itertools.pairwise(terminals):
+            if hop in query.explicit_pairs or src in hop or dst in hop:
+                continue
+            return False
+        return True
+
+    def _gnpy_best_path(
+        self, graph: Any, src: str, dst: str, include: tuple[str, ...],
+    ) -> list[str] | None:
+        """``gnpy.topology.request.compute_constrained_path`` on ``graph``.
+
+        Every include is ``STRICT``: a T-API include is a requirement. GNPy
+        treats an all-``LOOSE`` list it cannot satisfy by dropping the
+        constraints and returning the unconstrained route, which would be
+        exactly the silent relaxation this twin refuses to make.
+        """
+        from gnpy.topology.request import PathRequest, compute_constrained_path
+
+        req = PathRequest(
+            request_id=f"{src} -> {dst}",
+            source=src,
+            destination=dst,
+            nodes_list=[*include, dst],
+            loose_list=["STRICT"] * (len(include) + 1),
+        )
+        try:
+            elements = compute_constrained_path(graph, req)
+        except StopIteration:  # an include GNPy cannot find in this view
+            return None
+        if not elements or req.blocking_reason is not None:
+            return None
+        return [el.uid for el in elements]
+
+    def candidate_paths(
+        self,
+        src: str,
+        dst: str,
+        constraints: PathConstraints = NO_CONSTRAINTS,
+        k: int = 1,
+    ) -> list[list[str]]:
+        """Up to ``k`` candidate routes between two transceivers, best first.
+
+        Each route is the ordered list of element UIDs. Every candidate
+        satisfies ``constraints``; an empty list means none exists.
+
+        Raises:
+            ConstraintError: See :meth:`_resolve_route_query`.
+        """
+        import networkx as nx
+
+        from twinlight.algorithms.routing import RouteSearchExhausted, k_shortest_paths
+
+        query = self._resolve_route_query(constraints, src, dst)
+        graph, key_of = self._route_graph()
+        if key_of(src) is None or key_of(dst) is None:
+            return []
+        view = nx.restricted_view(
+            graph,
+            [n for uid in query.hidden_nodes if (n := key_of(uid)) is not None],
+            [
+                (a, b) for u, v in query.hidden_edges
+                if (a := key_of(u)) is not None and (b := key_of(v)) is not None
+            ],
+        )
+        include_keys = [key_of(uid) for uid in query.include]
+        if any(key is None for key in include_keys):
+            return []  # an include the route graph does not contain
+
+        candidates: list[list[str]] = []
+        if self._gnpy_network is not None and not query.include:
+            # GNPy's own route. With includes, compute_constrained_path filters
+            # every simple path for them, with no bound (it ran past 45 s on
+            # CORONET), so the exact waypoint search below takes over.
+            best = self._gnpy_best_path(view, src, dst, query.include)
+            if best is not None:
+                candidates.append(best)
+        if len(candidates) < k:
+            # Ranked as GNPy ranks: by the edge ``weight`` — fiber length
+            # (gnpy.tools.json_io.network_from_json) on both graphs. Without
+            # includes this is Yen's algorithm, the search
+            # compute_constrained_path itself runs, so the best candidate
+            # above is also first here; with includes, the exact waypoint
+            # search finds the shortest routes through them.
+            try:
+                more = k_shortest_paths(
+                    view, key_of(src), key_of(dst), k + len(candidates),
+                    include=include_keys, weight="weight",
+                )
+            except RouteSearchExhausted as exc:
+                raise RouteSearchExhaustedError(str(exc)) from exc
+            for path in more:
+                uids = [getattr(n, "uid", n) for n in path]
+                if uids not in candidates:
+                    candidates.append(uids)
+
+        hidden = query.hidden_nodes
+        return [
+            path for path in candidates
+            if not hidden.intersection(path)
+            and self._satisfies_explicit_route(path, query, src, dst)
+        ][:k]
 
     def get_service_path(
         self, sip_a_uuid: str, sip_z_uuid: str
     ) -> list[str] | None:
-        """Return ordered GNPy UIDs for the shortest path between two SIPs.
+        """Return the best unconstrained route between two SIPs, or None.
 
-        When GNPy is loaded, uses GNPy's path computation (weighted by fiber
-        length). Otherwise uses NetworkX k-shortest paths. Results are cached.
-        Returns None if either SIP has no GNPy UID or no path exists.
+        Cached per (source, destination) in ``_route_cache``, which link
+        failure clears.
         """
         src = self.get_gnpy_uid(sip_a_uuid)
         dst = self.get_gnpy_uid(sip_z_uuid)
@@ -723,38 +1442,247 @@ class TapiContext:
 
         cache_key = (src, dst)
         if cache_key in self._route_cache:
-            return self._route_cache[cache_key]
+            return self._route_cache[cache_key] or None
 
-        # Prefer GNPy path computation when available (weighted shortest path by
-        # fiber length; see gnpy.topology.request.compute_constrained_path).
-        path_uids = self._get_path_via_gnpy(src, dst)
-        if path_uids is not None:
-            self._route_cache[cache_key] = path_uids
-            return path_uids
-
-        from twinlight.algorithms.routing import k_shortest_paths
-
-        paths = k_shortest_paths(
-            self._topo_graph.graph, src, dst, self._config.rmsa.k_shortest_paths
-        )
+        paths = self.candidate_paths(src, dst)
         if not paths:
             logger.warning("No path found between %s and %s", src, dst)
-            self._route_cache[cache_key] = []
-            return None
+        self._route_cache[cache_key] = paths[0] if paths else []
+        return paths[0] if paths else None
 
-        best = paths[0]
-        self._route_cache[cache_key] = best
-        return best
+    def path_fiber_km(self, path_uids: list[str]) -> float:
+        """Total fiber length of a route [km], spans of unknown length skipped."""
+        elements_by_uid = self._topo_graph._gnpy_topo.elements_by_uid
+        total = 0.0
+        for uid in path_uids:
+            if self._element_kind(uid) != "Fiber":
+                continue
+            km = _fiber_length_km(
+                self._gnpy_uid_map.get(uid) if self._gnpy_uid_map else None,
+                elements_by_uid.get(uid),
+            )
+            total += km or 0.0
+        return total
+
+    # -- T-API path computation -------------------------------------------
+
+    def create_path_comp_service(self, service: PathCompService) -> PathCompService:
+        """Compute up to ``rmsa.k_shortest_paths`` routes and record them.
+
+        The service and its ``path`` objects are stored in the
+        path-computation context, best route first. Nothing is allocated.
+
+        Raises:
+            KeyError: An end-point SIP does not exist.
+            ConstraintError: A constraint does not resolve against the topology.
+            NoPathError: No route satisfies the request. T-API requires at
+                least one path per service, so none is recorded.
+            ValueError: The UUID is already in use.
+        """
+        if service.uuid in self._path_comp_services:
+            raise ValueError(f"path-comp-service {service.uuid} already exists")
+        sip_a, sip_z = service.sip_uuids
+        for sip in (sip_a, sip_z):
+            if self.get_sip(sip) is None:
+                raise KeyError(f"SIP {sip!r} not found")
+        src, dst = self.get_gnpy_uid(sip_a), self.get_gnpy_uid(sip_z)
+        constraints = service.path_constraints()
+        routes = (
+            self.candidate_paths(
+                src, dst, constraints, self._config.rmsa.k_shortest_paths,
+            )
+            if src and dst else []
+        )
+        if not routes:
+            raise NoPathError(
+                f"No path between SIPs {sip_a!r} and {sip_z!r}"
+                + ("" if constraints.is_empty else " satisfies the constraints")
+            )
+
+        refs: list[dict[str, str]] = []
+        for rank, route in enumerate(routes, start=1):
+            path = self._tapi_path(route, rank)
+            self._paths[path["uuid"]] = path
+            refs.append({"path-uuid": path["uuid"]})
+        service.path = refs
+        self._path_comp_services[service.uuid] = service
+        return service
+
+    def _tapi_path(self, route: list[str], rank: int) -> dict[str, Any]:
+        """A ``tapi-path-computation:path`` for a route.
+
+        Fiber length is reported as a ``cost-characteristic`` of the path's
+        ``routing-constraint`` — the v2.6.0 place for a path's cost, and the
+        quantity the candidates are ranked by.
+        """
+        refs = self.route_refs(route)
+        return {
+            "uuid": str(uuid_lib.uuid4()),
+            "name": [{"value-name": "path-rank", "value": str(rank)}],
+            "layer-protocol-name": "PHOTONIC_MEDIA",
+            "direction": "UNIDIRECTIONAL",
+            "link": [
+                {"topology-uuid": t, "link-uuid": lk} for t, lk in refs["link"]
+            ],
+            "node-edge-point": [
+                {"topology-uuid": t, "node-uuid": n, "node-edge-point-uuid": e}
+                for t, n, e in refs["node-edge-point"]
+            ],
+            "routing-constraint": {
+                "cost-characteristic": [{
+                    "cost-name": "fiber-length-km",
+                    "cost-value": f"{self.path_fiber_km(route):.3f}",
+                    "cost-algorithm": "sum of the fiber span lengths on the path",
+                }],
+            },
+        }
+
+    def get_path_comp_services(self) -> list[PathCompService]:
+        return list(self._path_comp_services.values())
+
+    def get_path_comp_service(self, uuid: str) -> PathCompService | None:
+        return self._path_comp_services.get(uuid)
+
+    def delete_path_comp_service(self, uuid: str) -> bool:
+        """Remove a path-comp-service and the paths it owns."""
+        service = self._path_comp_services.pop(uuid, None)
+        if service is None:
+            return False
+        for ref in service.path:
+            self._paths.pop(ref["path-uuid"], None)
+        return True
+
+    def get_paths(self) -> list[dict[str, Any]]:
+        return list(self._paths.values())
+
+    def get_path(self, uuid: str) -> dict[str, Any] | None:
+        return self._paths.get(uuid)
 
     async def get_or_compute_baseline(
         self, svc: ConnectivityService
     ) -> OpmBaseline | None:
-        """Return a cached OpmBaseline, computing it on first access.
+        """Return a cached OpmBaseline, computing it on first access, and
+        set the service's operational-state from it.
 
         Propagation is serialised through ``_propagation_lock`` so that
         multiple concurrent OPM requests don't flood GNPy with simultaneous
         deep-copy + propagation calls.
         """
+        baseline = await self._baseline_for(svc)
+        self._apply_operational_state(svc, baseline)
+        return baseline
+
+    async def refresh_operational_states(self) -> None:
+        """Bring every service's operational-state up to date.
+
+        Baselines still cached are reused, so this only propagates the ones
+        a change invalidated (a parameter write, a failure, a lightpath
+        added or removed next to it).
+        """
+        for svc in list(self._services.values()):
+            await self.get_or_compute_baseline(svc)
+
+    def _apply_operational_state(
+        self, svc: ConnectivityService, baseline: OpmBaseline | None,
+    ) -> None:
+        """DISABLED while the lightpath cannot carry its format, ENABLED
+        otherwise.
+
+        T-API defines DISABLED as "unable to meet the SLA of the user of the
+        resource". A lightpath cannot when its route is failed, its channel
+        lies outside the band its amplifiers pass, or its GSNR is below the
+        format's required GSNR. The admission margin
+        (``rmsa.qot_margin_db``) is planning headroom, not part of the test:
+        a lightpath that eats into it still works. Without a baseline (no
+        physics backend) the state is left as it is.
+        """
+        if baseline is None:
+            return
+        from twinlight.physics.modulation import get_params
+
+        works = (
+            baseline.status is None  # link-failed, out-of-band: no signal
+            and baseline.gsnr_db >= get_params(svc.modulation_format).req_gsnr_db
+        )
+        svc.operational_state = (
+            OperationalState.ENABLED if works else OperationalState.DISABLED
+        )
+
+    def _note_baseline(self, svc: ConnectivityService, baseline: OpmBaseline) -> None:
+        """Index the elements a baseline was computed over.
+
+        The route holds the topology's UIDs as written; the baseline holds
+        the backend's, which may differ (GNPy's design splits fibers into
+        sub-spans and adds boosters and preamplifiers). Indexing both lets a
+        /config write to any of them invalidate this service.
+        """
+        for uid in (*baseline.fiber_uids, *baseline.edfa_uids):
+            self._element_to_services.setdefault(uid, set()).add(svc.uuid)
+
+    def _fibers_of(self, uuid: str) -> frozenset[str]:
+        """The backend's fibers on the service's allocated route.
+
+        Resolved from the route, not recorded from a propagated baseline: a
+        service whose baseline is a failure sentinel (one restored on a cut
+        route, say) still shares its fibers, and must be re-evaluated when a
+        neighbour on them changes.
+        """
+        fibers = self._service_fibers.get(uuid)
+        if fibers is None:
+            path = self._allocated_path_uids(uuid)
+            if not path:
+                return frozenset()  # no route recorded (yet): nothing to cache
+            fibers = frozenset(self._backend.route_fibers(path))
+            self._service_fibers[uuid] = fibers
+        return fibers
+
+    def _sharing_services(self, uuid: str) -> set[str]:
+        """The other lightpaths that share a fiber with ``uuid``'s, when the
+        backend's baselines depend on the line load; empty otherwise."""
+        if not self._backend.uses_line_load:
+            return set()
+        fibers = self._fibers_of(uuid)
+        return {
+            other for other in self._services
+            if other != uuid and not fibers.isdisjoint(self._fibers_of(other))
+        }
+
+    def _out_of_band(self, uuid: str) -> bool:
+        """True when the service's block is not wholly inside the band every
+        amplifier on its route passes (the test admission applies)."""
+        allocation = self._service_allocation.get(uuid)
+        path = self._allocated_path_uids(uuid)
+        if allocation is None or not path:
+            return False
+        assignable = self._assignable_slots(path)
+        _edges, start, width = allocation
+        return assignable is not None and not assignable[start:start + width].all()
+
+    def _line_load(self, exclude: str | None = None) -> list[LitChannel]:
+        """The admitted lightpaths' channels (all but ``exclude``), for a
+        backend that models the actual line load; empty for one that
+        assumes a fully loaded line."""
+        if not self._backend.uses_line_load:
+            return []
+        from twinlight.physics.modulation import get_params
+
+        load: list[LitChannel] = []
+        for uuid, svc in self._services.items():
+            path = self._allocated_path_uids(uuid)
+            if uuid == exclude or not path or self._out_of_band(uuid):
+                continue  # an out-of-band channel is dropped by the first EDFA
+            centre_hz, _width_hz, power_dbm = self._service_channel(svc, path)
+            load.append(LitChannel(
+                path_uids=tuple(path),
+                centre_frequency_hz=centre_hz,
+                baud_rate_hz=get_params(svc.modulation_format).baud_rate_hz,
+                launch_power_dbm=power_dbm,
+            ))
+        return load
+
+    async def _baseline_for(self, svc: ConnectivityService) -> OpmBaseline | None:
+        """The cached baseline, else one propagated now (see
+        :meth:`get_or_compute_baseline`)."""
         if not self._gnpy_available:
             return None
 
@@ -789,18 +1717,37 @@ class TapiContext:
                 gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
                 latency_ms=0.0, total_fiber_km=0.0, status="link-failed",
             )
+        # A channel outside the band its amplifiers pass is dropped by the
+        # first of them: there is nothing to propagate, and reporting mock
+        # values would hide it. Only a restored snapshot from before the band
+        # was enforced holds one.
+        if self._out_of_band(svc.uuid):
+            from twinlight.physics.gnpy_adapter import OpmBaseline
+
+            return OpmBaseline(
+                gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
+                latency_ms=0.0, total_fiber_km=0.0, status="out-of-band",
+            )
 
         async with self._propagation_lock:
             # Re-check after acquiring lock (another coroutine may have computed it)
             if svc.uuid in self._baseline_cache:
                 return self._baseline_cache[svc.uuid]
 
-            baseline = await self._backend.compute_baseline(
-                path, svc.modulation_format.value,
-            )
+            centre_hz, width_hz, power_dbm = self._service_channel(svc, path)
+            try:
+                baseline = await self._backend.compute_baseline(
+                    path, svc.modulation_format.value,
+                    centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
+                    launch_power_dbm=power_dbm,
+                    line_load=self._line_load(exclude=svc.uuid),
+                )
+            except PropagationError:
+                baseline = None  # OPM falls back to mock data (logged by the backend)
             if baseline is None:
                 return None
             self._baseline_cache[svc.uuid] = baseline
+            self._note_baseline(svc, baseline)
             logger.debug(
                 "Computed baseline for service %s: GSNR=%.2f dB",
                 svc.uuid,
@@ -1172,9 +2119,17 @@ class TapiContext:
                             status="link-failed",
                         )
                     else:
-                        predicted[svc.uuid] = await self._backend.compute_baseline(
-                            path, svc.modulation_format.value,
-                        )
+                        centre_hz, width_hz, power_dbm = self._service_channel(svc, path)
+                        try:
+                            predicted[svc.uuid] = await self._backend.compute_baseline(
+                                path, svc.modulation_format.value,
+                                centre_frequency_hz=centre_hz,
+                                media_channel_width_hz=width_hz,
+                                launch_power_dbm=power_dbm,
+                                line_load=self._line_load(exclude=svc.uuid),
+                            )
+                        except PropagationError:
+                            predicted[svc.uuid] = None
             finally:
                 for uid, attr, token in reversed(tokens):
                     try:
@@ -1383,8 +2338,6 @@ class TapiContext:
         Raises:
             KeyError: ``fiber_uid`` is not a Fiber in the GNPy network.
         """
-        from twinlight.models.common import OperationalState
-
         if not self._backend.is_fiber(fiber_uid):
             raise KeyError(
                 f"{fiber_uid!r} is not a Fiber (link failure only applies "
@@ -1441,6 +2394,11 @@ class TapiContext:
         affected = self.services_for_element(fiber_uid)
         for svc_uuid in affected:
             self.invalidate_baseline(svc_uuid)
+            # Under a load-dependent backend the cut also darkens (or, on
+            # restore, relights) the lightpath downstream of it, where it was
+            # a neighbour of others.
+            for other in self._sharing_services(svc_uuid):
+                self.invalidate_baseline(other)
 
         # Flip TAPI Link operational-state on the underlying link(s).
         for topo_uuid, link_uuid in self._fiber_to_link_refs.get(fiber_uid, []):
@@ -1525,13 +2483,19 @@ class TapiContext:
               float | None           or None for the last hop
 
         Returns None if no path exists.
+
+        The route is the one recorded at admission. Re-deriving it from the
+        SIPs would show the unconstrained shortest route, which is not the
+        one a constrained or second-candidate service actually took.
         """
         endpoints = svc.end_point
         if len(endpoints) < 2:
             return None
         sip_a = endpoints[0].service_interface_point.service_interface_point_uuid
         sip_z = endpoints[1].service_interface_point.service_interface_point_uuid
-        path_uids = self.get_service_path(sip_a, sip_z)
+        path_uids = self._allocated_path_uids(svc.uuid) or self.get_service_path(
+            sip_a, sip_z
+        )
         if not path_uids:
             return None
         return self._path_uids_to_hops(path_uids)
@@ -1547,19 +2511,85 @@ class TapiContext:
 
     async def get_path_baseline(
         self, sip_a: str, sip_z: str, modulation_format: str
-    ) -> OpmBaseline | None:
-        """Compute OpmBaseline for path between two SIPs (no service, no cache).
+    ) -> tuple[OpmBaseline, int, float] | None:
+        """QoT of the best route between two SIPs, without a service or cache.
 
-        Uses same GNPy propagation as get_or_compute_baseline. Returns None if
-        GNPy unavailable or path not found.
+        Evaluated on the channel admission would give a new service of this
+        format on that route — the first free block inside the amplifier band,
+        at the default launch power — so the estimate matches what creating
+        the service would see.
+
+        Returns ``(baseline, central frequency [Hz], launch power [dBm])``, or
+        None when the backend is unavailable or there is no route.
         """
         if not self._backend.available:
             return None
         path = self.get_service_path(sip_a, sip_z)
         if not path:
             return None
+        fmt = ModulationFormat(modulation_format)
+        centre_hz = self._preview_centre_frequency(path, fmt)
+        power_dbm = self.default_launch_power_dbm
         async with self._propagation_lock:
-            return await self._backend.compute_baseline(path, modulation_format)
+            try:
+                baseline = await self._backend.compute_baseline(
+                    path, modulation_format,
+                    centre_frequency_hz=centre_hz,
+                    media_channel_width_hz=self._block_width(fmt) * self._slot_hz(),
+                    launch_power_dbm=power_dbm,
+                    line_load=self._line_load(),
+                )
+            except PropagationError:
+                baseline = None
+        return None if baseline is None else (baseline, centre_hz, power_dbm)
+
+    def _preview_centre_frequency(self, path: list[str], fmt: ModulationFormat) -> int:
+        """Centre of the block admission would assign ``fmt`` on ``path``.
+
+        The first free block inside the amplifier band; when the band is full,
+        the first block inside it regardless of occupancy (the physics is
+        still meaningful, though admission would refuse).
+        """
+        width = self._block_width(fmt)
+        guard = self._config.rmsa.default_guardband_slots
+        assignable = self._assignable_slots(path)
+        edges = path_uids_to_edges(path)
+        start = first_fit(self._spectrum_state, edges, width - guard, guard, assignable)
+        if start is None:
+            start = first_fit(SpectrumState(self._config.spectrum.num_slots),
+                              edges, width - guard, guard, assignable) or 0
+        lower, upper = self._slot_range_hz(start, width)
+        return (lower + upper) // 2
+
+    @property
+    def default_launch_power_dbm(self) -> float:
+        """Launch power of a channel that requests none: the equipment
+        library's SI ``power_dbm``, the per-channel power the line is
+        designed for."""
+        return self._backend.spectral_defaults.power_dbm
+
+    def _service_channel(
+        self, svc: ConnectivityService, path: list[str],
+    ) -> tuple[int, int, float]:
+        """(central frequency [Hz], media channel width [Hz], launch power [dBm])
+        the service runs at.
+
+        Taken from its allocation; a service without one (only possible for
+        state built outside admission) is evaluated where admission would
+        put it.
+        """
+        power_dbm = self._service_launch_power.get(svc.uuid, self.default_launch_power_dbm)
+        allocation = self._service_allocation.get(svc.uuid)
+        if allocation is None:
+            fmt = svc.modulation_format
+            return (
+                self._preview_centre_frequency(path, fmt),
+                self._block_width(fmt) * self._slot_hz(),
+                power_dbm,
+            )
+        _edges, start, width = allocation
+        lower, upper = self._slot_range_hz(start, width)
+        return (lower + upper) // 2, upper - lower, power_dbm
 
     def _build_gnpy_topology_ref_indexes(self) -> None:
         """Build gnpy_uid -> (topo_uuid, node_uuid) and (src,dst) -> (topo_uuid, link_uuid)."""
@@ -1581,113 +2611,87 @@ class TapiContext:
                     g1, g2 = node_to_gnpy.get(n1.node_uuid), node_to_gnpy.get(n2.node_uuid)
                     if g1 and g2:
                         self._gnpy_pair_to_link_ref[(g1, g2)] = (topo.uuid, link.uuid)
+                        self._link_ref_to_pair[(topo.uuid, link.uuid)] = (g1, g2)
 
-    def get_path_candidates(
-        self,
-        sip_a_uuid: str,
-        sip_z_uuid: str,
-        max_candidates: int = 1,
-    ) -> list[tuple[list[tuple[str, str]], list[tuple[str, str]]]]:
-        """Return up to max_candidates path candidates as (link_refs, node_refs).
+    def route_refs(self, path_uids: list[str]) -> dict[str, list[tuple[str, ...]]]:
+        """T-API references for a route given as element UIDs.
 
-        Each link_ref is (topology_uuid, link_uuid); each node_ref is (topology_uuid, node_uuid).
-        Uses GNPy path computation when available, else NetworkX k-shortest paths.
-        Returns empty list if no path exists.
+        Returns ``{"link": [(topology, link)], "node": [(topology, node)],
+        "node-edge-point": [(topology, node, nep)]}``, each in path order.
+        The links and NEPs are what a T-API ``path`` carries; the node list
+        is for the internal compute-path view.
         """
-        src = self.get_gnpy_uid(sip_a_uuid)
-        dst = self.get_gnpy_uid(sip_z_uuid)
-        if not src or not dst:
-            return []
+        terminals = self._terminals(path_uids)
+        nodes = [
+            ref for uid in terminals
+            if (ref := self._gnpy_uid_to_node_ref.get(uid)) is not None
+        ]
+        links: list[tuple[str, ...]] = []
+        neps: list[tuple[str, ...]] = []
+        for hop in itertools.pairwise(terminals):
+            ref = self._gnpy_pair_to_link_ref.get(hop)
+            if ref is None:
+                continue
+            links.append(ref)
+            link = self.get_link(*ref)
+            for nep in link.node_edge_point if link is not None else []:
+                key = (nep.topology_uuid, nep.node_uuid, nep.node_edge_point_uuid)
+                if not neps or neps[-1] != key:
+                    neps.append(key)
+        return {"link": links, "node": list(nodes), "node-edge-point": neps}
 
-        paths_gnpy: list[list[str]] = []
-        if max_candidates == 1:
-            single = self.get_service_path(sip_a_uuid, sip_z_uuid)
-            if single:
-                paths_gnpy.append(single)
-        else:
-            from twinlight.algorithms.routing import k_shortest_paths
+    def physical_context(self) -> PhysicalContext:
+        """The twin's elements as T-API v2.6.0 ``physical-context``.
 
-            paths_gnpy = k_shortest_paths(
-                self._topo_graph.graph,
-                src,
-                dst,
-                min(max_candidates, self._config.rmsa.k_shortest_paths),
-            )
-
-        TERMINAL_TYPES = {"Transceiver", "Roadm"}
-        elements_by_uid = getattr(
-            self._topo_graph._gnpy_topo, "elements_by_uid", {}
+        Fibers become ``physical-span`` entries; every other element a
+        ``device`` holding one ``equipment`` (see ``models/equipment.py``).
+        Elements come from the backend when it holds a network — GNPy's
+        designed network includes the boosters and preamplifiers the design
+        inserted — and from the parsed topology otherwise.
+        """
+        from twinlight.models.common import NameAndValue
+        from twinlight.models.equipment import (
+            ActualEquipment,
+            CommonEquipmentProperties,
+            Device,
+            Equipment,
+            PhysicalSpan,
+            element_uuid,
         )
-        results: list[tuple[list[tuple[str, str]], list[tuple[str, str]]]] = []
 
-        for path_uids in paths_gnpy:
-            node_refs: list[tuple[str, str]] = []
-            link_refs: list[tuple[str, str]] = []
-            terminals: list[str] = []
-
-            for uid in path_uids:
-                el = self._gnpy_uid_map.get(uid) if self._gnpy_uid_map else None
-                if el is not None:
-                    el_type = _kind_name(el)
-                else:
-                    parsed = elements_by_uid.get(uid)
-                    el_type = getattr(parsed, "type", "") if parsed else ""
-                if el_type in TERMINAL_TYPES:
-                    terminals.append(uid)
-                    ref = self._gnpy_uid_to_node_ref.get(uid)
-                    if ref:
-                        node_refs.append(ref)
-
-            for i in range(len(terminals) - 1):
-                key = (terminals[i], terminals[i + 1])
-                ref = self._gnpy_pair_to_link_ref.get(key)
-                if ref:
-                    link_refs.append(ref)
-
-            if node_refs and (len(link_refs) == len(terminals) - 1 or link_refs):
-                results.append((link_refs, node_refs))
-
-        return results
-
-    def get_equipment_list(self) -> list[dict]:
-        """Return equipment inventory from GNPy elements or parsed topology.
-
-        Each item has uuid, name, equipment-type, and optionally length-km (Fiber).
-        State is derived from _gnpy_uid_map when GNPy is loaded, else from topology.
-        """
-        equipment: list[dict] = []
-
-        if self._gnpy_uid_map:
-            for uid, el in self._gnpy_uid_map.items():
-                el_type = _kind_name(el)
-                item: dict = {
-                    "uuid": uid,
-                    "name": [{"value-name": "element-uid", "value": uid}],
-                    "equipment-type": el_type,
-                }
-                if el_type == "Fiber" and hasattr(el, "params") and el.params:
-                    try:
-                        length_m = float(getattr(el.params, "length", 0))
-                        item["length-km"] = round(length_m / 1000.0, 4)
-                    except (TypeError, ValueError):
-                        pass
-                equipment.append(item)
+        if self._gnpy_uid_map and self._gnpy_network is not None:
+            elements = [
+                (uid, _kind_name(el), getattr(el, "type_variety", "") or "")
+                for uid, el in self._gnpy_uid_map.items()
+            ]
         else:
-            for el in self._topo_graph._gnpy_topo.elements:
-                item = {
-                    "uuid": el.uid,
-                    "name": [{"value-name": "element-uid", "value": el.uid}],
-                    "equipment-type": el.type,
-                }
-                if el.type == "Fiber" and el.params:
-                    try:
-                        length_m = float(el.params.get("length", 0))
-                        item["length-km"] = round(length_m / 1000.0, 4)
-                    except (TypeError, ValueError):
-                        pass
-                equipment.append(item)
+            elements = [
+                (el.uid, el.type, el.type_variety or "")
+                for el in self._topo_graph._gnpy_topo.elements
+            ]
 
-        return equipment
+        context = PhysicalContext()
+        for uid, kind, variety in elements:
+            name = [NameAndValue(value_name="element-uid", value=uid)]
+            if kind == "Fiber":
+                context.physical_span.append(
+                    PhysicalSpan(uuid=element_uuid(uid, "span"), name=name)
+                )
+                continue
+            equipment = Equipment(
+                uuid=element_uuid(uid, "equipment"),
+                name=name,
+                actual_equipment=ActualEquipment(
+                    common_equipment_properties=CommonEquipmentProperties(
+                        equipment_type_name=kind,
+                        equipment_type_identifier=variety or None,
+                    ),
+                ),
+            )
+            context.device.append(
+                Device(uuid=element_uuid(uid, "device"), name=name, equipment=[equipment])
+            )
+        return context
 
     # -- Snapshot / restore (checkpoints) ------------------------------------
 
@@ -1703,9 +2707,10 @@ class TapiContext:
                 "path_edges": [list(e) for e in path_edges],
                 "start": start,
                 "block_width": block_width,
+                "launch_power_dbm": self._service_launch_power.get(uuid),
             }
         data = {
-            "version": 1,
+            "version": SNAPSHOT_VERSION,
             "timestamp": datetime.now(UTC).isoformat(),
             # Backend name lets restore reject mismatched snapshots
             # (services admitted under different QoT thresholds would
@@ -1724,21 +2729,38 @@ class TapiContext:
             "failed_links": sorted(self._failed_links),
             "twin_overrides": dict(self._twin_overrides),
         }
-        path.write_text(json.dumps(data, indent=2))
+        # Written to a temporary file and renamed, so a crash mid-write (or a
+        # migration rewriting an old snapshot in place) never leaves a
+        # truncated file behind.
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(path)
         logger.info("Snapshot written: %s (%d services)", path, len(self._services))
         return path
 
-    def restore_from(self, path: Path) -> None:
+    def restore_from(self, path: Path) -> list[str]:
         """Restore connectivity and spectrum state from a snapshot file.
 
         Topology and GNPy network are unchanged (already loaded in __init__).
         Clears existing services and spectrum, then applies the snapshot.
+
+        Version 1 (written before the amplifier band bounded spectrum
+        assignment) is deprecated: it is restored, then the file is replaced
+        by the same state in the current version (when the twin can write
+        it; otherwise a warning says so). A restored service whose
+        block lies outside its amplifier band keeps it, and reports
+        ``out-of-band`` and DISABLED.
+
+        Returns:
+            Warnings about the snapshot, also logged: the deprecated format,
+            and each out-of-band service.
         """
         data = json.loads(path.read_text())
         version = data.get("version")
-        if version != 1:
+        if version not in (1, SNAPSHOT_VERSION) or isinstance(version, bool):
             raise ValueError(
-                f"Unsupported snapshot version: {version!r} (expected 1)"
+                f"Unsupported snapshot version: {version!r} (expected "
+                f"{SNAPSHOT_VERSION}, or the deprecated 1)"
             )
         # Cross-backend restore is rejected: the snapshot's services
         # were admitted under the recorded backend's QoT thresholds,
@@ -1759,8 +2781,11 @@ class TapiContext:
         self._services.clear()
         self._oam_jobs.clear()
         self._service_allocation.clear()
+        self._service_launch_power.clear()
         self._baseline_cache.clear()
         self._element_to_services.clear()
+        self._service_fibers.clear()
+        self._service_edfa_uids.clear()
         # Revert, not just forget: dropping the override records alone would
         # leave the overridden values live on the elements and in the config,
         # and the restored twin would silently keep them.
@@ -1798,6 +2823,12 @@ class TapiContext:
                 int(alloc["start"]),
                 int(alloc["block_width"]),
             )
+            # Snapshots taken before launch power was tracked ran every
+            # channel at the line default.
+            power = alloc.get("launch_power_dbm")
+            self._service_launch_power[uuid] = (
+                float(power) if power is not None else self.default_launch_power_dbm
+            )
             # Rebuild the /config reverse index from path_edges (each edge is
             # (uid_a, uid_b) for consecutive GNPy elements, so we get all UIDs
             # by taking the first endpoint of every edge plus the final tail).
@@ -1821,6 +2852,38 @@ class TapiContext:
             self.apply_twin_overrides(twin_overrides)
         self._bump_revision()
 
+        warnings: list[str] = []
+        thz = 1e-12
+        for uuid, svc in self._services.items():
+            if self._out_of_band(uuid):
+                _edges, start, width = self._service_allocation[uuid]
+                lower, upper = self._slot_range_hz(start, width)
+                warnings.append(
+                    f"service {uuid} occupies {lower * thz:.6f}-{upper * thz:.6f} THz, "
+                    "outside the band the amplifiers on its route pass: its "
+                    "channel would be dropped, so it reports out-of-band and "
+                    "DISABLED. Replace it (PUT) to move it into the band"
+                )
+                svc.operational_state = OperationalState.DISABLED
+        if version == 1:
+            # The state is already restored: a file the twin cannot write (a
+            # read-only mount, say) must not fail the restore, only the
+            # migration, which the next restore of the file retries.
+            try:
+                self.snapshot(path)
+                outcome = f"rewritten in place as version {SNAPSHOT_VERSION}"
+            except OSError as exc:
+                outcome = (
+                    f"could not be rewritten as version {SNAPSHOT_VERSION} "
+                    f"({exc.strerror or exc}), so it stays at version 1"
+                )
+            warnings.insert(0, (
+                f"snapshot {path} used the deprecated format version 1; it was "
+                f"restored and {outcome}"
+            ))
+        for warning in warnings:
+            logger.warning("Restore: %s", warning)
+
         logger.info(
             "Restored from %s: %d services, %d element overrides, "
             "%d failed links",
@@ -1829,6 +2892,7 @@ class TapiContext:
             len(self._element_overrides),
             len(self._failed_links),
         )
+        return warnings
 
     def _get_transceiver_node_refs(self) -> set[tuple[str, str]]:
         """Set of (topology_uuid, node_uuid) for nodes that are Transceivers (have SIPs)."""

@@ -7,11 +7,16 @@ GET  /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import ValidationError
 
+from twinlight.algorithms.path_constraints import ConstraintError
+from twinlight.models.common import Direction, ForwardingDirection, LayerProtocolName
 from twinlight.models.connectivity import (
     MCG_CSEP_SPEC,
+    OTSIA_CSEP_SPEC,
     ConnectivityService,
     UpdateConnectivityServiceRequest,
 )
@@ -20,6 +25,7 @@ from twinlight.state.context import (
     InsufficientSpectrumError,
     NoPathError,
     RmsaError,
+    SpectrumRequestError,
 )
 
 router = APIRouter(prefix="/data", tags=["tapi-connectivity"])
@@ -55,6 +61,114 @@ def _single_service(body: dict) -> dict:
     return raw
 
 
+# What the twin implements of a connectivity-service request, level by level
+# (tapi-connectivity and tapi-photonic-media v2.6.0). A standard leaf the twin
+# does not act on is refused rather than ignored: admitting the service
+# without it would hand the client a lightpath that does not honour what it
+# asked for.
+#
+# _UNIMPLEMENTED: standard leaves refused whenever present.
+# _FIXED: standard leaves the twin supports at one value only (two for the
+#   end-point direction); any other value is refused. Each is reported at its
+#   value, so a GET body sent back as a PUT passes.
+# Leaves listed in neither are acted on (uuid, name, end-point, the routing
+# and topology constraints, administrative-state, the channel leaves, …) or
+# are config false (operational-state, lifecycle-state, connection, csep-role,
+# connection-end-point): state the server reports and ignores on input.
+_UNIMPLEMENTED: dict[str, tuple[str, ...]] = {
+    "connectivity-service": (
+        "layer-protocol-qualifier", "connectivity-constraint", "resilience-constraint",
+        "connectivity-service", "internal-point", "connectivity-protection-service",
+    ),
+    "end-point": (
+        "layer-protocol-qualifier", "role", "protection-role", "capacity",
+        "administrative-state", "peer-fwd-connectivity-service-end-point",
+        "server-connectivity-service-end-point",
+        "protecting-connectivity-service-end-point",
+        "assembled-connectivity-service-end-point",
+        "profile", "sink-profile", "source-profile",
+    ),
+    "layer-protocol-constraint": (
+        "layer-protocol-qualifier", "name",
+        "tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec",
+    ),
+    OTSIA_CSEP_SPEC: (
+        "total-power-warn-threshold-upper", "total-power-warn-threshold-lower",
+    ),
+    "otsi-config": (
+        "name", "application-identifier", "laser-control",
+        "otsi-threshold-power-config", "power-management-config-pac",
+    ),
+}
+# A lightpath runs from its SOURCE end-point to its SINK over one-way fibres,
+# so the service is UNIDIRECTIONAL (TapiContext.add_service). Each entry is
+# (the values the twin supports, the values the YANG type admits): a value
+# outside the type is invalid (422), a valid one the twin does not support is
+# not implemented (501).
+_LAYER_PROTOCOL_NAMES = frozenset(v.value for v in LayerProtocolName)
+_FIXED: dict[str, dict[str, tuple[tuple[object, ...], Callable[[object], bool]]]] = {
+    "connectivity-service": {
+        "layer-protocol-name": (("PHOTONIC_MEDIA",), _LAYER_PROTOCOL_NAMES.__contains__),
+        "direction": (("UNIDIRECTIONAL",), {v.value for v in ForwardingDirection}.__contains__),
+    },
+    "end-point": {
+        "layer-protocol-name": (("PHOTONIC_MEDIA",), _LAYER_PROTOCOL_NAMES.__contains__),
+        "direction": (("SOURCE", "SINK"), {v.value for v in Direction}.__contains__),
+    },
+    "layer-protocol-constraint": {
+        "layer-protocol-name": (("PHOTONIC_MEDIA",), _LAYER_PROTOCOL_NAMES.__contains__),
+    },
+    OTSIA_CSEP_SPEC: {
+        "number-of-otsi": (
+            (1,), lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
+        ),
+    },
+}
+
+
+def _entries(value: object) -> list[dict]:
+    """The object entries of a YANG list in a request (a lone object too)."""
+    items = value if isinstance(value, list) else [value]
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _unimplemented(raw: dict) -> tuple[list[str], list[str]]:
+    """``(unimplemented, invalid)`` leaves of a connectivity-service request.
+
+    Unimplemented: standard leaves the twin does not act on, and valid
+    values the twin does not support (with the values it does). Invalid:
+    values the leaf's YANG type does not admit.
+    """
+    found: list[str] = []
+    invalid: list[str] = []
+
+    def check(level: str, node: dict, at: str) -> None:
+        found.extend(f"{at}{key}" for key in _UNIMPLEMENTED[level] if key in node)
+        for key, (allowed, valid) in _FIXED.get(level, {}).items():
+            if key not in node or node[key] in allowed:
+                continue
+            value = node[key]
+            if not isinstance(value, (str, int)) or not valid(value):
+                invalid.append(f"{at}{key}={value!r}")
+            else:
+                supported = " or ".join(str(v) for v in allowed)
+                found.append(f"{at}{key}={value!r} (supported: {supported})")
+
+    check("connectivity-service", raw, "")
+    for ep in _entries(raw.get("end-point") or []):
+        ep_at = f"end-point[{ep.get('local-id')}]/"
+        check("end-point", ep, ep_at)
+        for lpc in _entries(ep.get("layer-protocol-constraint") or []):
+            lpc_at = f"{ep_at}layer-protocol-constraint[{lpc.get('local-id')}]/"
+            check("layer-protocol-constraint", lpc, lpc_at)
+            for spec in _entries(lpc.get(OTSIA_CSEP_SPEC) or []):
+                spec_at = f"{lpc_at}{OTSIA_CSEP_SPEC}/"
+                check(OTSIA_CSEP_SPEC, spec, spec_at)
+                for cfg in _entries(spec.get("otsi-config") or []):
+                    check("otsi-config", cfg, f"{spec_at}otsi-config[{cfg.get('local-id')}]/")
+    return found, invalid
+
+
 def _parse_service(body: dict) -> ConnectivityService:
     """Unwrap and validate a connectivity-service request body.
 
@@ -62,9 +176,39 @@ def _parse_service(body: dict) -> ConnectivityService:
     annotation (the envelope key and the list-or-object spelling both have
     to be resolved first), so pydantic's error has to be mapped to a 422
     here — otherwise a malformed payload surfaces as a 500.
+
+    Raises:
+        HTTPException: 501 (``operation-not-supported``) when the body
+            carries a standard leaf the twin does not implement, naming
+            each (see ``_UNIMPLEMENTED`` and ``_FIXED``); 422 when it does
+            not validate.
     """
+    raw = _single_service(body)
+    refused, invalid = _unimplemented(raw)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="invalid value: " + "; ".join(invalid),
+        )
+    if refused:
+        hint = (
+            ". A lightpath runs one way: mark the head end-point SOURCE and the "
+            "tail SINK (or leave direction out: the first end-point is the "
+            "head), and create a second service for the reverse direction"
+            if any("direction='BIDIRECTIONAL'" in r for r in refused) else ""
+        )
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                "not implemented by this twin: " + "; ".join(refused)
+                + ". Remove these from the connectivity-service request" + hint
+            ),
+        )
+    # operational-state is config false and the twin's to decide (from the
+    # QoT): a client value is ignored, not stored.
+    raw = {key: value for key, value in raw.items() if key != "operational-state"}
     try:
-        return ConnectivityService.model_validate(_single_service(body))
+        svc = ConnectivityService.model_validate(raw)
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -73,6 +217,17 @@ def _parse_service(body: dict) -> ConnectivityService:
                 for e in exc.errors()
             ),
         ) from exc
+    if len(svc.end_point) != 2:
+        # A lightpath has a head and a tail; a third end-point would be
+        # silently ignored by admission.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "a connectivity-service is a point-to-point lightpath: it needs "
+                f"exactly two end-points, got {len(svc.end_point)}"
+            ),
+        )
+    return svc
 
 
 @router.post(
@@ -84,6 +239,15 @@ async def create_service(body: dict, request: Request) -> dict:
     ctx = request.app.state.context
 
     svc = _parse_service(body)
+    if ctx.get_service(svc.uuid) is not None:
+        # RFC 8040 §4.4.1: POST must not overwrite an existing resource.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"connectivity-service {svc.uuid} already exists; replace it "
+                "with PUT or delete it first"
+            ),
+        )
 
     # Validate that all referenced SIPs exist
     for ep in svc.end_point:
@@ -96,6 +260,11 @@ async def create_service(body: dict, request: Request) -> dict:
 
     try:
         await ctx.add_service(svc)
+    except (ConstraintError, SpectrumRequestError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from e
     except NoPathError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -148,6 +317,9 @@ def _connectivity_service_payload(ctx, svc) -> dict:
 async def get_services(request: Request) -> dict:
     """Return all connectivity services, with assigned spectrum when held."""
     ctx = request.app.state.context
+    # operational-state follows the current QoT: re-evaluate what a change
+    # (a parameter write, a failure, a neighbour) invalidated.
+    await ctx.refresh_operational_states()
     return {
         "tapi-connectivity:connectivity-context": {
             "connectivity-service": [
@@ -166,6 +338,7 @@ async def get_service(uuid: str, request: Request) -> dict:
         raise HTTPException(
             status_code=404, detail=f"Service {uuid} not found"
         )
+    await ctx.get_or_compute_baseline(svc)  # current operational-state
     return {
         "tapi-connectivity:connectivity-service": _connectivity_service_payload(ctx, svc)
     }
@@ -175,9 +348,10 @@ async def get_service(uuid: str, request: Request) -> dict:
 async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     """Replace a connectivity service by UUID (full replacement).
 
-    The existing service is captured before deletion and re-admitted if the
-    replacement cannot be admitted (no path, no spectrum, or insufficient QoT),
-    so a failed replace never silently tears down the service that was there.
+    The replacement goes through admission with the old service's resources
+    released. If it is refused, the old service is put back exactly as it
+    was (``TapiContext.replace_service``): a failed replace never moves or
+    tears down the service that was there.
     """
     ctx = request.app.state.context
     svc = _parse_service(body)
@@ -193,18 +367,20 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"SIP {sip_uuid!r} not found",
             )
-    # Keep a handle on the current allocation so a failed replacement can be
-    # rolled back. delete_service frees exactly the resources add_service needs
-    # to re-admit old_svc, so the rollback cannot itself fail on those grounds.
-    old_svc = ctx.get_service(uuid)
-    ctx.delete_service(uuid)
+    # A refused replacement leaves the old service exactly as it was (same
+    # route and block); with no old service, a PUT creates one.
     try:
-        await ctx.add_service(svc)
-    except RmsaError as e:
-        if old_svc is not None:
-            await ctx.add_service(old_svc)
+        if ctx.get_service(uuid) is None:
+            await ctx.add_service(svc)
+        else:
+            await ctx.replace_service(svc)
+    except (RmsaError, ConstraintError, SpectrumRequestError) as e:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+                if isinstance(e, (ConstraintError, SpectrumRequestError))
+                else status.HTTP_409_CONFLICT
+            ),
             detail=str(e),
         ) from e
     return {
@@ -229,6 +405,7 @@ async def update_service(
         svc.administrative_state = body.administrative_state
     if body.lifecycle_state is not None:
         svc.lifecycle_state = body.lifecycle_state
+    await ctx.get_or_compute_baseline(svc)  # current operational-state
     return {
         "tapi-connectivity:connectivity-service": _connectivity_service_payload(
             ctx, svc
@@ -243,7 +420,9 @@ async def update_service(
 async def delete_service(uuid: str, request: Request) -> None:
     """Delete a connectivity service."""
     ctx = request.app.state.context
-    if not ctx.delete_service(uuid):
+    # The lightpaths that shared a fiber with it lose a neighbour;
+    # remove_service brings their operational-state up to date.
+    if not await ctx.remove_service(uuid):
         raise HTTPException(
             status_code=404, detail=f"Service {uuid} not found"
         )

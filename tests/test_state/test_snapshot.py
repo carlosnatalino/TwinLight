@@ -1,9 +1,9 @@
 """Snapshot round-trip tests (M6).
 
-The tool is pre-release, so the format is a single version (``version: 1``)
-that bundles services + spectrum + the /config plane (element overrides,
-failed links, twin overrides). Older pre-/config snapshots are not
-supported.
+The format (``version: 2``) bundles services + spectrum + the /config plane
+(element overrides, failed links, twin overrides). Version 1, from before
+spectrum was bounded by the amplifier band, is deprecated: it is restored with
+a warning and rewritten as version 2 (``TestDeprecatedSnapshot``).
 
 Covers:
 * a fresh snapshot embeds the /config plane state alongside services
@@ -12,8 +12,7 @@ Covers:
   failed-link set on top of a freshly-loaded GNPy network — i.e.
   experiments are reproducible across a process restart,
 * restoring replaces existing live state rather than merging,
-* any snapshot whose ``version`` is not 1 is rejected with a clear
-  error.
+* any other ``version`` is rejected with a clear error.
 """
 
 from __future__ import annotations
@@ -70,8 +69,8 @@ def _first_fiber_on_path(ctx: TapiContext, sip_a: str, sip_z: str) -> str:
 
 
 class TestSnapshotVersionRejection:
-    @pytest.mark.parametrize("version", [0, 2, None, "v1"])
-    def test_non_v1_rejected(
+    @pytest.mark.parametrize("version", [0, 3, None, "v1", True])
+    def test_unknown_version_rejected(
         self,
         gnpy_context: TapiContext,
         tmp_path: Path,
@@ -106,7 +105,7 @@ class TestSnapshotV2RoundTrip:
         path = tmp_path / "v2.json"
         ctx1.snapshot(path)
         snap_data = json.loads(path.read_text())
-        assert snap_data["version"] == 1
+        assert snap_data["version"] == 2
         assert snap_data["element_overrides"][fiber_uid]["loss_coef"] == 0.27
         assert fiber_uid in snap_data["failed_links"]
         assert snap_data["twin_overrides"]["rmsa.qot_margin_db"] == 2.5
@@ -219,3 +218,138 @@ class TestCrossBackendRestore:
         # rest of the snapshot suite already exercises; just an
         # explicit assertion for clarity).
         gnpy_context.restore_from(path)
+
+
+def _v1_snapshot(ctx: TapiContext, path: Path) -> str:
+    """A snapshot as main wrote it: version 1, no launch power, and the block
+    first-fit gave from slot 0 — outside the band the amplifiers pass."""
+    from tests.conftest import MeshRefs, tapi_end_point
+
+    refs = MeshRefs(ctx)
+    svc = ConnectivityService.model_validate({"end-point": [
+        tapi_end_point("a", refs.sip("trx A")), tapi_end_point("z", refs.sip("trx C"))]})
+    import asyncio
+
+    asyncio.run(ctx.add_service(svc))
+    ctx.snapshot(path)
+    data = json.loads(path.read_text())
+    data["version"] = 1
+    alloc = data["service_allocation"][svc.uuid]
+    del alloc["launch_power_dbm"]
+    start, width = alloc["start"], alloc["block_width"]
+    for slots in data["spectrum"]["slots"].values():
+        if any(slots[start:start + width]):
+            slots[start:start + width] = [0] * width
+            slots[0:width] = [1] * width
+    alloc["start"] = 0
+    for ep in data["services"][0]["end-point"]:
+        cfg = ep["layer-protocol-constraint"][0][
+            "tapi-photonic-media:otsia-connectivity-service-end-point-spec"]["otsi-config"][0]
+        cfg.pop("central-frequency", None)
+        cfg.pop("channel-output-power", None)
+    path.write_text(json.dumps(data))
+    return svc.uuid
+
+
+class TestDeprecatedSnapshot:
+    def test_restored_with_warnings_and_rewritten(self, mesh_context: TapiContext, tmp_path) -> None:
+        import asyncio
+
+        from twinlight.models.common import OperationalState
+
+        ctx = mesh_context
+        path = tmp_path / "checkpoint.json"
+        uuid = _v1_snapshot(ctx, path)
+
+        warnings = ctx.restore_from(path)
+        assert "deprecated format version 1" in warnings[0]
+        assert any(uuid in w and "out-of-band" in w for w in warnings[1:])
+        # The old file is gone, replaced by the same state in version 2.
+        rewritten = json.loads(path.read_text())
+        assert rewritten["version"] == 2
+        assert rewritten["service_allocation"][uuid]["start"] == 0
+        assert rewritten["service_allocation"][uuid]["launch_power_dbm"] == (
+            ctx.default_launch_power_dbm)
+        assert not list(tmp_path.glob("*.tmp"))
+
+        svc = ctx.get_service(uuid)
+        baseline = asyncio.run(ctx.get_or_compute_baseline(svc))
+        assert baseline is not None and baseline.status == "out-of-band"
+        assert svc.operational_state == OperationalState.DISABLED
+        # Not a neighbour of anything: the first amplifier drops it.
+        assert ctx._line_load() == []
+
+        # Restoring the rewritten file warns only about the band.
+        again = ctx.restore_from(path)
+        assert len(again) == 1 and "out-of-band" in again[0]
+
+    def test_a_read_only_file_is_restored_not_rewritten(self, tmp_path) -> None:
+        """A checkpoint on a read-only mount: the restore succeeds, the
+        migration is skipped with a warning, the file is left as it was."""
+        from fastapi.testclient import TestClient
+
+        from tests.conftest import _mesh_config
+        from twinlight.app import create_app
+
+        client = TestClient(create_app(_mesh_config(tmp_path, "egn")))
+        ctx = client.app.state.context
+        mount = tmp_path / "ro"
+        mount.mkdir()
+        path = mount / "checkpoint.json"
+        uuid = _v1_snapshot(ctx, path)
+        original = path.read_text()
+        mount.chmod(0o555)
+        try:
+            resp = client.post("/admin/restore", json={"path": str(path)})
+        finally:
+            mount.chmod(0o755)
+        assert resp.status_code == 200
+        warning = resp.json()["warnings"][0]
+        assert "could not be rewritten" in warning and "stays at version 1" in warning
+        assert path.read_text() == original
+        assert ctx.get_service(uuid) is not None
+
+    def test_an_unreadable_file_is_a_400(self, tmp_path) -> None:
+        from fastapi.testclient import TestClient
+
+        from tests.conftest import _mesh_config
+        from twinlight.app import create_app
+
+        client = TestClient(create_app(_mesh_config(tmp_path, "egn")))
+        path = tmp_path / "secret.json"
+        path.write_text("{}")
+        path.chmod(0o000)
+        try:
+            resp = client.post("/admin/restore", json={"path": str(path)})
+        finally:
+            path.chmod(0o644)
+        assert resp.status_code == 400
+        assert "Cannot read snapshot" in resp.text
+
+    def test_the_api_reports_it(self, tmp_path) -> None:
+        from fastapi.testclient import TestClient
+
+        from tests.conftest import _mesh_config
+        from twinlight.app import create_app
+
+        client = TestClient(create_app(_mesh_config(tmp_path, "egn")))
+        ctx = client.app.state.context
+        path = tmp_path / "old.json"
+        uuid = _v1_snapshot(ctx, path)
+
+        resp = client.post("/admin/restore", json={"path": str(path)})
+        assert resp.status_code == 200
+        assert len(resp.json()["warnings"]) == 2
+        opm = client.get(f"/internal/opm/{uuid}").json()
+        assert opm["status"] == "out-of-band"
+        assert opm["measurements"]["gsnr-db"] is None
+        service = client.get(
+            f"/data/tapi-connectivity:connectivity-context/connectivity-service={uuid}",
+        ).json()["tapi-connectivity:connectivity-service"]
+        assert service["operational-state"] == "DISABLED"
+        assert f'twinlight_service_enabled{{service_name="{uuid[:8]}",service_uuid="{uuid}"}} 0.0' in (
+            client.get("/metrics").text)
+        tree = client.get(f"/transparent/data/ServiceList/{uuid}").json()[
+            "twinlight-transparent:data"]["ServiceList"][uuid]
+        assert tree["operational_state"] == "DISABLED"
+        assert tree["qot"]["status"] == "out-of-band"
