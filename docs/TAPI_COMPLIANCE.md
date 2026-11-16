@@ -76,7 +76,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 | **Subscription (§6.3.4)** | ✓ | Exactly the listed subset; any other field is `INVALID_ARGUMENT` naming it |
 | **Records (§6.3.5)** | ✓ | `SubscribeResponse` update with path `oam-job[uuid=…]` and `proto_bytes` = `tapi.MeasurementDetails` |
 | **Normalized measurement types (§6.3.8)** | ✓ | `CHROM_DISP`, `POL_MODE_DISP`, `FEC_PRE_FEC_BER`, `FEC_POST_FEC_BER`; the rest native with units |
-| **Value qualifiers (ST-6.3)** | ✓ | `MISSING` for a link-failed or unsampleable service, `INVALID` for a non-finite value |
+| **Value qualifiers (ST-6.3)** | ✓ | `MISSING` for a service with no signal (link-failed or out-of-band) or one that could not be sampled, `INVALID` for a non-finite value |
 | **Resume (§6.3.4 history, ST-6.4)** | ✓ | `range.start` replays from the log; see §2.5 for the edge cases |
 | **Authentication (ST-0.1)** | ◐ | Optional pre-shared bearer tokens, required on every gNMI call and REST request alike — see §2.5 |
 
@@ -202,7 +202,7 @@ or is not followed, with the reason for each.
 | Measure types | Normalized type where one exists, native otherwise (§6.3.8) | `CHROM_DISP`, `POL_MODE_DISP` (GNPy's accumulated PMD, i.e. mean DGD), `FEC_PRE_FEC_BER`, `FEC_POST_FEC_BER` (the hard-decision code model); GSNR, OSNR (two references), Q, GMI, NGMI and the threshold-model post-FEC BER native, named by their OPM keys, with units | `NormalizedMeasurementType` has no member for the native ones. The threshold model is a planning convention, so the code-based model is the one presented as the normalized post-FEC BER |
 | Units of normalized types | "Should not be stated" where the type defines them | Omitted; the values are in ps/nm (CD) and ps (PMD), the twin's OPM units | The proto defines no units for these types; the documented choice is the common one |
 | Resource reference | `native-resource-id` mandatory "under most circumstances"; `abstract-resource-ref` optional | `native-resource-id` = GNPy UID of the receiving transceiver; no `abstract-resource-ref` | The oam-job path already identifies the measured service end-point |
-| Link failure | ST-6.3: `MISSING` when a value should have been provided but was not | Every measure `MISSING`, value and units omitted — BERs included, although `/internal/opm` shows them as 1.0 | A receiver with no signal measures nothing; 1.0 is a charting convention of the REST view |
+| No signal (link failure, out-of-band channel) | ST-6.3: `MISSING` when a value should have been provided but was not | Every measure `MISSING`, value and units omitted — BERs included, although `/internal/opm` shows them as 1.0 — whenever the OPM sample carries a `status`: `link-failed` (a failed fiber on the path) or `out-of-band` (a channel the amplifiers drop, e.g. restored from a version-1 snapshot) | A receiver with no signal measures nothing; 1.0 is a charting convention of the REST view |
 | No physics baseline | — | When the backend cannot compute a baseline, the OPM falls back to a deterministic sinusoidal mock; the stream reports those values as `OK`, exactly as `/internal/opm` does | Values must equal `/internal/opm`; `SUSPECT` is reserved for "solutions aware of the valid range" |
 | `sample-qualifier` (FIRST/FINAL/DELAYED) | Optional | Never set | Optional; no record is delayed |
 

@@ -695,8 +695,9 @@ measured three ways:
 | `gmi-bits-per-symbol` | Generalized mutual information per polarization, bit per 2D symbol, in [0, bits per symbol] | — |
 | `ngmi` | GMI ÷ bits per symbol, in [0, 1] — what a soft-decision FEC threshold is stated in | — |
 
-A service on a failed link reports every BER as 1.0 and the other fields as
-`null`. See [PHYSICS.md § 3](PHYSICS.md#3-from-gsnr-to-ber-q-post-fec-ber-and-gmi)
+A service with no signal — its path crosses a failed fiber (`"status":
+"link-failed"`) or its channel lies outside the amplifier band (`"status":
+"out-of-band"`) — reports every BER as 1.0 and the other fields as `null`. See [PHYSICS.md § 3](PHYSICS.md#3-from-gsnr-to-ber-q-post-fec-ber-and-gmi)
 for the formulas and their limits.
 
 Every read is evaluated at the current wall-clock time: poll it twice a couple of
@@ -1002,9 +1003,11 @@ defines them; the parenthesised units are those of the twin's OPM. Native
 types are the OPM keys of `GET /internal/opm`, so a record maps back to the
 REST view one-to-one.
 
-A service whose path crosses a failed fiber reports every measure with
-`value-qualifier: MISSING` and no value or units — including the BERs that the
-REST view shows as 1.0 for charting. A sample the twin could not compute is
+A service with no signal — its path crosses a failed fiber (`link-failed` in
+`GET /internal/opm`) or its channel lies outside the amplifier band
+(`out-of-band`) — reports every measure with `value-qualifier: MISSING` and no
+value or units, including the BERs that the REST view shows as 1.0 for
+charting. A sample the twin could not compute is
 reported the same way; a non-finite value is `INVALID`.
 
 ### Subscribing
@@ -1162,7 +1165,7 @@ are gone:
 | `GnmiConsumer(target)` | `TapiStreamClient(target, token)`, with the target from `discover_stream()` |
 | `streaming.auth_token` (gNMI only) | The twin-wide `TWINLIGHT_API_TOKENS`, required on REST and gNMI alike |
 | `twinlight-client --gnmi-target` required | Optional; the address comes from the stream-context |
-| Link-failed BER reported as 1.0 | Every measure `MISSING` (`None` once decoded) |
+| Link-failed BER reported as 1.0 | Every measure `MISSING` (`None` once decoded), for a link-failed or out-of-band service alike |
 
 ## Known gaps
 

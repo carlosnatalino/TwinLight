@@ -109,7 +109,8 @@ def _value_line(count: int, when: str, measurements: dict[str, Any]) -> str:
     cols = [f"{f'#{count:03d}':>{_NUM_W}}", f"{when:>{_TIME_W}}"]
     for key, _, kind in _METRICS:
         value = measurements.get(key)
-        # None is a MISSING measure (a link-failed service reports no values).
+        # None is a MISSING measure (a service with no signal, link-failed
+        # or out-of-band, reports no values).
         if value is not None:
             cell = f"{value:.2e}" if kind == "e" else f"{value:.3f}"
         else:

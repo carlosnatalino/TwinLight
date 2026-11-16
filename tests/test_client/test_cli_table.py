@@ -1,5 +1,7 @@
 """Tests for the twinlight-client OPM table rows."""
 
+import pytest
+
 from twinlight.api.internal import _mock_measurements, _no_signal_measurements
 from twinlight_client.cli import _METRICS, _header_line, _value_line
 
@@ -14,13 +16,14 @@ def test_row_aligns_under_the_header():
     assert len(row) == len(_header_line())
 
 
-def test_link_failed_record_prints_dashes_not_a_crash():
-    """A link-failed service streams every measure as MISSING (decoded to None)."""
+@pytest.mark.parametrize("status", ["link-failed", "out-of-band"])
+def test_no_signal_record_prints_dashes_not_a_crash(status):
+    """A service with no signal streams every measure as MISSING (decoded to None)."""
     from twinlight.streaming.proto import tapi_streaming_performance_pb2 as tapi
     from twinlight.streaming.records import decode_measurements, measurement_details
 
     details = measurement_details(
-        {"service-uuid": "svc-1", "timestamp": 0.0, "status": "link-failed",
+        {"service-uuid": "svc-1", "timestamp": 0.0, "status": status,
          "measurements": _no_signal_measurements()},
         native_resource_id="trx", sample_interval_ns=1,
     )

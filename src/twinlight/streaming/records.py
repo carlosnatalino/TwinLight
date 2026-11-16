@@ -93,13 +93,15 @@ def measurement_details(
 ) -> tapi.MeasurementDetails:
     """Encode one OPM sample (an entry of ``GET /internal/opm``).
 
-    A ``link-failed`` sample reports every measure as MISSING: the receiver
-    has no signal, so the stand-in numbers the REST view shows for charts
+    A sample with a ``status`` reports every measure as MISSING. The twin
+    sets one only when the receiver has no signal (``link-failed``: the path
+    crosses a failed fiber; ``out-of-band``: the amplifiers drop the
+    channel), so the stand-in numbers the REST view shows for charts
     (BER 1.0) are not measurements. A sample without measurements (the
     sampler could not read the service) is MISSING throughout as well.
     """
     measurements = sample.get("measurements") or {}
-    missing = sample.get("status") == "link-failed" or not measurements
+    missing = sample.get("status") is not None or not measurements
     return tapi.MeasurementDetails(
         # TR-548 §6.3.5 example: sampled time in milliseconds since the epoch
         # ("1693240037000 // 2023-08-28 16:27:17.000"), interval in ns.

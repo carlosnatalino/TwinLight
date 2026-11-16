@@ -195,3 +195,28 @@ def test_records_after_waits_for_the_next_tick(app: TestClient) -> None:
     records = asyncio.run(scenario())
     assert len(records) == 2
     assert {r.logged_ns for r in records} == {stream.last_logged_ns}
+
+
+def test_out_of_band_service_reports_missing(tmp_path) -> None:
+    """A channel its amplifiers drop has no signal either: MISSING, like a
+    failed link. A restored deprecated snapshot is how one arises."""
+    from tests.conftest import _mesh_config
+    from tests.test_state.test_snapshot import _v1_snapshot
+    from twinlight.app import create_app
+
+    client = TestClient(create_app(_mesh_config(tmp_path, "egn")))
+    ctx = client.app.state.context
+    path = tmp_path / "old.json"
+    svc_uuid = _v1_snapshot(ctx, path)
+    assert client.post("/admin/restore", json={"path": str(path)}).status_code == 200
+    assert client.get(f"/internal/opm/{svc_uuid}").json()["status"] == "out-of-band"
+    assert ctx.oam_job_for_service(svc_uuid) is not None
+
+    stream = _stream(client)
+    asyncio.run(stream.tick())
+    [record] = stream.log.replay(0)
+    job_uuid, details = _decode(record)
+    assert job_uuid == oam_job_uuid(svc_uuid)
+    assert {qm.qualified_measured_value.value_qualifier
+            for qm in details.qualified_measurement} == {tapi.MISSING}
+    assert set(decode_measurements(details).values()) == {None}

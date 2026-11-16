@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from twinlight.api.internal import _mock_measurements, _no_signal_measurements
 from twinlight.streaming.proto import gnmi_pb2
 from twinlight.streaming.proto import tapi_streaming_performance_pb2 as tapi
@@ -79,9 +81,11 @@ def test_round_trip_through_the_wire() -> None:
     assert decoded == sample["measurements"]
 
 
-def test_link_failed_is_missing_without_value_or_units() -> None:
+@pytest.mark.parametrize("status", ["link-failed", "out-of-band"])
+def test_no_signal_is_missing_without_value_or_units(status: str) -> None:
+    """Every status the twin reports means the receiver has no signal."""
     details = _encode({
-        "service-uuid": "svc", "timestamp": T, "status": "link-failed",
+        "service-uuid": "svc", "timestamp": T, "status": status,
         "measurements": _no_signal_measurements(),
     })
     for qm in details.qualified_measurement:
