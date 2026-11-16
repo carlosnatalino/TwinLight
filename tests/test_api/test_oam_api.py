@@ -7,6 +7,7 @@ import re
 import uuid as uuid_lib
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import tapi_end_point
@@ -105,6 +106,34 @@ class TestLifecycle:
         assert job["connectivity-service-end-point"][
             "connectivity-service-end-point-local-id"
         ] == "b"
+
+    def test_refused_replace_keeps_the_job(
+        self, app: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A PUT whose admission fails part-way puts the service back, and its
+        job with it: same creation-time, same receiving end-point."""
+        from twinlight.state.context import InsufficientQoTError
+
+        sip_a, sip_z = _sips(app)[:2]
+        svc_uuid = create_service(app, sip_a, sip_z)
+        [before] = _jobs(app)
+        ctx = app.app.state.context
+        admit = ctx._add_service
+
+        async def admitted_then_refused(svc):  # type: ignore[no-untyped-def]
+            await admit(svc)  # the replacement and its job are in place ...
+            raise InsufficientQoTError("simulated: refused after admission")
+
+        monkeypatch.setattr(ctx, "_add_service", admitted_then_refused)
+        resp = app.put(f"{_CONN}={svc_uuid}", json={
+            "tapi-connectivity:connectivity-service": {
+                "uuid": svc_uuid,
+                "end-point": [tapi_end_point("a", sip_a), tapi_end_point("b", sip_z)],
+            }
+        })
+        assert resp.status_code == 409, resp.text
+        assert ctx.get_service(svc_uuid) is not None
+        assert _jobs(app) == [before]
 
 
 class TestReadOnly:

@@ -200,10 +200,11 @@ in docs/TAPI_COMPLIANCE.md § 2.5). Three rules keep it honest:
   reading the instant from `internal.wall_clock()`. Never compute OPM for the
   stream separately; a new OPM key needs a row in `streaming/records.py:MEASURES`
   (a test fails otherwise).
-- **OAM jobs follow services.** `TapiContext.add_service` / `delete_service` /
+- **OAM jobs follow services.** `TapiContext._add_service` / `delete_service` /
   `restore_from` create, remove and restore each service's `tapi-oam` job
-  (name-based UUID). A new path that admits or drops services must go through
-  them, or records lose their anchor.
+  (name-based UUID); `replace_service` detaches the job with the service and
+  puts both back if re-admission fails. A new path that admits or drops
+  services must go through them, or records lose their anchor.
 - **The log is behind `RecordLog`.** The gNMI servicer only appends, replays
   and trims through that interface; keep it that way so a shared backend can
   replace the in-process log.

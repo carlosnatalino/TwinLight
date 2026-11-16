@@ -192,6 +192,7 @@ class _DetachedService:
     indexed_uids: frozenset[str]
     fibers: frozenset[str] | None
     edfa_uids: list[str]
+    oam_job: OamJob | None
 
 
 class TapiContext:
@@ -494,6 +495,7 @@ class TapiContext:
             ),
             fibers=self._service_fibers.get(uuid),
             edfa_uids=self._service_edfa_uids.get(uuid, []),
+            oam_job=self._oam_jobs.get(oam_job_uuid(uuid)),
         )
         for other in self._sharing_services(uuid):
             self.invalidate_baseline(other)
@@ -506,6 +508,7 @@ class TapiContext:
         self._baseline_cache.pop(uuid, None)
         self._service_fibers.pop(uuid, None)
         self._service_edfa_uids.pop(uuid, None)
+        self._oam_jobs.pop(oam_job_uuid(uuid), None)
         for uid in detached.indexed_uids:
             self._element_to_services[uid].discard(uuid)
         return detached
@@ -529,6 +532,8 @@ class TapiContext:
         for uid in detached.indexed_uids:
             self._element_to_services.setdefault(uid, set()).add(uuid)
         self._services[uuid] = detached.service
+        if detached.oam_job is not None:
+            self._oam_jobs[detached.oam_job.uuid] = detached.oam_job
         # Its neighbours lost and regained it: their baselines were dropped
         # on detach and are recomputed on the next read.
         for other in self._sharing_services(uuid):
@@ -924,8 +929,9 @@ class TapiContext:
     def receiving_end_point(svc: ConnectivityService) -> Any:
         """The end-point at which the twin's OPM is measured.
 
-        Propagation always runs from end-point[0] to end-point[1] (see
-        add_service), so the OPM describes the signal arriving at
+        Admission routes from end-point[0] to end-point[1] and the baseline
+        propagates along that recorded route (see :meth:`_add_service` and
+        :meth:`get_or_compute_baseline`), so the OPM describes the signal arriving at
         end-point[1] whatever ``direction`` the request declared.
         """
         return svc.end_point[1]

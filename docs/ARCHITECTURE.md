@@ -270,7 +270,9 @@ detaches the old service, admits the new one, and on refusal reattaches the
 old one unchanged.
 
 Admission also creates the service's `tapi-oam` oam-job, the anchor of its
-records on the measurement stream. Deletion reverses all of this: slots are released, `invalidate_baseline(uuid)` drops the cached
+records on the measurement stream; a replacement detaches the job with the old
+service and reattaches it if the new one is refused. Deletion reverses all of
+this: slots are released, `invalidate_baseline(uuid)` drops the cached
 propagation, the EDFA tracker records the drop event, the oam-job is removed,
 and under the EGN backend the lightpaths that shared a fiber with it are
 invalidated too; T-API reads re-evaluate them (`refresh_operational_states`).
