@@ -1,0 +1,534 @@
+{
+ "network_name": "TwinLight test mesh",
+ "elements": [
+  {
+   "uid": "roadm A",
+   "type": "Roadm",
+   "params": {
+    "target_pch_out_db": -20
+   },
+   "metadata": {
+    "location": {
+     "city": "A",
+     "region": "Test",
+     "latitude": 57.7,
+     "longitude": 11.9
+    }
+   }
+  },
+  {
+   "uid": "roadm B",
+   "type": "Roadm",
+   "params": {
+    "target_pch_out_db": -20
+   },
+   "metadata": {
+    "location": {
+     "city": "B",
+     "region": "Test",
+     "latitude": 58.4,
+     "longitude": 13.0
+    }
+   }
+  },
+  {
+   "uid": "roadm C",
+   "type": "Roadm",
+   "params": {
+    "target_pch_out_db": -20
+   },
+   "metadata": {
+    "location": {
+     "city": "C",
+     "region": "Test",
+     "latitude": 59.3,
+     "longitude": 18.1
+    }
+   }
+  },
+  {
+   "uid": "roadm D",
+   "type": "Roadm",
+   "params": {
+    "target_pch_out_db": -20
+   },
+   "metadata": {
+    "location": {
+     "city": "D",
+     "region": "Test",
+     "latitude": 57.8,
+     "longitude": 14.2
+    }
+   }
+  },
+  {
+   "uid": "roadm E",
+   "type": "Roadm",
+   "params": {
+    "target_pch_out_db": -20
+   },
+   "metadata": {
+    "location": {
+     "city": "E",
+     "region": "Test",
+     "latitude": 56.9,
+     "longitude": 16.4
+    }
+   }
+  },
+  {
+   "uid": "trx A",
+   "type": "Transceiver",
+   "metadata": {
+    "location": {
+     "city": "A",
+     "region": "Test",
+     "latitude": 57.7,
+     "longitude": 11.9
+    }
+   }
+  },
+  {
+   "uid": "trx B",
+   "type": "Transceiver",
+   "metadata": {
+    "location": {
+     "city": "B",
+     "region": "Test",
+     "latitude": 58.4,
+     "longitude": 13.0
+    }
+   }
+  },
+  {
+   "uid": "trx C",
+   "type": "Transceiver",
+   "metadata": {
+    "location": {
+     "city": "C",
+     "region": "Test",
+     "latitude": 59.3,
+     "longitude": 18.1
+    }
+   }
+  },
+  {
+   "uid": "fiber (A → B)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 80.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "A",
+     "region": "Test",
+     "latitude": 57.7,
+     "longitude": 11.9
+    }
+   }
+  },
+  {
+   "uid": "fiber (B → A)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 80.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "B",
+     "region": "Test",
+     "latitude": 58.4,
+     "longitude": 13.0
+    }
+   }
+  },
+  {
+   "uid": "fiber (B → C)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 80.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "B",
+     "region": "Test",
+     "latitude": 58.4,
+     "longitude": 13.0
+    }
+   }
+  },
+  {
+   "uid": "fiber (C → B)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 80.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "C",
+     "region": "Test",
+     "latitude": 59.3,
+     "longitude": 18.1
+    }
+   }
+  },
+  {
+   "uid": "fiber (A → D)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 100.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "A",
+     "region": "Test",
+     "latitude": 57.7,
+     "longitude": 11.9
+    }
+   }
+  },
+  {
+   "uid": "fiber (D → A)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 100.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "D",
+     "region": "Test",
+     "latitude": 57.8,
+     "longitude": 14.2
+    }
+   }
+  },
+  {
+   "uid": "fiber (D → C)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 100.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "D",
+     "region": "Test",
+     "latitude": 57.8,
+     "longitude": 14.2
+    }
+   }
+  },
+  {
+   "uid": "fiber (C → D)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 100.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "C",
+     "region": "Test",
+     "latitude": 59.3,
+     "longitude": 18.1
+    }
+   }
+  },
+  {
+   "uid": "fiber (B → D)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 60.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "B",
+     "region": "Test",
+     "latitude": 58.4,
+     "longitude": 13.0
+    }
+   }
+  },
+  {
+   "uid": "fiber (D → B)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 60.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "D",
+     "region": "Test",
+     "latitude": 57.8,
+     "longitude": 14.2
+    }
+   }
+  },
+  {
+   "uid": "fiber (A → E)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 110.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "A",
+     "region": "Test",
+     "latitude": 57.7,
+     "longitude": 11.9
+    }
+   }
+  },
+  {
+   "uid": "fiber (E → A)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 110.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "E",
+     "region": "Test",
+     "latitude": 56.9,
+     "longitude": 16.4
+    }
+   }
+  },
+  {
+   "uid": "fiber (E → C)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 140.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "E",
+     "region": "Test",
+     "latitude": 56.9,
+     "longitude": 16.4
+    }
+   }
+  },
+  {
+   "uid": "fiber (C → E)",
+   "type": "Fiber",
+   "type_variety": "SSMF",
+   "params": {
+    "length": 140.0,
+    "loss_coef": 0.2,
+    "length_units": "km",
+    "con_in": 0.5,
+    "con_out": 0.5
+   },
+   "metadata": {
+    "location": {
+     "city": "C",
+     "region": "Test",
+     "latitude": 59.3,
+     "longitude": 18.1
+    }
+   }
+  }
+ ],
+ "connections": [
+  {
+   "from_node": "trx A",
+   "to_node": "roadm A"
+  },
+  {
+   "from_node": "roadm A",
+   "to_node": "trx A"
+  },
+  {
+   "from_node": "trx B",
+   "to_node": "roadm B"
+  },
+  {
+   "from_node": "roadm B",
+   "to_node": "trx B"
+  },
+  {
+   "from_node": "trx C",
+   "to_node": "roadm C"
+  },
+  {
+   "from_node": "roadm C",
+   "to_node": "trx C"
+  },
+  {
+   "from_node": "roadm A",
+   "to_node": "fiber (A → B)"
+  },
+  {
+   "from_node": "fiber (A → B)",
+   "to_node": "roadm B"
+  },
+  {
+   "from_node": "roadm B",
+   "to_node": "fiber (B → A)"
+  },
+  {
+   "from_node": "fiber (B → A)",
+   "to_node": "roadm A"
+  },
+  {
+   "from_node": "roadm B",
+   "to_node": "fiber (B → C)"
+  },
+  {
+   "from_node": "fiber (B → C)",
+   "to_node": "roadm C"
+  },
+  {
+   "from_node": "roadm C",
+   "to_node": "fiber (C → B)"
+  },
+  {
+   "from_node": "fiber (C → B)",
+   "to_node": "roadm B"
+  },
+  {
+   "from_node": "roadm A",
+   "to_node": "fiber (A → D)"
+  },
+  {
+   "from_node": "fiber (A → D)",
+   "to_node": "roadm D"
+  },
+  {
+   "from_node": "roadm D",
+   "to_node": "fiber (D → A)"
+  },
+  {
+   "from_node": "fiber (D → A)",
+   "to_node": "roadm A"
+  },
+  {
+   "from_node": "roadm D",
+   "to_node": "fiber (D → C)"
+  },
+  {
+   "from_node": "fiber (D → C)",
+   "to_node": "roadm C"
+  },
+  {
+   "from_node": "roadm C",
+   "to_node": "fiber (C → D)"
+  },
+  {
+   "from_node": "fiber (C → D)",
+   "to_node": "roadm D"
+  },
+  {
+   "from_node": "roadm B",
+   "to_node": "fiber (B → D)"
+  },
+  {
+   "from_node": "fiber (B → D)",
+   "to_node": "roadm D"
+  },
+  {
+   "from_node": "roadm D",
+   "to_node": "fiber (D → B)"
+  },
+  {
+   "from_node": "fiber (D → B)",
+   "to_node": "roadm B"
+  },
+  {
+   "from_node": "roadm A",
+   "to_node": "fiber (A → E)"
+  },
+  {
+   "from_node": "fiber (A → E)",
+   "to_node": "roadm E"
+  },
+  {
+   "from_node": "roadm E",
+   "to_node": "fiber (E → A)"
+  },
+  {
+   "from_node": "fiber (E → A)",
+   "to_node": "roadm A"
+  },
+  {
+   "from_node": "roadm E",
+   "to_node": "fiber (E → C)"
+  },
+  {
+   "from_node": "fiber (E → C)",
+   "to_node": "roadm C"
+  },
+  {
+   "from_node": "roadm C",
+   "to_node": "fiber (C → E)"
+  },
+  {
+   "from_node": "fiber (C → E)",
+   "to_node": "roadm E"
+  }
+ ]
+}

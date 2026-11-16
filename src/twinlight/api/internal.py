@@ -12,8 +12,11 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from twinlight.algorithms.path_constraints import ConstraintError, parse_constraints
 from twinlight.config import FecConfig
+from twinlight.state.context import NoPathError
 
 # ---------------------------------------------------------------------------
 # Service info endpoint
@@ -51,13 +54,15 @@ def _mock_path_factor(service_uuid: str) -> float:
     return 0.5 + (int(digest[:8], 16) % 1000) / 1000.0
 
 
-def _link_failed_measurements() -> dict[str, Any]:
-    """OPM payload for a service whose path crosses a failed fiber.
+def _no_signal_measurements() -> dict[str, Any]:
+    """OPM payload for a service with no signal to measure: its path crosses
+    a failed fiber, or its channel lies outside the amplifier band.
 
     Returns the standard metric dict with ``None`` for every numeric value
     plus a worst-case 1.0 for each BER, pre- and post-FEC, so UI charts can
     render a clear "service down" line rather than zeros that look like a
-    real measurement. The caller adds a top-level ``"status": "link-failed"``.
+    real measurement. The caller adds a top-level ``"status"`` (the
+    baseline's: ``link-failed`` or ``out-of-band``).
     """
     return {
         "osnr-db": None,
@@ -145,9 +150,9 @@ async def get_all_opm(request: Request) -> dict:
     for svc in ctx.get_services():
         baseline = await ctx.get_or_compute_baseline(svc)
         entry: dict[str, Any] = {"service-uuid": svc.uuid, "timestamp": t}
-        if baseline is not None and baseline.status == "link-failed":
-            entry["status"] = "link-failed"
-            entry["measurements"] = _link_failed_measurements()
+        if baseline is not None and baseline.status is not None:
+            entry["status"] = baseline.status
+            entry["measurements"] = _no_signal_measurements()
         elif baseline is None:
             entry["measurements"] = _mock_measurements(
                 svc.uuid, t, svc.modulation_format.value, cfg.fec
@@ -188,9 +193,9 @@ async def get_service_opm(service_uuid: str, request: Request) -> dict:
         "service-uuid": service_uuid,
         "timestamp": t,
     }
-    if baseline is not None and baseline.status == "link-failed":
-        response["status"] = "link-failed"
-        response["measurements"] = _link_failed_measurements()
+    if baseline is not None and baseline.status is not None:
+        response["status"] = baseline.status
+        response["measurements"] = _no_signal_measurements()
     elif baseline is None:
         response["measurements"] = _mock_measurements(
             service_uuid, t, svc.modulation_format.value, cfg.fec
@@ -240,6 +245,10 @@ async def get_service_info(service_uuid: str, request: Request) -> dict:
         "service-uuid": service_uuid,
         "name": name,
         "modulation-format": svc.modulation_format.value,
+        "central-frequency-thz": (ctx.get_service_spectrum(service_uuid) or {}).get(
+            "nominal-central-frequency"
+        ),
+        "launch-power-dbm": ctx._service_launch_power.get(service_uuid),
         "hops": hops,
         "total-fiber-km": total_fiber_km,
     }
@@ -284,9 +293,24 @@ async def get_path_info(
         ]
         total_fiber_km = round(sum(distances), 2) if distances else None
 
+    from twinlight.physics.modulation import ModulationFormat
+
+    try:
+        ModulationFormat(modulation)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown modulation {modulation!r}; "
+            f"expected one of {[f.value for f in ModulationFormat]}",
+        ) from None
+
     measurements = None
-    baseline = await ctx.get_path_baseline(sip_a, sip_z, modulation)
-    if baseline is not None:
+    centre_thz: float | None = None
+    launch_power_dbm: float | None = None
+    estimate = await ctx.get_path_baseline(sip_a, sip_z, modulation)
+    if estimate is not None:
+        baseline, centre_hz, launch_power_dbm = estimate
+        centre_thz = round(centre_hz * 1e-12, 6)
         cfg = request.app.state.config
         t = time.time()
         from twinlight.physics.transients.cascade import apply_all_transients
@@ -305,10 +329,101 @@ async def get_path_info(
         "sip-a": sip_a,
         "sip-z": sip_z,
         "modulation-format": modulation,
+        # The channel the estimate was evaluated on: the block admission
+        # would assign this format on the route, at the default launch power.
+        "central-frequency-thz": centre_thz,
+        "launch-power-dbm": launch_power_dbm,
         "hops": hops or [],
         "total-fiber-km": total_fiber_km,
         "measurements": measurements,
     }
+
+
+# ---------------------------------------------------------------------------
+# Ranked candidate paths (what the T-API path-comp-service cannot say)
+# ---------------------------------------------------------------------------
+
+
+class _SipRef(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    service_interface_point_uuid: str = Field(..., alias="service-interface-point-uuid")
+
+
+class _EndPoint(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    service_interface_point: _SipRef = Field(..., alias="service-interface-point")
+
+
+class ComputePathRequest(BaseModel):
+    """Body of ``POST /internal/compute-path``.
+
+    The constraint containers use the T-API spellings and the same supported
+    subset as a path-comp-service (``algorithms/path_constraints.py``).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    end_point: list[_EndPoint] = Field(..., alias="end-point", min_length=2, max_length=2)
+    max_candidates: int = Field(default=1, alias="max-candidates", ge=1, le=10)
+    routing_constraint: dict[str, Any] | None = Field(default=None, alias="routing-constraint")
+    topology_constraint: list[dict[str, Any]] | None = Field(
+        default=None, alias="topology-constraint"
+    )
+
+    @field_validator("topology_constraint", mode="before")
+    @classmethod
+    def _as_list(cls, value: Any) -> Any:
+        return [value] if isinstance(value, dict) else value
+
+
+@router.post("/compute-path")
+async def compute_path(body: dict, request: Request) -> dict:
+    """Up to ``max-candidates`` ranked routes between two SIPs, nothing committed.
+
+    The same search connectivity-service admission walks, so candidate *n*
+    here is candidate *n* there. Each path lists its T-API links and nodes in
+    order and its fiber length. Not T-API: v2.6.0 has no candidate-count leaf
+    and no node list on a path; the standard view is the path-comp-service.
+    """
+    try:
+        req = ComputePathRequest.model_validate(body)
+        constraints = parse_constraints(req.routing_constraint, req.topology_constraint)
+    except (ValidationError, ConstraintError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    ctx = request.app.state.context
+    sips = [ep.service_interface_point.service_interface_point_uuid for ep in req.end_point]
+    for sip in sips:
+        if ctx.get_sip(sip) is None:
+            raise HTTPException(status_code=422, detail=f"SIP {sip!r} not found")
+    src, dst = (ctx.get_gnpy_uid(sip) for sip in sips)
+    try:
+        routes = (
+            ctx.candidate_paths(src, dst, constraints, req.max_candidates)
+            if src and dst else []
+        )
+    except ConstraintError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except NoPathError as exc:  # the include search ran out of budget
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not routes:
+        raise HTTPException(
+            status_code=404,
+            detail="No path found between the specified end-points"
+            + ("" if constraints.is_empty else " that satisfies the constraints"),
+        )
+
+    paths = []
+    for route in routes:
+        refs = ctx.route_refs(route)
+        paths.append({
+            "link": [{"topology-uuid": t, "link-uuid": lk} for t, lk in refs["link"]],
+            "node": [{"topology-uuid": t, "node-uuid": n} for t, n in refs["node"]],
+            "fiber-length-km": round(ctx.path_fiber_km(route), 3),
+        })
+    return {"path": paths}
 
 
 # ---------------------------------------------------------------------------

@@ -23,14 +23,29 @@ standard").
 
 from __future__ import annotations
 
+import math
 import uuid as uuid_lib
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
+from twinlight.algorithms.path_constraints import (
+    ConstraintError,
+    PathConstraints,
+    parse_constraints,
+)
 from twinlight.models.common import (
     AdministrativeState,
     Direction,
+    ForwardingDirection,
     LayerProtocolName,
     LifecycleState,
     NameAndValue,
@@ -71,12 +86,27 @@ class ModulationTechnique(BaseModel):
 
 
 class OtsiConfig(BaseModel):
-    """tapi-photonic-media.otsi-config-pac (modulation subset)."""
+    """tapi-photonic-media.otsi-config-pac (the subset the twin acts on)."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     local_id: str = Field(default="1", alias="local-id")
-    modulation: ModulationTechnique
+    # uint64, Hz ("The central frequency of the laser … Measured in Hz.").
+    central_frequency: int | None = Field(default=None, alias="central-frequency")
+    # decimal64, in units of 0.01 dBm: tapi-photonic-media.yang has no
+    # ``units`` statement here, only the description "The output power for
+    # this interface in .01 dBm". 150 means 1.5 dBm.
+    channel_output_power: float | None = Field(
+        default=None, alias="channel-output-power"
+    )
+    # Optional on a request: without it, admission chooses the format. Always
+    # present on a read (the format in effect).
+    modulation: ModulationTechnique | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        return {k: v for k, v in data.items() if v is not None}
 
 
 class OtsiaCsepSpec(BaseModel):
@@ -111,11 +141,27 @@ class ConnectivityServiceEndPoint(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     local_id: str = Field(..., alias="local-id")
+    name: list[NameAndValue] = Field(default_factory=list)
     service_interface_point: SipRef = Field(..., alias="service-interface-point")
-    direction: Direction = Field(default=Direction.BIDIRECTIONAL)
+    layer_protocol_name: LayerProtocolName = Field(
+        default=LayerProtocolName.PHOTONIC_MEDIA, alias="layer-protocol-name",
+    )
+    # Reported, not requested: SOURCE for the end-point the lightpath leaves
+    # from, SINK for the one it reaches (set by ConnectivityService._stamp).
+    direction: Direction | None = None
     layer_protocol_constraint: list[LayerProtocolConstraint] = Field(
         default_factory=list, alias="layer-protocol-constraint"
     )
+
+    @model_serializer(mode="wrap")
+    def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """An empty name list and an unset direction are left out."""
+        data: dict[str, Any] = handler(self)
+        if not data.get("name"):
+            data.pop("name", None)
+        if data.get("direction") is None:
+            data.pop("direction", None)
+        return data
 
 
 class ConnectivityService(BaseModel):
@@ -125,6 +171,13 @@ class ConnectivityService(BaseModel):
 
     uuid: str = Field(default_factory=lambda: str(uuid_lib.uuid4()))
     name: list[NameAndValue] = Field(default_factory=list)
+    # The twin provisions photonic-media lightpaths from the first end-point
+    # to the second, so both leaves have one value; any other value is
+    # refused on the T-API surface (api/connectivity.py).
+    layer_protocol_name: LayerProtocolName = Field(
+        default=LayerProtocolName.PHOTONIC_MEDIA, alias="layer-protocol-name",
+    )
+    direction: ForwardingDirection = Field(default=ForwardingDirection.UNIDIRECTIONAL)
     end_point: list[ConnectivityServiceEndPoint] = Field(
         default_factory=list, alias="end-point"
     )
@@ -137,12 +190,80 @@ class ConnectivityService(BaseModel):
     lifecycle_state: LifecycleState = Field(
         default=LifecycleState.PLANNED, alias="lifecycle-state"
     )
+    # T-API routing and topology constraints (tapi-path-computation
+    # groupings, used by tapi-connectivity). Kept as the JSON the client sent,
+    # so a GET echoes it verbatim; the supported subset is checked when the
+    # model is parsed and resolved against the topology at admission
+    # (algorithms/path_constraints.py).
+    routing_constraint: dict[str, Any] | None = Field(
+        default=None, alias="routing-constraint"
+    )
+    topology_constraint: list[dict[str, Any]] | None = Field(
+        default=None, alias="topology-constraint"
+    )
     # Internal only: RMSA, the physics backends and the Prometheus exporter
     # all read this, but it is never serialised under its own name. The
     # on-the-wire spelling is the end-point augment (see module docstring).
     modulation_format: ModulationFormat = Field(
         default=ModulationFormat.DP_QPSK, exclude=True
     )
+    # The format the client asked for, or None when it left the choice to
+    # admission, which then tries formats from the highest spectral
+    # efficiency down (TapiContext.add_service). ``modulation_format`` is the
+    # format in effect: the requested one, or the one admission chose.
+    requested_modulation: ModulationFormat | None = Field(default=None, exclude=True)
+    # Spectrum the client asked for, lifted from the end-points (see
+    # _channel_from_end_points). None = first-fit at admission.
+    requested_spectrum_hz: tuple[int, int] | None = Field(default=None, exclude=True)
+    requested_central_frequency_hz: int | None = Field(default=None, exclude=True)
+    requested_edge_frequency_constraint: dict[str, Any] | None = Field(
+        default=None, exclude=True
+    )
+    # Launch power the client asked for [dBm], from otsi-config/
+    # channel-output-power (0.01 dBm on the wire). None = the line default
+    # (the equipment library's SI power_dbm).
+    requested_launch_power_dbm: float | None = Field(default=None, exclude=True)
+    # Central frequency [Hz] and launch power [dBm] of the admitted channel,
+    # i.e. what propagation uses; reported in otsi-config.
+    central_frequency_hz: int | None = Field(default=None, exclude=True)
+    launch_power_dbm: float | None = Field(default=None, exclude=True)
+
+    @field_validator("topology_constraint", mode="before")
+    @classmethod
+    def _topology_constraint_as_list(cls, value: Any) -> Any:
+        """A one-entry list is also accepted spelled as a bare object."""
+        return [value] if isinstance(value, dict) else value
+
+    @model_validator(mode="after")
+    def _check_constraints(self) -> ConnectivityService:
+        """Refuse constraints the twin cannot honour when the request is parsed,
+        so an unsupported leaf is a validation error rather than ignored."""
+        try:
+            self.path_constraints()
+        except ConstraintError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    def path_constraints(self) -> PathConstraints:
+        """The supported subset of this service's constraints.
+
+        Raises:
+            ConstraintError: See :func:`parse_constraints`.
+        """
+        return parse_constraints(self.routing_constraint, self.topology_constraint)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_constraints(
+        self, handler: SerializerFunctionWrapHandler,
+    ) -> dict[str, Any]:
+        """Leave absent constraints out: a JSON ``null`` is not a valid
+        encoding of an absent YANG container or list (RFC 7951)."""
+        data: dict[str, Any] = handler(self)
+        for key in ("routing-constraint", "routing_constraint",
+                    "topology-constraint", "topology_constraint"):
+            if key in data and data[key] is None:
+                del data[key]
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -156,6 +277,8 @@ class ConnectivityService(BaseModel):
         """
         if not isinstance(data, dict):
             return data
+        if data.get("modulation_format") is not None:  # built in Python
+            data.setdefault("requested_modulation", data["modulation_format"])
         if "modulation-format" in data:
             raise ValueError(
                 "'modulation-format' is not a T-API v2.6.0 field. Send the "
@@ -163,31 +286,129 @@ class ConnectivityService(BaseModel):
                 f"{OTSIA_CSEP_SPEC}/otsi-config/modulation/"
                 "standard-modulation-technique (e.g. 'MT_DP-QPSK')."
             )
-        for end_point in data.get("end-point") or data.get("end_point") or []:
-            if not isinstance(end_point, dict):
-                continue
+        for end_point in _objects(data.get("end-point") or data.get("end_point")):
             constraints = (
                 end_point.get("layer-protocol-constraint")
                 or end_point.get("layer_protocol_constraint")
-                or []
             )
-            for constraint in constraints:
-                if not isinstance(constraint, dict):
-                    continue
+            for constraint in _objects(constraints):
                 spec = constraint.get(OTSIA_CSEP_SPEC) or constraint.get(
                     "otsia_spec"
                 )
                 if not isinstance(spec, dict):
                     continue
-                for cfg in spec.get("otsi-config") or spec.get(
-                    "otsi_config"
-                ) or []:
-                    identity = (cfg or {}).get("modulation", {}).get(
-                        "standard-modulation-technique"
-                    )
+                for cfg in _objects(spec.get("otsi-config") or spec.get("otsi_config")):
+                    if "modulation" not in cfg:
+                        continue
+                    modulation = cfg["modulation"]
+                    if not isinstance(modulation, dict):
+                        raise ValueError(  # noqa: TRY004 — pydantic needs ValueError
+                            "otsi-config/modulation must be an object, got "
+                            f"{modulation!r}; leave it out to let admission "
+                            "choose the format"
+                        )
+                    identity = modulation.get("standard-modulation-technique")
+                    if identity is not None and not isinstance(identity, str):
+                        raise ValueError(
+                            "modulation/standard-modulation-technique must be an "
+                            f"identity name such as 'MT_DP-QPSK', got {identity!r}"
+                        )
                     if identity:
-                        data["modulation_format"] = modulation_from_mt(identity)
+                        fmt = modulation_from_mt(identity)
+                        data["modulation_format"] = fmt
+                        data["requested_modulation"] = fmt
                         return data
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _source_first(cls, data: Any) -> Any:
+        """Order the end-points so the SOURCE one comes first.
+
+        Admission routes from the first end-point to the second. A client
+        may say which end is which through the end-point ``direction``
+        (SOURCE sends into the network, SINK receives from it); without it,
+        list order decides. Other values are refused by the API layer and
+        ignored here, so a snapshot from before directions were reported
+        still loads.
+
+        Raises:
+            ValueError: Both end-points are SOURCE, or both SINK.
+        """
+        if not isinstance(data, dict):
+            return data
+        end_points = data.get("end-point")
+        if not isinstance(end_points, list) or not all(
+            isinstance(ep, dict) for ep in end_points
+        ):
+            return data
+        directions = [ep.get("direction") for ep in end_points]
+        if directions.count("SOURCE") > 1 or directions.count("SINK") > 1:
+            raise ValueError(
+                "end-point direction: a lightpath has one SOURCE and one SINK "
+                f"end-point, got {directions}"
+            )
+        rank = {"SOURCE": 0, "SINK": 2}
+        data["end-point"] = sorted(end_points, key=lambda ep: rank.get(ep.get("direction"), 1))
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _channel_from_end_points(cls, data: Any) -> Any:
+        """Lift a requested spectrum and central frequency from the end-points.
+
+        T-API v2.6.0 has two places for them, both optional:
+
+        * ``…/mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac/
+          spectrum`` — the media channel's ``lower-frequency`` and
+          ``upper-frequency``, uint64 Hz;
+        * ``…/otsia-connectivity-service-end-point-spec/otsi-config/
+          central-frequency`` — the carrier's frequency, uint64 Hz.
+
+        Each end-point may carry them; when several do, they must agree, since
+        a lightpath has one channel. A service holds one media channel, so
+        more than one ``mc-spectrum-config-pac``, and the MCG leaves the twin
+        does not act on, are refused by name rather than ignored. Grid
+        alignment, width and availability depend on the grid and the route,
+        and are checked at admission.
+        """
+        if not isinstance(data, dict):
+            return data
+        spectra: set[tuple[int, int]] = set()
+        centres: set[int] = set()
+        powers: set[float] = set()
+        edges: list[dict[str, Any]] = []
+        for end_point in _objects(data.get("end-point")):
+            for constraint in _objects(end_point.get("layer-protocol-constraint")):
+                spec = constraint.get(OTSIA_CSEP_SPEC)
+                for cfg in _objects(spec.get("otsi-config") if isinstance(spec, dict) else None):
+                    if cfg.get("central-frequency") is not None:
+                        centres.add(_uint64(
+                            cfg["central-frequency"], "otsi-config/central-frequency",
+                        ))
+                    if cfg.get("channel-output-power") is not None:
+                        powers.add(_centi_dbm_to_dbm(cfg["channel-output-power"]))
+                mcg = constraint.get(MCG_CSEP_SPEC)
+                if mcg is None:
+                    continue
+                spectrum, edge = _requested_media_channel(mcg)
+                if spectrum is not None:
+                    spectra.add(spectrum)
+                if edge is not None:
+                    edges.append(edge)
+        if len(spectra) > 1 or len(centres) > 1 or len(powers) > 1:
+            raise ValueError(
+                "the end-points request different spectrum; a lightpath has one "
+                "channel, so every end-point must carry the same values"
+            )
+        if spectra:
+            data["requested_spectrum_hz"] = spectra.pop()
+        if centres:
+            data["requested_central_frequency_hz"] = centres.pop()
+        if powers:
+            data["requested_launch_power_dbm"] = powers.pop()
+        if edges:
+            data["requested_edge_frequency_constraint"] = edges[0]
         return data
 
     @model_validator(mode="after")
@@ -198,9 +419,35 @@ class ConnectivityService(BaseModel):
         model built in Python (tests, snapshot restore, the example scripts)
         carries the same structure as one parsed from a T-API request.
         """
+        self._stamp()
+        return self
+
+    def assign_channel(
+        self, fmt: ModulationFormat, central_frequency_hz: int, launch_power_dbm: float,
+    ) -> None:
+        """Record the channel admission put in effect, on the model and on the
+        wire: a GET reports the format, central frequency and launch power the
+        lightpath runs — the values propagation used — not just what the
+        client asked for (which may have been nothing)."""
+        self.modulation_format = fmt
+        self.central_frequency_hz = central_frequency_hz
+        self.launch_power_dbm = launch_power_dbm
+        self._stamp()
+
+    def _stamp(self) -> None:
         spec = OtsiaCsepSpec(
             otsi_config=[
                 OtsiConfig(
+                    central_frequency=(
+                        self.central_frequency_hz
+                        if self.central_frequency_hz is not None
+                        else self.requested_central_frequency_hz
+                    ),
+                    channel_output_power=_dbm_to_centi_dbm(
+                        self.launch_power_dbm
+                        if self.launch_power_dbm is not None
+                        else self.requested_launch_power_dbm
+                    ),
                     modulation=ModulationTechnique(
                         standard_modulation_technique=MODULATION_TO_MT[
                             self.modulation_format
@@ -209,11 +456,14 @@ class ConnectivityService(BaseModel):
                 ),
             ],
         )
-        for end_point in self.end_point:
+        self.layer_protocol_name = LayerProtocolName.PHOTONIC_MEDIA
+        self.direction = ForwardingDirection.UNIDIRECTIONAL
+        for index, end_point in enumerate(self.end_point):
+            end_point.layer_protocol_name = LayerProtocolName.PHOTONIC_MEDIA
+            end_point.direction = Direction.SOURCE if index == 0 else Direction.SINK
             end_point.layer_protocol_constraint = [
                 LayerProtocolConstraint(otsia_spec=spec)
             ]
-        return self
 
 
 class UpdateConnectivityServiceRequest(BaseModel):
@@ -228,3 +478,120 @@ class UpdateConnectivityServiceRequest(BaseModel):
     lifecycle_state: LifecycleState | None = Field(
         default=None, alias="lifecycle-state"
     )
+
+
+# MCG leaves the twin acts on. mc-bandwidth-config-pac and
+# mc-flexi-grid-config-pac would constrain the channel in ways the twin does
+# not implement, so a request carrying them is refused rather than ignored.
+_MCG_KEYS = frozenset({"number-of-mc", "mc-spectrum-config-pac"})
+_MC_SPECTRUM_KEYS = frozenset({"local-id", "name", "spectrum", "edge-frequency-constraint"})
+
+
+# Per-channel launch powers the twin models [dBm]. Above the top a single
+# channel approaches an amplifier's total output (GNPy's EDFAs saturate and
+# propagation returns NaN from ~25 dBm); below the bottom it is far under any
+# receiver's sensitivity. A request outside is a 422 rather than a QoT that
+# means nothing.
+LAUNCH_POWER_RANGE_DBM = (-20.0, 10.0)
+
+
+# These helpers run inside pydantic validators, which turn only ValueError into
+# a validation error (a 422); any other exception would escape as a 500. Hence
+# the TRY004 suppressions below, and the type checks on input that pydantic
+# has not validated yet.
+
+
+def _objects(value: Any) -> list[dict[str, Any]]:
+    """The object entries of a JSON list, or none when ``value`` is not a
+    list: a "before" validator must not trip over a malformed body, which
+    pydantic's own validation then reports as a 422."""
+    return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
+
+
+def _uint64(value: Any, where: str) -> int:
+    """A YANG uint64: a JSON number or, per RFC 7951 §6.1, a decimal string."""
+    if isinstance(value, bool):
+        raise ValueError(f"{where} must be a uint64, got {value!r}")  # noqa: TRY004
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    raise ValueError(f"{where} must be a uint64, got {value!r}")
+
+
+def _centi_dbm_to_dbm(value: Any) -> float:
+    """otsi-config/channel-output-power (decimal64, 0.01 dBm) → dBm.
+
+    Accepted as a JSON number or, per RFC 7951 §6.1, a decimal string.
+    """
+    where = "otsi-config/channel-output-power"
+    if isinstance(value, bool):
+        raise ValueError(f"{where} must be a decimal64, got {value!r}")  # noqa: TRY004
+    try:
+        centi = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{where} must be a decimal64, got {value!r}") from None
+    if not math.isfinite(centi):
+        raise ValueError(f"{where} must be finite, got {value!r}")
+    dbm = centi / 100.0
+    if not LAUNCH_POWER_RANGE_DBM[0] <= dbm <= LAUNCH_POWER_RANGE_DBM[1]:
+        low, high = LAUNCH_POWER_RANGE_DBM
+        raise ValueError(
+            f"{where}={value!r} is {dbm:g} dBm; the twin models launch powers "
+            f"from {low:g} to {high:g} dBm ({low * 100:g} to {high * 100:g} "
+            "in the leaf's 0.01 dBm units)"
+        )
+    return dbm
+
+
+def _dbm_to_centi_dbm(dbm: float | None) -> float | None:
+    """dBm → the 0.01 dBm units of otsi-config/channel-output-power."""
+    return None if dbm is None else round(dbm * 100.0, 7)
+
+
+def _requested_media_channel(
+    mcg: Any,
+) -> tuple[tuple[int, int] | None, dict[str, Any] | None]:
+    """(lower, upper) Hz and edge-frequency-constraint of a requested MC."""
+    where = MCG_CSEP_SPEC
+    if not isinstance(mcg, dict):
+        raise ValueError(f"{where} must be an object")  # noqa: TRY004
+    unknown = sorted(set(mcg) - _MCG_KEYS)
+    if unknown:
+        raise ValueError(f"{where}/{unknown[0]} is not supported")
+    pacs = mcg.get("mc-spectrum-config-pac") or []
+    if not isinstance(pacs, list):
+        raise ValueError(f"{where}/mc-spectrum-config-pac must be a list")  # noqa: TRY004
+    number = mcg.get("number-of-mc", 1)
+    if number != 1 or len(pacs) > 1:
+        raise ValueError(
+            f"{where}: a connectivity-service holds one media channel; "
+            "number-of-mc and mc-spectrum-config-pac must describe one"
+        )
+    if not pacs:
+        return None, None
+    pac = pacs[0]
+    if not isinstance(pac, dict):
+        raise ValueError(  # noqa: TRY004
+            f"{where}/mc-spectrum-config-pac entries must be objects"
+        )
+    unknown = sorted(set(pac) - _MC_SPECTRUM_KEYS)
+    if unknown:
+        raise ValueError(f"{where}/mc-spectrum-config-pac/{unknown[0]} is not supported")
+    spectrum = pac.get("spectrum")
+    band: tuple[int, int] | None = None
+    if spectrum is not None and not isinstance(spectrum, dict):
+        raise ValueError(
+            f"{where}/mc-spectrum-config-pac/spectrum must be an object"
+        )
+    if spectrum is not None:
+        lower = _uint64(spectrum.get("lower-frequency"), "spectrum/lower-frequency")
+        upper = _uint64(spectrum.get("upper-frequency"), "spectrum/upper-frequency")
+        if lower >= upper:
+            raise ValueError(
+                f"spectrum/lower-frequency {lower} must be below upper-frequency {upper}"
+            )
+        band = (lower, upper)
+    edge = pac.get("edge-frequency-constraint")
+    return band, edge if isinstance(edge, dict) else None
+

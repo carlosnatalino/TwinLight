@@ -47,6 +47,36 @@ class GnpyTopology:
     elements_by_uid: dict[str, GnpyElement]
 
 
+# GNPy ``params.length`` unit spellings → metres multiplier.
+# Missing ``length_units`` defaults to km (GNPy's own default).
+_LENGTH_TO_METRES: dict[str, float] = {
+    "km": 1_000.0,
+    "kilometer": 1_000.0,
+    "kilometre": 1_000.0,
+    "kilometers": 1_000.0,
+    "kilometres": 1_000.0,
+    "m": 1.0,
+    "meter": 1.0,
+    "metre": 1.0,
+    "meters": 1.0,
+    "metres": 1.0,
+}
+
+
+def fiber_length_m(params: dict) -> float | None:
+    """A Fiber element's ``params.length`` in metres, or None if unusable.
+
+    GNPy stores the number in the unit named by ``params["length_units"]``;
+    when that key is absent the value is kilometres (GNPy's default).
+    """
+    try:
+        length = float(params.get("length", 0))
+    except (TypeError, ValueError):
+        return None
+    scale = _LENGTH_TO_METRES.get(str(params.get("length_units") or "km").strip().lower())
+    return None if scale is None else length * scale
+
+
 def load_gnpy_topology(topology_path: Path) -> GnpyTopology:
     """Load and parse a GNPy JSON topology file.
 

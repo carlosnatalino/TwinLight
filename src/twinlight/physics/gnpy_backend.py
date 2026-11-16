@@ -13,13 +13,21 @@ to satisfy.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from twinlight.config import TwinConfig
+from twinlight.physics.backend import PropagationError
+from twinlight.physics.channel_plan import (
+    SpectralDefaults,
+    load_spectral_defaults,
+    spectral_defaults_from_equipment,
+)
 
 if TYPE_CHECKING:
     import networkx as nx
 
+    from twinlight.physics.backend import LitChannel
     from twinlight.physics.gnpy_adapter import OpmBaseline
 
 
@@ -30,6 +38,10 @@ class GnpyBackend:
     """GNPy-backed QoT propagation + element mutation."""
 
     name = "gnpy"
+    # GNPy propagates one path at a time, so it cannot place a channel that
+    # joins or leaves mid-path; it evaluates every channel on the line fully
+    # loaded by the SI comb, the loading the line is designed for.
+    uses_line_load = False
 
     def __init__(self, config: TwinConfig) -> None:
         self.available: bool = False
@@ -38,9 +50,11 @@ class GnpyBackend:
         # Retained for ``redesign()`` so we don't re-read the equipment
         # JSON from disk on every override.
         self.equipment: Any = None
+        self.spectral_defaults: SpectralDefaults
 
         if config.gnpy.equipment is None:
             logger.info("No GNPy equipment file configured — using mock OPM data")
+            self.spectral_defaults = load_spectral_defaults(None)
             return
 
         try:
@@ -55,8 +69,12 @@ class GnpyBackend:
             self.network = network
             self.equipment = equipment
             self.uid_map = build_uid_map(network)
+            self.spectral_defaults = spectral_defaults_from_equipment(
+                equipment, str(config.gnpy.equipment),
+            )
             self.available = True
             logger.info("GNPy network loaded: %d elements", len(self.uid_map))
+            return
         except ImportError:
             logger.warning(
                 "gnpy package not found — OPM will use sinusoidal mock data"
@@ -65,6 +83,7 @@ class GnpyBackend:
             logger.warning(
                 "GNPy network load failed (%s) — using mock data", exc
             )
+        self.spectral_defaults = load_spectral_defaults(config.gnpy.equipment)
 
     # -- QoT propagation -------------------------------------------------
 
@@ -72,7 +91,14 @@ class GnpyBackend:
         self,
         path_uids: list[str],
         modulation_format: str,
+        *,
+        centre_frequency_hz: float,
+        media_channel_width_hz: float,
+        launch_power_dbm: float,
+        line_load: Sequence[LitChannel] = (),
     ) -> OpmBaseline | None:
+        """Propagate the SI comb with the service channel in place. The line
+        is fully loaded, so ``line_load`` is not used."""
         if not self.available:
             return None
         from twinlight.physics.gnpy_adapter import compute_path_baseline
@@ -80,10 +106,29 @@ class GnpyBackend:
         try:
             return compute_path_baseline(
                 self.uid_map, path_uids, modulation_format,
+                defaults=self.spectral_defaults,
+                bands=self.amplifier_bands(path_uids),
+                centre_frequency_hz=centre_frequency_hz,
+                media_channel_width_hz=media_channel_width_hz,
+                launch_power_dbm=launch_power_dbm,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("GNPy baseline computation failed: %s", exc)
+            raise PropagationError(f"GNPy: {exc}") from exc
+
+    def amplifier_bands(self, path_uids: list[str]) -> list[tuple[float, float]] | None:
+        """``gnpy.topology.request.find_elements_common_range`` over the path:
+        the bands every EDFA on it passes, as GNPy filters a request's
+        spectrum before propagating it."""
+        if not self.available:
             return None
+        from gnpy.topology.request import find_elements_common_range
+
+        elements = [self.uid_map[uid] for uid in path_uids if uid in self.uid_map]
+        return [
+            (float(r["f_min"]), float(r["f_max"]))
+            for r in find_elements_common_range(elements, self.equipment)
+        ]
 
     # -- /config plane: per-element parameter reads/writes ---------------
 
@@ -138,6 +183,11 @@ class GnpyBackend:
         from gnpy.core.elements import Fiber
 
         return isinstance(self.uid_map.get(uid), Fiber)
+
+    def route_fibers(self, path_uids: list[str]) -> list[str]:
+        """Routes are over the designed network, so its fibers are the
+        route's own."""
+        return [uid for uid in path_uids if self.is_fiber(uid)]
 
     def notify_fiber_failed(self, uid: str, failed: bool) -> None:
         """Called by ``TapiContext.set_link_failed`` after the routing

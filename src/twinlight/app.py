@@ -71,6 +71,8 @@ def _http_status_to_error_tag(status_code: int) -> str:
         return "bad-element"
     if status_code == 422:
         return "invalid-value"
+    if status_code == 501:
+        return "operation-not-supported"
     return "operation-failed"
 
 

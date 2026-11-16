@@ -48,8 +48,12 @@ is how SIPs map back to physical elements.
 | GET | `…/topology={uuid}/node={node_uuid}/owned-node-edge-point={nep_uuid}` |
 | GET | `…/topology={uuid}/link={link_uuid}` |
 
-Links carry a `latency-characteristic` whose `propagation-delay` (ns) is derived
-from fiber length and the speed of light in silica.
+Links carry a `latency-characteristic` (`traffic-property-name:
+propagation-delay`) whose `fixed-latency-characteristic` is the propagation
+delay derived from fiber length and the speed of light in silica. v2.6.0 types
+that leaf as a string with no unit; the twin writes **microseconds** — the unit
+`tapi-path-computation` uses for `max-allowed-delay` — with three decimals,
+e.g. `"392.110"` for 80 km.
 
 ### Connectivity services
 
@@ -93,8 +97,7 @@ from fiber length and the speed of light in silica.
 The modulation format is the end-point's
 `otsia-connectivity-service-end-point-spec` augment, as T-API v2.6.0 specifies
 — `tapi-connectivity` has no modulation leaf of its own. `standard-modulation-technique`
-accepts `MT_DP-QPSK` (the default when the augment is absent), `MT_DP-QAM16` or
-`MT_DP-QAM64`; the module-prefixed identityref spelling is accepted too
+accepts `MT_DP-QPSK`, `MT_DP-QAM16` or `MT_DP-QAM64`; the module-prefixed identityref spelling is accepted too
 (RFC 7951 §6.8). A bare top-level `modulation-format` key is rejected with a
 `422` naming the standard location, rather than silently defaulting.
 
@@ -102,9 +105,56 @@ The body may be a single object, as above, or a one-entry JSON array — RFC 795
 §5.4 encodes a list entry as an array, and that is the form some controllers
 send. An array of more than one entry is a `400`.
 
-Creation runs the full RMSA admission path — route, spectrum first-fit, QoT
-check against the format's required GSNR plus `rmsa.qot_margin_db`. A request
-that cannot be satisfied is refused rather than admitted with a warning.
+Creation runs the full RMSA admission path. The `rmsa.k_shortest_paths`
+candidate routes are tried in rank order; on each, the requested format — or,
+when the request names none, every format from the highest spectral efficiency
+down (DP-64QAM, DP-16QAM, DP-QPSK) — gets a first-fit spectrum block and a QoT
+check against the format's required GSNR plus `rmsa.qot_margin_db`. The first
+(route, format, block) that passes is admitted, and the end-points then report
+the format in effect. Without a physics backend there is no QoT to check, so a
+request that names no format gets DP-QPSK. A request that cannot be satisfied
+is a `409` listing every attempt, rather than an admission with a warning.
+
+A lightpath is never admitted without a QoT verdict while a backend is
+loaded: a (route, format) whose propagation fails is skipped, with the error
+named in the refusal, and admission moves on to the next. Admissions,
+replacements and deletions are serialised, so concurrent requests never get
+the same block. A `PUT` that is refused leaves the existing service exactly
+as it was, on the same route and block; it is not re-admitted (which could
+move it, or lose it when no route is left).
+
+A lightpath is one-way: it runs from the end-point marked `direction: SOURCE`
+to the one marked `SINK`, or, when neither says, from the first end-point to
+the second. Reads report what was provisioned: the service is
+`direction: UNIDIRECTIONAL` and `layer-protocol-name: PHOTONIC_MEDIA`, and the
+end-points are listed `SOURCE` first, then `SINK`. Two `SOURCE` (or two `SINK`)
+end-points are a `422`. An end-point `name` is kept and echoed.
+
+Standard leaves the twin does not act on fail the create or PUT with `501`
+(`operation-not-supported`). The error message names each one by path, so no
+service is admitted while ignoring part of the request. A value the leaf's
+YANG type does not admit (a `direction` of `"x"`) is a `422` instead. A
+`BIDIRECTIONAL` direction is refused with a note on how to get both
+directions: one service each way.
+
+| Where | Refused when present | Refused unless |
+|-------|----------------------|----------------|
+| `connectivity-service` | `layer-protocol-qualifier`, `connectivity-constraint`, `resilience-constraint`, `connectivity-service`, `internal-point`, `connectivity-protection-service` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `UNIDIRECTIONAL` |
+| `end-point` | `layer-protocol-qualifier`, `role`, `protection-role`, `capacity`, `administrative-state`, the `peer-fwd-`, `server-`, `protecting-` and `assembled-connectivity-service-end-point` references, `profile`, `sink-profile`, `source-profile` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `SOURCE` or `SINK` |
+| `layer-protocol-constraint` | `layer-protocol-qualifier`, `name`, `tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec` | `layer-protocol-name` = `PHOTONIC_MEDIA` |
+| `otsia-connectivity-service-end-point-spec` | `total-power-warn-threshold-upper`, `total-power-warn-threshold-lower` | `number-of-otsi` = `1` |
+| `otsi-config` | `name`, `application-identifier`, `laser-control`, `otsi-threshold-power-config`, `power-management-config-pac` | — |
+
+Config-false leaves (`operational-state`, `connection`, `csep-role`,
+`connection-end-point`) belong to the server: they are ignored on input, so a
+body read with GET can be sent back as a PUT. `lifecycle-state` is kept as
+sent, and can be changed with `PATCH`.
+
+A service may carry the standard `routing-constraint` container and
+`topology-constraint` list; they constrain the route exactly as on a
+path-comp-service (see [Route constraints](#route-constraints)) and are echoed
+on reads. An unsupported constraint is a `422` naming the leaf; a constraint no
+route satisfies is a `409`.
 
 **Semantics of the mutating verbs:**
 
@@ -126,6 +176,7 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
     "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
       "otsi-config": [
         { "local-id": "1",
+          "central-frequency": 191306250000000,
           "modulation": { "standard-modulation-technique": "MT_DP-QPSK" } }
       ],
       "number-of-otsi": 1
@@ -135,8 +186,8 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
       "mc-spectrum-config-pac": [
         { "local-id": "1",
           "spectrum": {
-            "lower-frequency": 190696875000000,
-            "upper-frequency": 190753125000000
+            "lower-frequency": 191278125000000,
+            "upper-frequency": 191334375000000
           },
           "edge-frequency-constraint": {
             "grid-type": "GRID_TYPE_FLEX",
@@ -149,26 +200,164 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
 ```
 
 Frequencies are uint64 Hz. A service with no allocation carries no MCG spec at
-all, rather than a zeroed one.
+all, rather than a zeroed one. The `spectrum` is the media channel — the
+channel's slots plus `rmsa.default_guardband_slots` — and `central-frequency`
+is its centre, where the carrier sits. `channel-output-power` is the launch
+power in effect, in the leaf's YANG unit of **0.01 dBm** (`0` = 0 dBm): the
+requested value, or the equipment library's SI `power_dbm` when none was
+requested.
+
+**Requesting spectrum.** Both leaves are optional on create (and on PUT):
+send `mc-spectrum-config-pac/spectrum`, `otsi-config/central-frequency`, or
+both, on one or both end-points (they must agree). The request must be on the
+grid — edges on slot edges, a central frequency at the centre of a block — and
+exactly one media channel wide for the format, the width a GET reports, so a
+fetched service can be sent back unchanged; numbers or RFC 7951 decimal
+strings are accepted. An `edge-frequency-constraint`, if sent, must be this
+twin's grid. These are `422`s naming the problem, as are
+`mc-bandwidth-config-pac`, `mc-flexi-grid-config-pac`, more than one media
+channel, and end-points that disagree. On each candidate route the requested
+block must lie in the band every amplifier on the route passes and be free on
+every link; otherwise the next candidate is tried, and if none fits the
+request is a `409` naming each conflict — the band, or the service holding
+the spectrum and where.
+
+Without a request, the block is first-fit, restricted to slots inside the band
+the route's amplifiers pass — GNPy's `find_elements_common_range`, slot by
+slot with GNPy's `is_in_band` test, since an EDFA drops any carrier outside
+it. The example above is the first such block under GNPy's default EDFA band
+(from 191.275 THz). Without a physics backend there is no amplifier model and
+the whole grid is assignable.
+
+**Requesting launch power.** `otsi-config/channel-output-power` is optional,
+in 0.01 dBm, as a number or decimal string; end-points that carry it must
+agree. A malformed value, or one outside the −20 to +10 dBm the twin models
+(−2000 to 1000), is a `422`.
+
+`otsi-config/modulation` is optional too: an `otsi-config` carrying only a
+central frequency or a launch power leaves the format to admission. A
+`modulation` that is not an object (`null` included) is a `422`.
+
+**Request checks.** A connectivity-service is a point-to-point lightpath:
+anything but exactly two end-points is a `422`. A `POST` naming the UUID of
+an existing service is a `409` (`resource-denied`, RFC 8040 §4.4.1) and
+changes nothing; replace a service with `PUT`. A body of the wrong shape (a
+string where an object belongs, an object where a list does) is a `422`,
+never a `500`.
+
+**Operational state.** `operational-state` reports whether the lightpath can
+carry its format now: `DISABLED` while its route has a failed fiber or its
+GSNR is below the format's required GSNR (T-API: "unable to meet the SLA of
+the user"), `ENABLED` otherwise. The admission margin `rmsa.qot_margin_db` is
+not part of the test, since a lightpath that has used up its margin still
+works. The state follows the current QoT: a parameter write, a failure, or,
+under the EGN backend, a lightpath lit or removed on a shared fiber changes
+it. Under EGN a new lightpath is admitted on its own merits even when it
+pushes a co-propagating one below threshold; that one then reads `DISABLED`.
 
 ### Path computation
 
 | Method | Path |
 |--------|------|
 | GET | `/data/tapi-path-computation:path-computation-context` |
-| GET | `…/path-computation-service` |
-| POST | `…/path-computation-service/compute-path` |
+| GET | `…/path-comp-service` |
+| POST | `…/path-comp-service` |
+| GET | `…/path-comp-service={uuid}` |
+| DELETE | `…/path-comp-service={uuid}` |
+| GET | `…/path` |
+| GET | `…/path={uuid}` |
 
-Computes candidate paths without committing any state — useful for what-if
-analysis before creating a service.
+T-API v2.6.0 has no path-computation RPC: computation is a resource. Creating
+a `path-comp-service` computes up to `rmsa.k_shortest_paths` routes, shortest
+fiber length first (GNPy's ranking, see
+[ARCHITECTURE.md](ARCHITECTURE.md#creating-a-connectivity-service)), stores each as a `path` in the context and lists them in the service's
+`path` references. Nothing is allocated. Services and paths are what-if
+results: they are not part of snapshots, and a path keeps the route it had when
+it was computed.
 
-### Equipment and spectrum
+```json
+{
+  "tapi-path-computation:path-comp-service": [{
+    "end-point": [
+      {"local-id": "a", "service-interface-point": {"service-interface-point-uuid": "…"}},
+      {"local-id": "z", "service-interface-point": {"service-interface-point-uuid": "…"}}
+    ],
+    "routing-constraint": {"route-objective-function": "MIN_WORK_ROUTE_LATENCY"},
+    "topology-constraint": [
+      {"local-id": "1", "exclude-node": [{"topology-uuid": "…", "node-uuid": "…"}]}
+    ]
+  }]
+}
+```
+
+Each `path` carries its `link` and `node-edge-point` references in order and
+its fiber length as a `routing-constraint/cost-characteristic` named
+`fiber-length-km`. Paths are computed `UNIDIRECTIONAL`, from the first
+end-point to the second; `direction` defaults to that and other values are
+refused.
+
+#### Route constraints
+
+The same subset applies to `path-comp-service`, `connectivity-service` and
+`/internal/compute-path`. It is what GNPy's
+`gnpy.topology.request.compute_constrained_path` can express, plus exclusions,
+which are applied by searching a restricted view of the graph. A route through
+includes is the exact shortest one (and the next k − 1), or none when none
+exists. The search has a budget (3,000 steps, about 1.6 s on CORONET; 3 s at
+most). If the budget runs out before the search has proven its answer, the
+request is a `409` saying so. In that case a route may exist, and the twin
+does not claim either way:
+
+| Leaf | Supported |
+|------|-----------|
+| `topology-constraint/include-node`, `include-link` | Yes — visited in the order given, all strict (GNPy `nodes_list`/`loose_list`). One of the two lists, in one entry |
+| `topology-constraint/exclude-node`, `exclude-link` | Yes — merged across entries; excluding an end-point's own node is refused |
+| `topology-constraint/explicit-route` | Yes — the includes must name every hop between the end-points' ROADMs; the route is not completed for you |
+| `routing-constraint/route-objective-function` | `MIN_WORK_ROUTE_LATENCY` only — routes are ranked by fiber length, and link latency is fiber length over a constant group velocity |
+| `routing-constraint/is-exclusive` | `true` only |
+| everything else (diversity, max-allowed-cost/hops/delay, cost/latency/risk characteristics, include/exclude topology, path and NEP, partitions, path sets) | Refused with a `422` naming the leaf |
+
+The ranked view with a candidate count, which T-API has no leaf for, is
+[`POST /internal/compute-path`](#internal--observation-and-metadata).
+
+### Physical inventory and spectrum
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-equipment:equipment-context` |
-| GET | `/data/tapi-equipment:equipment-context/equipment` |
-| GET | `/data/tapi-equipment:equipment-context/equipment={uuid}` |
+| GET | `/data/tapi-equipment:physical-context` |
+| GET | `…/device` |
+| GET | `…/device={uuid}` |
+| GET | `…/device={uuid}/equipment={uuid}` |
+| GET | `…/physical-span` |
+| GET | `…/physical-span={uuid}` |
+
+T-API v2.6.0 has no `equipment-context`: `tapi-equipment` augments the context
+with `physical-context`, a list of `device` (each holding `equipment`) and a
+list of `physical-span`. Every ROADM, transceiver and amplifier — including
+the boosters and preamplifiers GNPy's design inserts — is a device holding one
+equipment, whose `actual-equipment/common-equipment-properties` carries the
+GNPy kind as `equipment-type-name` and its `type_variety` as
+`equipment-type-identifier`. Every fiber is a physical span. UUIDs are derived
+from the element UID, which each object keeps in its `name` list as
+`element-uid`.
+
+```json
+{
+  "uuid": "…",
+  "name": [{"value-name": "element-uid", "value": "east edfa in Brest to Morlaix"}],
+  "equipment": [{
+    "uuid": "…",
+    "name": [{"value-name": "element-uid", "value": "east edfa in Brest to Morlaix"}],
+    "actual-equipment": {"common-equipment-properties": {
+      "equipment-type-name": "Edfa", "equipment-type-identifier": "std_medium_gain"
+    }}
+  }]
+}
+```
+
+Element attributes T-API has no leaf for — a fiber's length among them — are
+not in this tree; read them from the transparent controller,
+`GET /transparent/data/ElementList`.
 
 There is no `tapi-photonic-media` resource of its own. The photonic surface is
 the augments on the SIP and on the connectivity-service end-point, so it is
@@ -226,6 +415,14 @@ Errors under `/data/` use the RESTCONF format of
 }
 ```
 
+| HTTP status | `error-tag` | Used for |
+|-------------|-------------|----------|
+| 400 | `bad-element` | A malformed envelope (e.g. a list of more than one entry) |
+| 404 | `data-missing` | An unknown resource |
+| 409 | `resource-denied` | Admission refused: no route, spectrum or QoT |
+| 422 | `invalid-value` | A body that does not validate, or a constraint or value the twin cannot honour |
+| 501 | `operation-not-supported` | A standard leaf the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
+
 ### A note on percent-encoded colons
 
 T-API paths contain literal colons (`tapi-common:context`). Browsers
@@ -254,13 +451,20 @@ bare `/data/…` paths and omits these three resources.
 |--------|------|---------|
 | GET | `/internal/opm` | Live OPM for every service |
 | GET | `/internal/opm/{service_uuid}` | Live OPM for one service |
-| GET | `/internal/services/{service_uuid}` | Name, modulation format, path hops, total fiber km |
+| GET | `/internal/services/{service_uuid}` | Name, modulation format, central frequency, launch power, path hops, total fiber km |
 | GET | `/internal/links` | Link inventory with per-link state, used by the UI |
 | GET | `/internal/spectrum-grid` | Per-link slot occupancy, used by the UI heat map |
 | GET | `/internal/spectrum-context` | Grid parameters: `num-slots`, `slot-width-ghz`, `nominal-central-frequency-thz` |
-| GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service |
+| GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service, evaluated on the channel admission would assign (reported as `central-frequency-thz` and `launch-power-dbm`) |
+| POST | `/internal/compute-path` | Up to `max-candidates` (1–10) routes ranked by fiber length between two SIPs, each with its T-API links, nodes and `fiber-length-km`; same constraints as a path-comp-service |
 | GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
 | GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
+
+Every OPM figure is the service's own channel — at its assigned central
+frequency and launch power — not the worst channel of the line. The rest of
+the line is the equipment library's SI comb, fully loaded, under the GNPy
+backend, and the lightpaths actually lit under the EGN backend (see
+[PHYSICS.md § 1](PHYSICS.md#1-qot-baseline)).
 
 **OPM response — all services** (`GET /internal/opm`) wraps a list:
 
@@ -324,7 +528,7 @@ measured three ways:
 
 | Field | Model | Configured by |
 |-------|-------|---------------|
-| `pre-fec-ber`, `q-factor-db` | Gaussian approximation for Gray-coded M-QAM at the GSNR | — |
+| `pre-fec-ber`, `q-factor-db` | Gaussian approximation for Gray-coded M-QAM at the GSNR. Q follows the GSNR until the BER underflows double precision (DP-QPSK: above ~31 dB GSNR, Q ≈ 31.7 dB) | — |
 | `post-fec-ber-threshold` | Threshold model: `post_fec_ber_floor` (or the input, if lower) up to the code's pre-FEC BER limit; the uncorrected input beyond it | `fec.threshold` |
 | `post-fec-ber-hd` | Bounded-distance decoding of a hard-decision block code — RS(255,239) by default | `fec.hard_decision` |
 | `gmi-bits-per-symbol` | Generalized mutual information per polarization, bit per 2D symbol, in [0, bits per symbol] | — |
@@ -519,7 +723,7 @@ gNMI, Prometheus, `/config/get` and snapshots all reflect them.
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/admin/snapshot` | Serialise connectivity + spectrum state to JSON. Optional body `{"path": "…"}`; default `snapshots/twin-<ISO8601>.json` |
-| POST | `/admin/restore` | Restore from a snapshot. Body: `{"path": "…"}` |
+| POST | `/admin/restore` | Restore from a snapshot. Body: `{"path": "…"}`. Returns `restored`, `services` and `warnings` |
 | GET | `/admin/snapshot/latest` | Path and mtime of the most recent snapshot |
 | GET | `/admin/snapshots` | All snapshots, newest first |
 | GET | `/admin/snapshot/content?path=<file>` | Contents of one snapshot; the path must resolve inside the snapshot directory |
@@ -530,6 +734,16 @@ GSNR values would not be comparable.
 
 At startup, `--restore <path>` or `--restore-latest` replays a snapshot before
 the servers accept traffic.
+
+The snapshot format is version 2. Version 1, written before spectrum
+assignment was bounded by the amplifier band, is deprecated: it is restored
+with a warning, and the file is then rewritten in place as version 2 (an
+atomic replace, so the old file is never left half-written). A restored
+service whose block lies outside the band its amplifiers pass keeps that
+block but has no signal: its OPM reads `"status": "out-of-band"`, its
+`operational-state` is `DISABLED`, and it is not a neighbour of any other
+channel. Replace it with `PUT` to move it into the band. Each such service is
+named in the restore's `warnings` (and logged at startup).
 
 ### `/metrics` — Prometheus
 
@@ -553,6 +767,8 @@ One snapshot per scrape, in Prometheus text exposition format:
   `twinlight_fiber_failed`, `twinlight_service_link_failed`.
 - Twin state: `twinlight_services_total`, `twinlight_failed_links_total`,
   `twinlight_rmsa_qot_margin_db`, `twinlight_transient_enabled`.
+- `twinlight_service_enabled`: 1 while the service's `operational-state` is
+  `ENABLED`.
 - `twinlight_info{backend="gnpy"|"egn"}` so a dashboard can show which
   physical-layer backend produced a series.
 

@@ -179,7 +179,12 @@ export interface LayerProtocolConstraint {
   [OTSIA_CSEP_SPEC]?: {
     "otsi-config": {
       "local-id": string;
-      modulation: { "standard-modulation-technique": ModulationTechnique };
+      /** Absent in a request that leaves the format to admission; always on a read. */
+      modulation?: { "standard-modulation-technique": ModulationTechnique };
+      /** uint64, Hz. */
+      "central-frequency"?: number;
+      /** decimal64, 0.01 dBm. */
+      "channel-output-power"?: number;
     }[];
     "number-of-otsi"?: number;
   };
@@ -286,6 +291,7 @@ export interface CreateConnectivityServiceRequest {
   "tapi-connectivity:connectivity-service": {
     name?: NameAndValue[];
     "end-point": ConnectivityServiceEndPoint[];
+    "topology-constraint"?: Array<Record<string, unknown>>;
     "administrative-state": string;
     "lifecycle-state": string;
   };
@@ -385,24 +391,44 @@ export interface ServiceInfoResponse {
   "total-fiber-km": number | null;
 }
 
-// Equipment (TAPI equipment-context)
+// Physical inventory (T-API v2.6.0 tapi-equipment:physical-context).
+// There is no equipment-context in v2.6.0.
+export interface CommonEquipmentProperties {
+  "equipment-type-name": string;
+  "equipment-type-identifier"?: string;
+}
+
 export interface Equipment {
   uuid: string;
   name: NameAndValue[];
-  "equipment-type": string;
-  "length-km"?: number;
-}
-
-export interface EquipmentContextResponse {
-  "tapi-equipment:equipment-context": {
-    uuid: string;
-    equipment: Equipment[];
+  "actual-equipment": {
+    "common-equipment-properties": CommonEquipmentProperties;
   };
 }
 
-export interface EquipmentListResponse {
-  "tapi-equipment:equipment-context": {
-    equipment: Equipment[];
+export interface Device {
+  uuid: string;
+  name: NameAndValue[];
+  equipment: Equipment[];
+}
+
+export interface PhysicalSpan {
+  uuid: string;
+  name: NameAndValue[];
+}
+
+export interface PhysicalContextResponse {
+  "tapi-equipment:physical-context": {
+    device: Device[];
+    "physical-span": PhysicalSpan[];
+  };
+}
+
+// GET /transparent/data/ElementList (only the leaves the UI reads). Element
+// attributes T-API has no leaf for, such as a fiber's length, live here.
+export interface TransparentElementListResponse {
+  "twinlight-transparent:data": {
+    ElementList: Record<string, { type?: string; length_km?: number | null }>;
   };
 }
 
@@ -420,19 +446,21 @@ export interface PathNodeRef {
 export interface PathCandidate {
   link: PathLinkRef[];
   node: PathNodeRef[];
+  "fiber-length-km": number;
 }
 
+// POST /internal/compute-path (constraints use the T-API spellings)
 export interface ComputePathInput {
   "end-point": Array<{
     "service-interface-point": { "service-interface-point-uuid": string };
   }>;
   "max-candidates"?: number;
+  "routing-constraint"?: Record<string, unknown>;
+  "topology-constraint"?: Array<Record<string, unknown>>;
 }
 
 export interface ComputePathResponse {
-  "tapi-path-computation:output": {
-    path: PathCandidate[];
-  };
+  path: PathCandidate[];
 }
 
 // Derived / enriched types used by the UI

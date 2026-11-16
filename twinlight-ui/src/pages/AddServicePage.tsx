@@ -5,14 +5,23 @@ import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
 import { createClient, ApiError } from "@/api/client";
 import { extractName } from "@/lib/tapi-helpers";
-import { tapiEndPoint } from "@/api/types";
 import type { ModulationFormat, ServiceInterfacePoint, TapiNode } from "@/api/types";
 import { cn } from "@/lib/cn";
+import {
+  buildServiceRequest,
+  LAUNCH_POWER_RANGE_DBM,
+  serviceFormError,
+  type RouteConstraints,
+  type ServiceForm,
+} from "@/lib/serviceRequest";
+import { RouteConstraintsPicker } from "@/components/common/RouteConstraintsPicker";
+import { routableNodes } from "@/lib/routableNodes";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const MODULATION_FORMATS: ModulationFormat[] = ["DP-QPSK", "DP-16QAM", "DP-64QAM"];
-const DIRECTIONS = ["BIDIRECTIONAL", "SINK", "SOURCE", "UNDEFINED_OR_UNKNOWN"] as const;
+const AUTOMATIC = "automatic";
+const NO_CONSTRAINTS: RouteConstraints = { include: [], exclude: [] };
 const ADMIN_STATES = ["UNLOCKED", "LOCKED"] as const;
 const LIFECYCLE_STATES = [
   "PLANNED",
@@ -101,11 +110,13 @@ export default function AddServicePage() {
   const [serviceName, setServiceName] = useState("");
   const [aEndSip, setAEndSip] = useState("");
   const [zEndSip, setZEndSip] = useState("");
-  const [aEndDir, setAEndDir] = useState<string>("BIDIRECTIONAL");
-  const [zEndDir, setZEndDir] = useState<string>("BIDIRECTIONAL");
   const [adminState, setAdminState] = useState<string>("UNLOCKED");
   const [lifecycleState, setLifecycleState] = useState<string>("PLANNED");
-  const [modulationFormat, setModulationFormat] = useState<ModulationFormat>("DP-QPSK");
+  // AUTOMATIC: admission picks the densest format whose QoT closes.
+  const [modulationFormat, setModulationFormat] = useState<string>(AUTOMATIC);
+  const [centralFrequency, setCentralFrequency] = useState("");
+  const [launchPower, setLaunchPower] = useState("");
+  const [constraints, setConstraints] = useState<RouteConstraints>(NO_CONSTRAINTS);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -129,11 +140,27 @@ export default function AddServicePage() {
   }, [data]);
 
   const sips: ServiceInterfacePoint[] = data?.sips ?? [];
+  const nodes = useMemo(() => routableNodes(data?.topologies ?? []), [data]);
+
+  const optionalNumber = (text: string): number | null =>
+    text.trim() === "" ? null : Number(text);
+  const form: ServiceForm = {
+    name: serviceName,
+    aEndSip,
+    zEndSip,
+    modulation: modulationFormat === AUTOMATIC ? null : (modulationFormat as ModulationFormat),
+    centralFrequencyThz: optionalNumber(centralFrequency),
+    launchPowerDbm: optionalNumber(launchPower),
+    adminState,
+    lifecycleState,
+    constraints,
+  };
 
   // Validation
   const aEndError = aEndSip && zEndSip && aEndSip === zEndSip ? "Must differ from Z-End" : null;
   const zEndError = aEndSip && zEndSip && aEndSip === zEndSip ? "Must differ from A-End" : null;
-  const canSubmit = !!aEndSip && !!zEndSip && aEndSip !== zEndSip && !isSubmitting;
+  const formError = serviceFormError(form);
+  const canSubmit = formError === null && !isSubmitting;
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -141,11 +168,12 @@ export default function AddServicePage() {
     setServiceName("");
     setAEndSip("");
     setZEndSip("");
-    setAEndDir("BIDIRECTIONAL");
-    setZEndDir("BIDIRECTIONAL");
     setAdminState("UNLOCKED");
     setLifecycleState("PLANNED");
-    setModulationFormat("DP-QPSK");
+    setModulationFormat(AUTOMATIC);
+    setCentralFrequency("");
+    setLaunchPower("");
+    setConstraints(NO_CONSTRAINTS);
     setErrorMsg(null);
     setCreatedUuid(null);
   }
@@ -157,21 +185,9 @@ export default function AddServicePage() {
     setIsSubmitting(true);
     setErrorMsg(null);
 
-    const body = {
-      "tapi-connectivity:connectivity-service": {
-        ...(serviceName.trim()
-          ? { name: [{ "value-name": "service-name", value: serviceName.trim() }] }
-          : {}),
-        "end-point": [
-          // Modulation rides on the end-point: T-API v2.6.0 has no
-          // modulation leaf on the connectivity-service itself.
-          tapiEndPoint("a-end", aEndSip, modulationFormat, aEndDir),
-          tapiEndPoint("z-end", zEndSip, modulationFormat, zEndDir),
-        ],
-        "administrative-state": adminState,
-        "lifecycle-state": lifecycleState,
-      },
-    };
+    // The A-end is the SOURCE and the Z-end the SINK: the twin provisions
+    // one direction per service (lib/serviceRequest.ts).
+    const body = buildServiceRequest(form);
 
     try {
       const client = createClient(baseUrl);
@@ -247,7 +263,8 @@ export default function AddServicePage() {
         </button>
         <h1 className="text-2xl font-bold text-gray-900">Add Connectivity Service</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Provision a new point-to-point service between two Service Interface Points.
+          Provision a lightpath from the A-End to the Z-End. A lightpath runs one way;
+          create a second service for the reverse direction.
         </p>
       </div>
 
@@ -315,15 +332,7 @@ export default function AddServicePage() {
                   </p>
                 )}
               </FormGroup>
-              <FormGroup label="Direction">
-                <Select value={aEndDir} onChange={setAEndDir}>
-                  {DIRECTIONS.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </Select>
-              </FormGroup>
+              <p className="text-xs text-gray-500">Direction SOURCE: transmits into the network.</p>
             </div>
 
             {/* Z-End */}
@@ -350,15 +359,7 @@ export default function AddServicePage() {
                   </p>
                 )}
               </FormGroup>
-              <FormGroup label="Direction">
-                <Select value={zEndDir} onChange={setZEndDir}>
-                  {DIRECTIONS.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </Select>
-              </FormGroup>
+              <p className="text-xs text-gray-500">Direction SINK: receives from the network.</p>
             </div>
           </div>
         </section>
@@ -398,12 +399,10 @@ export default function AddServicePage() {
 
             <FormGroup
               label="Modulation Format"
-              hint="Sets the coherent modulation scheme used for QoT calculations."
+              hint="Automatic picks the densest format whose QoT closes on the route."
             >
-              <Select
-                value={modulationFormat}
-                onChange={(v) => setModulationFormat(v as ModulationFormat)}
-              >
+              <Select value={modulationFormat} onChange={setModulationFormat}>
+                <option value={AUTOMATIC}>Automatic</option>
                 {MODULATION_FORMATS.map((f) => (
                   <option key={f} value={f}>
                     {f}
@@ -411,7 +410,45 @@ export default function AddServicePage() {
                 ))}
               </Select>
             </FormGroup>
+
+            <FormGroup
+              label="Central Frequency (THz)"
+              hint="Optional: the centre of a media-channel block, e.g. 191.30625. Empty: first free block."
+            >
+              <input
+                type="number"
+                step="any"
+                value={centralFrequency}
+                onChange={(e) => setCentralFrequency(e.target.value)}
+                placeholder="first fit"
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </FormGroup>
+
+            <FormGroup
+              label="Launch Power (dBm)"
+              hint={`Optional, ${LAUNCH_POWER_RANGE_DBM[0]} to ${LAUNCH_POWER_RANGE_DBM[1]} dBm. Empty: the equipment default.`}
+            >
+              <input
+                type="number"
+                step="0.01"
+                min={LAUNCH_POWER_RANGE_DBM[0]}
+                max={LAUNCH_POWER_RANGE_DBM[1]}
+                value={launchPower}
+                onChange={(e) => setLaunchPower(e.target.value)}
+                placeholder="default"
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </FormGroup>
           </div>
+        </section>
+
+        {/* ── Route constraints ───────────────────────────────────────────── */}
+        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4">
+          <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+            Route Constraints
+          </h2>
+          <RouteConstraintsPicker nodes={nodes} value={constraints} onChange={setConstraints} />
         </section>
 
         {/* ── Error message ────────────────────────────────────────────────── */}
@@ -449,11 +486,11 @@ export default function AddServicePage() {
               </>
             )}
           </button>
-          {!aEndSip || !zEndSip ? (
-            <p className="text-xs text-gray-400">Select both A-End and Z-End SIPs to continue.</p>
-          ) : aEndSip === zEndSip ? (
-            <p className="text-xs text-red-500">A-End and Z-End SIPs must be different.</p>
-          ) : null}
+          {formError && (
+            <p className={cn("text-xs", !aEndSip || !zEndSip ? "text-gray-400" : "text-red-500")}>
+              {formError}
+            </p>
+          )}
         </div>
       </form>
     </div>

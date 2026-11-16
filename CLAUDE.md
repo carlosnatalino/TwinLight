@@ -125,12 +125,40 @@ Details that are easy to get wrong and cost a debugging cycle:
 - `create_input_spectral_information(f_min, f_max, …)` treats both bounds as
   channel centres, inclusive. gnpy 2 put the first channel one slot above
   `f_min`, so the same arguments now launch one extra channel without any
-  error. The twin's comb is 88 channels, 190.95–195.30 THz, and
-  `TestPropagationComb` pins it.
-- EDFAs drop carriers outside their band (the default C-band is 191.3–196.0
-  THz), so 81 of the 88 channels reach the receiver.
+  error. The twin launches the equipment library's SI comb (76 channels,
+  191.35–195.10 THz, with the bundled library) with the service channel
+  inserted at its own frequency, and reports that channel, not the worst
+  (`physics/channel_plan.py:line_comb`). `TestPropagationComb` pins it.
+- EDFAs drop carriers outside their band (`Edfa.params.bands`; 191.275–196.125
+  THz for GNPy's reference EDFAs), and slot indices do not survive that, so
+  the service channel is found by frequency after propagation. The twin keeps
+  the comb and every assigned block inside the band
+  (`find_elements_common_range`).
+- ROADMs equalise each channel to their target plus its `delta_pdb`, so a
+  per-channel launch-power offset must ride on `delta_pdb`; a transmitter
+  power alone is erased at the first ROADM.
 - `si.pmd` and `si.latency` are per-channel arrays, not scalars.
 - Deep-copy path elements before propagating; propagation mutates element state.
+- An amplifier's NF at a given gain is `Edfa._calc_nf(avg=True)` after setting
+  `effective_gain` (and `pin_db`/`nch`/`slot_width` for the OpenROADM types);
+  the EGN backend uses it on the designed elements so both backends share the
+  equipment model. Designed EDFA objects report `operational.gain_target` /
+  `delta_p` as None; `network_to_json` carries the values.
+- GNPy has no k-shortest-path function. `compute_constrained_path` runs
+  `networkx.shortest_simple_paths(network, weight="weight")`, where an edge's
+  weight is the length (m) of the fiber it leaves and 0.01 otherwise
+  (`gnpy/tools/json_io.py`, `gnpy/core/network.py`). The twin's k-list is that
+  same search; its `TopologyGraph` fallback carries the same weights.
+  `tests/test_state/test_candidate_ranking.py` pins candidate 1 to GNPy's route.
+- With a `nodes_list`, `compute_constrained_path` filters *every* simple path
+  through `ispart`, with no bound: a far-off include runs for minutes. The twin
+  uses it only without includes; `algorithms/routing.py:waypoint_paths` (an
+  exact branch and bound with a step budget, pinned to brute force and to a
+  min-cost-flow optimum in `tests/test_algorithms/test_waypoint_search.py`)
+  handles includes.
+- With an all-`LOOSE` `loose_list` it cannot satisfy, `compute_constrained_path`
+  drops the constraints and returns the unconstrained route. The twin passes
+  `STRICT` for every include.
 
 ## Caches and invalidation
 
@@ -146,6 +174,14 @@ must write through `apply_element_overrides` so it inherits that invalidation.
 The same method bumps the running revision (the transparent controller's ETag)
 and captures the startup value its reverts restore; twin-config changes go
 through `apply_twin_overrides` for the same reasons.
+
+Under a backend with `uses_line_load` (EGN), a baseline also depends on the
+lightpaths sharing its fibers: `add_service` re-evaluates them and
+`delete_service` invalidates them (`_sharing_services`). The reverse index
+holds the backend's designed UIDs too (`_note_baseline`), since a route's
+UIDs are the topology's as written. A service's `operational-state` is
+derived from its baseline in `get_or_compute_baseline`; T-API reads call
+`refresh_operational_states` so it reflects whatever was invalidated.
 
 A new runtime-writable attribute needs a case in
 `tests/test_physics/test_element_params_propagation.py` proving that
@@ -168,6 +204,8 @@ endpoint reference resolves to a physical element.
 ## Not yet implemented
 
 Soft-decision post-FEC BER (GMI/NGMI are reported, but not mapped through a
-per-code NGMI threshold); multi-band (C-band only); XPM/FWM in the EGN kernel (self-channel
-NLI only); an event-driven simulation clock; T-API notification, OAM, fault and
+per-code NGMI threshold); multi-band (C-band only); the EGN correction on cross-channel NLI
+(both backends are the plain GN model); the actual line load under the GNPy backend (it
+assumes a full SI comb; EGN uses the lit lightpaths); an event-driven simulation clock;
+T-API notification, OAM, fault and
 virtual-network modules; gNMI Get/Set; authentication on any interface.

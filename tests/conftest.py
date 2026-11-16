@@ -164,3 +164,66 @@ def gnpy_app(gnpy_twin_config: TwinConfig) -> TestClient:
     (/config, OPM with real baselines, etc.).
     """
     return TestClient(create_app(gnpy_twin_config))
+
+
+# ---------------------------------------------------------------------------
+# Mesh fixtures: a five-ROADM mesh authored for the routing tests (A, B, C carry
+# transceivers). Ranked by fiber length, A → C is A-B-C (160 km), A-D-C (200),
+# A-B-D-C and A-D-B-C (240), A-E-C (250). See tests/fixtures/mesh_network.json.
+# ---------------------------------------------------------------------------
+
+
+def _mesh_config(tmp_path: Path, backend: str) -> TwinConfig:
+    if _GNPY_EQUIPMENT is None:
+        pytest.skip("gnpy is not installed with its example-data equipment library")
+    return TwinConfig(
+        gnpy=GnpyConfig(
+            topology=FIXTURES / "mesh_network.json",
+            equipment=_GNPY_EQUIPMENT,
+        ),
+        physics={"backend": backend},
+        rmsa={"k_shortest_paths": 5},
+        simulation={"snapshot_dir": str(tmp_path / "snapshots")},
+    )
+
+
+@pytest.fixture(params=["gnpy", "egn"])
+def mesh_context(request: pytest.FixtureRequest, tmp_path: Path):
+    """A TapiContext over the mesh, once per physics backend."""
+    from twinlight.state.context import TapiContext
+
+    return TapiContext(_mesh_config(tmp_path, request.param))
+
+
+@pytest.fixture
+def mesh_gnpy_context(tmp_path: Path):
+    from twinlight.state.context import TapiContext
+
+    return TapiContext(_mesh_config(tmp_path, "gnpy"))
+
+
+@pytest.fixture
+def mesh_app(tmp_path: Path) -> TestClient:
+    """FastAPI TestClient over the mesh with the GNPy backend."""
+    return TestClient(create_app(_mesh_config(tmp_path, "gnpy")))
+
+
+class MeshRefs:
+    """T-API references of mesh elements, looked up by element UID."""
+
+    def __init__(self, ctx) -> None:
+        self._ctx = ctx
+
+    def sip(self, trx_uid: str) -> str:
+        return next(s.uuid for s in self._ctx.sips if self._ctx.get_gnpy_uid(s.uuid) == trx_uid)
+
+    def node(self, uid: str) -> dict:
+        topo, node = self._ctx._gnpy_uid_to_node_ref[uid]
+        return {"topology-uuid": topo, "node-uuid": node}
+
+    def link(self, a: str, z: str) -> dict:
+        topo, link = self._ctx._gnpy_pair_to_link_ref[(a, z)]
+        return {"topology-uuid": topo, "link-uuid": link}
+
+    def roadms(self, path: list[str]) -> list[str]:
+        return [uid[len("roadm "):] for uid in path if uid.startswith("roadm ")]

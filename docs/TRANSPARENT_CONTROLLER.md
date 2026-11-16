@@ -90,7 +90,8 @@ twinlight-transparent revert /
 │     ElementList/<uid>              its inline elements, in propagation order
 ├── ServiceList/<uuid>               connectivity services (read-only here)
 │     uuid, name, modulation_format, path, start_slot, num_slots,
-│     central_frequency_thz, slot_width_ghz, required_gsnr_db
+│     central_frequency_thz, slot_width_ghz, launch_power_dbm,
+│     required_gsnr_db
 │     qot/                           status, gsnr_db, osnr_db, margin_db, cd_ps_nm,
 │                                    pmd_ps, latency_ms, total_fiber_km
 │     ElementList/<uid>              the elements of the allocated path, in order
@@ -273,8 +274,9 @@ Every writable attribute is read on every propagation.
 attributes added for the transparent controller and checks that the propagated
 result moves; the original ones have their own tests in `tests/test_state/`.
 
-Under **EGN**: Fiber `loss_coef`, `att_in` (accepted, no effect), `failed`;
-Edfa `nf0`.
+Under **EGN**: Fiber `loss_coef`, `att_in`, `failed`; Edfa `nf0` (boosters
+included), which reads as the noise figure at the amplifier's operating gain
+and, when written, replaces it.
 
 **Twin configuration**: every scalar field of `transients`, `rmsa` and `fec` —
 the sections read live on each OPM sample or admission (34 fields). Bounds and

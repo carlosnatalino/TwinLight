@@ -11,6 +11,10 @@ slots" abstraction follows optical-networking-gym
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+import numpy as np
+
 from twinlight.state.spectrum_state import Edge, SpectrumState
 
 
@@ -40,21 +44,25 @@ def first_fit(
     edges: list[Edge],
     slots_required: int,
     guard_slots: int,
+    assignable: Sequence[bool] | np.ndarray | None = None,
 ) -> int | None:
     """Find the lowest start slot index with a contiguous free block.
 
-    Searches from slot 0 upward. The block size is slots_required + guard_slots
-    (guard slots can be used to separate adjacent channels; we place them
-    after the channel so the block is [start, start + slots_required + guard_slots)).
-    For simplicity we allocate one contiguous block that includes the guard;
-    the "channel" occupies the first slots_required slots, the next guard_slots
-    are reserved as guard band.
+    Searches from slot 0 upward. The block is one media channel of
+    ``slots_required + guard_slots`` slots, ``[start, start + block)``; the
+    carrier is centred in it (the reported central frequency is the block
+    centre), so the guard is in effect shared between both edges.
+
+    ``assignable`` marks the slots a channel may use at all — those inside the
+    band every amplifier on the path passes. A block must lie entirely in
+    assignable slots; ``None`` allows every slot.
 
     Args:
         spectrum_state: Current per-link slot occupancy.
         edges: List of (from_uid, to_uid) along the path.
         slots_required: Number of slots needed for the channel.
-        guard_slots: Guard band slots (e.g. 1) after the channel.
+        guard_slots: Guard band slots (e.g. 1) added to the channel's slots.
+        assignable: Per-slot mask of usable spectrum, or None.
 
     Returns:
         The smallest start index such that [start, start + slots_required + guard_slots)
@@ -67,6 +75,8 @@ def first_fit(
     if block > n:
         return None
     for start in range(n - block + 1):
+        if assignable is not None and not all(assignable[start:start + block]):
+            continue
         if spectrum_state.is_available(edges, start, block):
             return start
     return None

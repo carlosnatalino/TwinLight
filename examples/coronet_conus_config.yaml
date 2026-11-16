@@ -100,6 +100,9 @@ rmsa:
   k_shortest_paths: 5                  # more candidates for a 75-node mesh
   qot_margin_db: 1.5
   default_guardband_slots: 1
+  # Launch power is not set here: the default is the equipment library's
+  # SI power_dbm, and a service may request its own (otsi-config/
+  # channel-output-power, in 0.01 dBm).
 
 # ---------------------------------------------------------------------------
 # Spectrum grid (standard C-band)
