@@ -35,7 +35,8 @@ For the endpoint catalogue itself see [API.md](API.md).
 
 | Aspect | Status | Notes |
 |--------|--------|------|
-| **Create service** | ✓ | `POST .../connectivity-context/connectivity-service` with end-points (SIP refs) and the photonic modulation augment |
+| **Connectivity context** | ✓ | `GET /data/tapi-common:context/tapi-connectivity:connectivity-context`, the augment's RESTCONF path; the same section as in the full-context GET |
+| **Create service** | ✓ | `POST .../tapi-connectivity:connectivity-context/connectivity-service` with end-points (SIP refs) and the photonic modulation augment |
 | **List / get service** | ✓ | `GET .../connectivity-service`, `GET .../connectivity-service={uuid}` |
 | **Replace service** | ✓ | `PUT .../connectivity-service={uuid}` (full replacement; body UUID must match path) |
 | **Update service** | ✓ | `PATCH .../connectivity-service={uuid}` (name, administrative-state, lifecycle-state) |
@@ -49,6 +50,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 - **Capability discovery**: `GET {restconf-root}` and `GET {restconf-root}/yang-library-version` answer per RFC 8040 §3.3.
 - **URL path encoding**: Colons in paths handled (PathDecodeMiddleware for `%3A` → `:`).
 - **RESTCONF-style paths**: Resource paths follow the `.../connectivity-service={uuid}` pattern.
+- **Augment paths**: Every context augment is served under the context, at its RFC 8040 §3.5.3 path, with a module prefix only where the module changes: `/data/tapi-common:context/tapi-topology:topology-context`, `…/tapi-connectivity:connectivity-context`, `…/tapi-path-computation:path-computation-context`, `…/tapi-equipment:physical-context`, `…/tapi-oam:oam-context`, `…/tapi-streaming:stream-context`. The connectivity, path-computation and physical contexts are also reachable at the short `/data/<module>:<container>/…` earlier releases served; those are non-standard aliases, absent from the OpenAPI schema and scheduled for removal with the bare mount (see [ROADMAP.md](ROADMAP.md)).
 - **List encoding**: POST accepts a list entry as a single-element JSON array (RFC 7951 §5.4, RFC 8040 App. B.2.1) as well as a bare object.
 - **gNMI**: the T-API v2.6.0 performance-measurement stream of TR-548 §6 — see §1.6 and the deviations in §2.5.
 
@@ -56,11 +58,11 @@ For the endpoint catalogue itself see [API.md](API.md).
 
 | Aspect | Status | Notes |
 |--------|--------|------|
-| **Path computation context** | ✓ | `GET /data/tapi-path-computation:path-computation-context` lists `path-comp-service` and `path`, the v2.6.0 names |
+| **Path computation context** | ✓ | `GET /data/tapi-common:context/tapi-path-computation:path-computation-context` lists `path-comp-service` and `path`, the v2.6.0 names |
 | **path-comp-service** | ✓ | `POST`/`GET`/`DELETE .../path-comp-service[={uuid}]`; creating one computes up to `rmsa.k_shortest_paths` ranked routes. v2.6.0 has no RPC, so the earlier `compute-path` RPC (and its non-standard `max-candidates`) is gone; the ranked view with a count is `POST /internal/compute-path` |
 | **path** | ✓ | `GET .../path[={uuid}]` with `link` and `node-edge-point` references and the fiber length as a `cost-characteristic` |
 | **Route constraints** | ◐ | `topology-constraint` include/exclude node and link and `explicit-route`; `routing-constraint` `route-objective-function: MIN_WORK_ROUTE_LATENCY` and `is-exclusive: true`. Every other constraint leaf is refused with a 422 naming it, on path-comp-service and connectivity-service alike |
-| **Physical context** | ✓ | `GET /data/tapi-equipment:physical-context`, `.../device[={uuid}]`, `.../device={uuid}/equipment={uuid}`, `.../physical-span[={uuid}]`. v2.6.0 has no `equipment-context`; the earlier non-standard `equipment-context` endpoints and their `equipment-type`/`length-km` fields are gone |
+| **Physical context** | ✓ | `GET /data/tapi-common:context/tapi-equipment:physical-context`, `.../device[={uuid}]`, `.../device={uuid}/equipment={uuid}`, `.../physical-span[={uuid}]`. v2.6.0 has no `equipment-context`; the earlier non-standard `equipment-context` endpoints and their `equipment-type`/`length-km` fields are gone |
 | **Spectrum capability** | ✓ | Per-SIP `spectrum-capability-pac` — supportable / available / occupied spectrum-bands in uint64 Hz, from live occupancy |
 | **Assigned spectrum** | ✓ | Per-service `mcg-connectivity-service-end-point-spec/mc-spectrum-config-pac` on the end-point |
 

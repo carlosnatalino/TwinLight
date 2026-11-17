@@ -1,6 +1,6 @@
 # API reference
 
-TwinLight exposes 74 REST operations plus a gNMI gRPC service carrying the
+TwinLight exposes 75 REST operations plus a gNMI gRPC service carrying the
 T-API performance-measurement stream. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
@@ -23,6 +23,18 @@ Endpoints fall into two groups, kept strictly apart (see
 > `/data/…` mount is kept for clients written against earlier releases and is
 > scheduled for removal — see [ROADMAP.md](ROADMAP.md). New clients should use
 > the RESTCONF root.
+
+> **The connectivity, path-computation and physical contexts are under the
+> context.** `tapi-connectivity`, `tapi-path-computation` and `tapi-equipment`
+> augment `/tapi-common:context`, so their RESTCONF paths are
+> `/data/tapi-common:context/<module>:<container>/…` (RFC 8040 §3.5.3), like
+> the topology, OAM and stream contexts; the tables below give that form. Each
+> of these routes is also served at the short
+> `/data/<module>:<container>/…` of earlier releases (for example
+> `/data/tapi-connectivity:connectivity-context/connectivity-service`), with
+> the same handlers, bodies and state, at both mounts. The short forms are
+> aliases: they are not in the OpenAPI schema, and they are scheduled for
+> removal together with the bare mount — see [ROADMAP.md](ROADMAP.md).
 
 ## Authentication
 
@@ -136,12 +148,19 @@ e.g. `"392.110"` for 80 km.
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-connectivity:connectivity-context/connectivity-service` |
-| POST | `/data/tapi-connectivity:connectivity-context/connectivity-service` |
+| GET | `/data/tapi-common:context/tapi-connectivity:connectivity-context` |
+| GET | `…/connectivity-service` |
+| POST | `…/connectivity-service` |
 | GET | `…/connectivity-service={uuid}` |
 | PUT | `…/connectivity-service={uuid}` |
 | PATCH | `…/connectivity-service={uuid}` |
 | DELETE | `…/connectivity-service={uuid}` |
+
+The container GET returns `{"tapi-connectivity:connectivity-context":
+{"connectivity-service": […]}}`, the same section as the full context. The
+list GET `…/connectivity-service` answers with that same container envelope
+rather than a `tapi-connectivity:connectivity-service` array, as it always
+has; the UI and the ONOS adapter read it that way.
 
 **Create (POST) body:**
 
@@ -336,7 +355,7 @@ pushes a co-propagating one below threshold; that one then reads `DISABLED`.
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-path-computation:path-computation-context` |
+| GET | `/data/tapi-common:context/tapi-path-computation:path-computation-context` |
 | GET | `…/path-comp-service` |
 | POST | `…/path-comp-service` |
 | GET | `…/path-comp-service={uuid}` |
@@ -401,7 +420,7 @@ The ranked view with a candidate count, which T-API has no leaf for, is
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-equipment:physical-context` |
+| GET | `/data/tapi-common:context/tapi-equipment:physical-context` |
 | GET | `…/device` |
 | GET | `…/device={uuid}` |
 | GET | `…/device={uuid}/equipment={uuid}` |
