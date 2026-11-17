@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tests.conftest import tapi_end_point
 
-_BASE_CONN = "/data/tapi-connectivity:connectivity-context"
+_BASE_CONN = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
 
 
 def _get_two_sips(app):

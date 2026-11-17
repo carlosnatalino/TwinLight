@@ -34,25 +34,6 @@ root from `GET /.well-known/host-meta`. The bundled web UI and client library
 (including the measurement-stream discovery in `twinlight_client.streaming`)
 will be migrated in the same release that removes the bare mount.
 
-### The short connectivity, path-computation and physical context paths are deprecated
-
-**Current behaviour:** `tapi-connectivity:connectivity-context`,
-`tapi-path-computation:path-computation-context` and
-`tapi-equipment:physical-context` are augments of `/tapi-common:context`, and
-each is served at its RESTCONF path under the context —
-`/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/…`
-— as RFC 8040 §3.5.3 places it. Every route is also served at the short
-`/data/tapi-connectivity:connectivity-context/…` (and the two equivalents) of
-earlier releases, as an alias, at both mounts: same handlers, same bodies,
-same state. The aliases are hidden from the OpenAPI documentation.
-
-**Planned:** retire the short forms in the same release that removes the bare
-`/data/` mount, leaving one path per resource.
-
-**What to do now:** address these contexts under `…/data/tapi-common:context/`.
-The bundled web UI, the client library, `examples/demo_services.py` and the
-ONOS adapter still use the short forms and will be migrated before they go.
-
 ### A GET on a single list entry returns its parent container
 
 **Current behaviour:** `GET …/service-interface-point={uuid}` (and the other

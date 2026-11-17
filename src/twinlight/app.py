@@ -230,12 +230,9 @@ def create_app(config: TwinConfig) -> FastAPI:
     # clients written against earlier releases, and docs/ROADMAP.md tracks
     # retiring it.
     #
-    # Within each mount, the connectivity, path-computation and equipment
-    # routers serve their container at its RESTCONF path under
-    # tapi-common:context (they are augments of it) and again, hidden from
-    # OpenAPI, at the short /data/<module>:<container> of earlier releases;
-    # see CONTAINER_PATHS in each module. ROADMAP.md tracks retiring the
-    # short form with the bare mount.
+    # Every augment of the context (topology, connectivity, path
+    # computation, equipment, OAM, streaming) is served at its RESTCONF path
+    # under tapi-common:context (RFC 8040 §3.5.3), and only there.
     #
     # There is no photonic-media router: the twin's photonic surface is the
     # augments on the SIP and the connectivity-service end-point, served by

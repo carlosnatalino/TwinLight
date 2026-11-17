@@ -13,9 +13,7 @@ computed ``path`` objects it references. The ranked-candidates view with a
 candidate count, which T-API has no leaf for, is ``POST /internal/compute-path``.
 
 ``tapi-path-computation`` augments ``/tapi-common:context``, so RFC 8040
-§3.5.3 puts the container under the context. Every route is also served,
-hidden from OpenAPI, at the short ``/data/tapi-path-computation:…`` of
-earlier releases (see ``CONTAINER_PATHS``).
+§3.5.3 puts the container under the context.
 """
 
 from __future__ import annotations
@@ -29,19 +27,11 @@ from twinlight.algorithms.path_constraints import ConstraintError
 from twinlight.models.path_computation import PathCompService
 from twinlight.state.context import NoPathError
 
-router = APIRouter(prefix="/data", tags=["tapi-path-computation"])
+#: The container's RESTCONF path: an augment of tapi-common:context, so
+#: module-qualified where the module changes (RFC 8040 §3.5.3).
+PREFIX = "/data/tapi-common:context/tapi-path-computation:path-computation-context"
 
-#: Where the container is served, canonical first: the augment's RESTCONF
-#: path, then the short alias earlier releases served (hidden from OpenAPI).
-#: The routes below are relative to the container and mounted at each, at the
-#: end of this module.
-CONTAINER_PATHS = (
-    "/tapi-common:context/tapi-path-computation:path-computation-context",
-    "/tapi-path-computation:path-computation-context",
-)
-
-# The container's routes, relative to it; mounted on ``router`` below.
-_container = APIRouter()
+router = APIRouter(prefix=PREFIX, tags=["tapi-path-computation"])
 _SERVICE_KEY = "tapi-path-computation:path-comp-service"
 _PATH_KEY = "tapi-path-computation:path"
 
@@ -89,7 +79,7 @@ def path_computation_context_payload(ctx) -> dict[str, Any]:
     }
 
 
-@_container.get("")
+@router.get("")
 async def get_path_computation_context(request: Request) -> dict:
     """The whole path-computation context: services and computed paths."""
     return {
@@ -99,13 +89,13 @@ async def get_path_computation_context(request: Request) -> dict:
     }
 
 
-@_container.get("/path-comp-service")
+@router.get("/path-comp-service")
 async def get_path_comp_services(request: Request) -> dict:
     ctx = request.app.state.context
     return {_SERVICE_KEY: [_dump(s) for s in ctx.get_path_comp_services()]}
 
 
-@_container.post("/path-comp-service", status_code=status.HTTP_201_CREATED)
+@router.post("/path-comp-service", status_code=status.HTTP_201_CREATED)
 async def create_path_comp_service(body: dict, request: Request) -> dict:
     """Create a path-comp-service; its ``path`` list holds the computed routes.
 
@@ -136,7 +126,7 @@ async def create_path_comp_service(body: dict, request: Request) -> dict:
     return {_SERVICE_KEY: _dump(service)}
 
 
-@_container.get("/path-comp-service={uuid}")
+@router.get("/path-comp-service={uuid}")
 async def get_path_comp_service(uuid: str, request: Request) -> dict:
     service = request.app.state.context.get_path_comp_service(uuid)
     if service is None:
@@ -144,7 +134,7 @@ async def get_path_comp_service(uuid: str, request: Request) -> dict:
     return {_SERVICE_KEY: _dump(service)}
 
 
-@_container.delete(
+@router.delete(
     "/path-comp-service={uuid}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
@@ -154,19 +144,14 @@ async def delete_path_comp_service(uuid: str, request: Request) -> None:
         raise HTTPException(status_code=404, detail=f"path-comp-service {uuid} not found")
 
 
-@_container.get("/path")
+@router.get("/path")
 async def get_paths(request: Request) -> dict:
     return {_PATH_KEY: request.app.state.context.get_paths()}
 
 
-@_container.get("/path={uuid}")
+@router.get("/path={uuid}")
 async def get_path(uuid: str, request: Request) -> dict:
     path = request.app.state.context.get_path(uuid)
     if path is None:
         raise HTTPException(status_code=404, detail=f"path {uuid} not found")
     return {_PATH_KEY: path}
-
-
-# After every route is declared: include_router copies the routes it is given.
-for _prefix, _documented in zip(CONTAINER_PATHS, (True, False), strict=True):
-    router.include_router(_container, prefix=_prefix, include_in_schema=_documented)

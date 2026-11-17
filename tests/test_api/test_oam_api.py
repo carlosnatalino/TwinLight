@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import tapi_end_point
 from twinlight.models.oam import oam_job_uuid
 
-_CONN = "/data/tapi-connectivity:connectivity-context/connectivity-service"
+_CONN = "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 _OAM = "/data/tapi-common:context/tapi-oam:oam-context"
 
 # Every leaf of tapi-oam:oam-context/oam-job in the v2.6.0 YANG

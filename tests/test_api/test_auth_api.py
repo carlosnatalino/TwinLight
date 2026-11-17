@@ -85,30 +85,28 @@ class TestRejection:
             ("POST", "/admin/snapshot"),
             ("POST", "/config/parameters"),
             ("DELETE", (
-                "/data/tapi-connectivity:connectivity-context"
+                "/data/tapi-common:context/tapi-connectivity:connectivity-context"
                 "/connectivity-service=x"
             )),
             ("PUT", (
-                "/data/tapi-connectivity:connectivity-context"
+                "/data/tapi-common:context/tapi-connectivity:connectivity-context"
                 "/connectivity-service=x"
             )),
             # Path computation, inventory and the ranked-candidates endpoint.
             ("POST", "/internal/compute-path"),
             ("GET", "/internal/path-info"),
             ("GET", (
-                "/data/tapi-path-computation:path-computation-context"
+                "/data/tapi-common:context/tapi-path-computation:path-computation-context"
                 "/path-comp-service"
             )),
             ("POST", (
-                "/data/tapi-path-computation:path-computation-context"
+                "/data/tapi-common:context/tapi-path-computation:path-computation-context"
                 "/path-comp-service"
             )),
-            ("GET", "/data/tapi-path-computation:path-computation-context/path"),
-            ("GET", "/data/tapi-equipment:physical-context/device"),
-            ("GET", "/data/tapi-equipment:physical-context/physical-span"),
-            # The same three contexts at their YANG paths, under the context.
+            ("GET", "/data/tapi-common:context/tapi-path-computation:path-computation-context/path"),
+            ("GET", "/data/tapi-common:context/tapi-equipment:physical-context/device"),
+            ("GET", "/data/tapi-common:context/tapi-equipment:physical-context/physical-span"),
             ("GET", "/data/tapi-common:context/tapi-connectivity:connectivity-context"),
-            ("GET", "/restconf/data/tapi-connectivity:connectivity-context"),
             ("POST", (
                 "/restconf/data/tapi-common:context"
                 "/tapi-connectivity:connectivity-context/connectivity-service"
@@ -117,16 +115,12 @@ class TestRejection:
                 "/restconf/data/tapi-common:context"
                 "/tapi-connectivity:connectivity-context/connectivity-service=x"
             )),
-            ("DELETE", (
-                "/data/tapi-common:context"
-                "/tapi-connectivity:connectivity-context/connectivity-service=x"
-            )),
             ("POST", (
                 "/restconf/data/tapi-common:context"
                 "/tapi-path-computation:path-computation-context/path-comp-service"
             )),
             ("DELETE", (
-                "/data/tapi-common:context"
+                "/restconf/data/tapi-common:context"
                 "/tapi-path-computation:path-computation-context/path-comp-service=x"
             )),
             ("GET", (
@@ -164,39 +158,30 @@ class TestRejection:
         self, secured: TestClient
     ) -> None:
         """The walk above sees only documented operations. The bare /data/
-        mount and the short context aliases are hidden from the schema, so
-        each documented /restconf/data/ operation is also checked at its bare
-        and, for the three augment containers, its short form."""
-        aliases = (
-            "tapi-connectivity:connectivity-context",
-            "tapi-path-computation:path-computation-context",
-            "tapi-equipment:physical-context",
-        )
-        checked: set[str] = set()
+        mount is hidden from the schema, so each documented /restconf/data/
+        operation is also checked at its bare form."""
+        checked = 0
         for route, operations in secured.app.openapi()["paths"].items():
             if not route.startswith("/restconf/data/"):
                 continue
-            path = route.replace("{", "").replace("}", "")
-            hidden = {path.removeprefix("/restconf")}
-            for container in aliases:
-                long = f"/data/tapi-common:context/{container}"
-                if f"/restconf{long}" in path:
-                    short = path.replace(long, f"/data/{container}")
-                    hidden |= {short, short.removeprefix("/restconf")}
+            bare = route.replace("{", "").replace("}", "").removeprefix("/restconf")
             for method in operations:
-                for url in hidden:
-                    resp = secured.request(method.upper(), url)
-                    assert resp.status_code == 401, (method, url)
-                    checked.add(url)
-        # The short forms were reached, at both mounts.
-        for container in aliases:
-            assert f"/data/{container}" in checked
-            assert f"/restconf/data/{container}" in checked
-        # Without a token the walk is sure to hit a real route: with one, the
-        # hidden forms answer (the 401s above are not 404s in disguise).
-        for container in aliases:
-            resp = secured.get(f"/data/{container}", headers=_bearer(UI))
-            assert resp.status_code == 200, container
+                assert secured.request(method.upper(), bare).status_code == 401, (method, bare)
+                checked += 1
+        assert checked > 20
+
+    @pytest.mark.parametrize("root", ["", "/restconf"])
+    @pytest.mark.parametrize("container", [
+        "tapi-connectivity:connectivity-context",
+        "tapi-path-computation:path-computation-context",
+        "tapi-equipment:physical-context",
+    ])
+    def test_the_removed_short_context_paths_are_401_then_404(
+        self, secured: TestClient, root: str, container: str
+    ) -> None:
+        # Deny by default: no token, no route map — even for a path that is gone.
+        assert secured.get(f"{root}/data/{container}").status_code == 401
+        assert secured.get(f"{root}/data/{container}", headers=_bearer(UI)).status_code == 404
 
     def test_a_rejected_request_has_no_side_effect(
         self, secured: TestClient

@@ -12,28 +12,18 @@ with ``physical-context``. How GNPy elements map onto devices, equipment and
 spans is described in ``models/equipment.py``.
 
 Being an augment of ``/tapi-common:context``, the container's RESTCONF path
-is under the context (RFC 8040 §3.5.3). Every route is also served, hidden
-from OpenAPI, at the short ``/data/tapi-equipment:physical-context/…`` of
-earlier releases (see ``CONTAINER_PATHS``).
+is under the context (RFC 8040 §3.5.3).
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-router = APIRouter(prefix="/data", tags=["tapi-equipment"])
+#: The container's RESTCONF path: an augment of tapi-common:context, so
+#: module-qualified where the module changes (RFC 8040 §3.5.3).
+PREFIX = "/data/tapi-common:context/tapi-equipment:physical-context"
 
-#: Where the container is served, canonical first: the augment's RESTCONF
-#: path, then the short alias earlier releases served (hidden from OpenAPI).
-#: The routes below are relative to the container and mounted at each, at the
-#: end of this module.
-CONTAINER_PATHS = (
-    "/tapi-common:context/tapi-equipment:physical-context",
-    "/tapi-equipment:physical-context",
-)
-
-# The container's routes, relative to it; mounted on ``router`` below.
-_container = APIRouter()
+router = APIRouter(prefix=PREFIX, tags=["tapi-equipment"])
 
 
 def _dump(model) -> dict:
@@ -49,7 +39,7 @@ def physical_context_payload(ctx) -> dict:
     return _dump(ctx.physical_context())
 
 
-@_container.get("")
+@router.get("")
 async def get_physical_context(request: Request) -> dict:
     """Every device (with its equipment) and every physical span."""
     return {
@@ -57,13 +47,13 @@ async def get_physical_context(request: Request) -> dict:
     }
 
 
-@_container.get("/device")
+@router.get("/device")
 async def get_devices(request: Request) -> dict:
     devices = request.app.state.context.physical_context().device
     return {"tapi-equipment:device": [_dump(d) for d in devices]}
 
 
-@_container.get("/device={uuid}")
+@router.get("/device={uuid}")
 async def get_device(uuid: str, request: Request) -> dict:
     for device in request.app.state.context.physical_context().device:
         if device.uuid == uuid:
@@ -71,7 +61,7 @@ async def get_device(uuid: str, request: Request) -> dict:
     raise HTTPException(status_code=404, detail=f"device {uuid} not found")
 
 
-@_container.get("/device={device_uuid}/equipment={uuid}")
+@router.get("/device={device_uuid}/equipment={uuid}")
 async def get_equipment(device_uuid: str, uuid: str, request: Request) -> dict:
     for device in request.app.state.context.physical_context().device:
         if device.uuid != device_uuid:
@@ -83,20 +73,15 @@ async def get_equipment(device_uuid: str, uuid: str, request: Request) -> dict:
     raise HTTPException(status_code=404, detail=f"device {device_uuid} not found")
 
 
-@_container.get("/physical-span")
+@router.get("/physical-span")
 async def get_physical_spans(request: Request) -> dict:
     spans = request.app.state.context.physical_context().physical_span
     return {"tapi-equipment:physical-span": [_dump(s) for s in spans]}
 
 
-@_container.get("/physical-span={uuid}")
+@router.get("/physical-span={uuid}")
 async def get_physical_span(uuid: str, request: Request) -> dict:
     for span in request.app.state.context.physical_context().physical_span:
         if span.uuid == uuid:
             return {"tapi-equipment:physical-span": _dump(span)}
     raise HTTPException(status_code=404, detail=f"physical-span {uuid} not found")
-
-
-# After every route is declared: include_router copies the routes it is given.
-for _prefix, _documented in zip(CONTAINER_PATHS, (True, False), strict=True):
-    router.include_router(_container, prefix=_prefix, include_in_schema=_documented)

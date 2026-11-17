@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-_BASE = "/data/tapi-equipment:physical-context"
+_BASE = "/data/tapi-common:context/tapi-equipment:physical-context"
 _DEVICE_KEYS = {"uuid", "name", "equipment"}
 _EQUIPMENT_KEYS = {"uuid", "name", "actual-equipment"}
 

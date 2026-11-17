@@ -43,7 +43,7 @@ def _create_service(client: TestClient) -> str:
         }
     }
     r = client.post(
-        "/data/tapi-connectivity:connectivity-context/connectivity-service",
+        "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
         json=body,
     )
     assert r.status_code == 201, r.text

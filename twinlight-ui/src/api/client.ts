@@ -228,14 +228,14 @@ export class TapiApiClient {
     body: CreateConnectivityServiceRequest
   ): Promise<CreateConnectivityServiceResponse> {
     return this.post<CreateConnectivityServiceResponse>(
-      "/data/tapi-connectivity:connectivity-context/connectivity-service",
+      "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
       body
     );
   }
 
   getServices(): Promise<ConnectivityContextResponse> {
     return this.get<ConnectivityContextResponse>(
-      "/data/tapi-connectivity:connectivity-context/connectivity-service"
+      "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
     );
   }
 
@@ -244,20 +244,20 @@ export class TapiApiClient {
     body: UpdateConnectivityServiceRequest
   ): Promise<UpdateConnectivityServiceResponse> {
     return this.patch<UpdateConnectivityServiceResponse>(
-      `/data/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`,
+      `/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`,
       body
     );
   }
 
   deleteService(uuid: string): Promise<void> {
     return this.delete(
-      `/data/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`
+      `/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`
     );
   }
 
   getPhysicalContext(): Promise<PhysicalContextResponse> {
     return this.get<PhysicalContextResponse>(
-      "/data/tapi-equipment:physical-context"
+      "/data/tapi-common:context/tapi-equipment:physical-context"
     );
   }
 

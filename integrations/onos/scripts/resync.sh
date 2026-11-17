@@ -57,7 +57,7 @@ print(len([f for f in json.load(sys.stdin).get('flows', [])
 }
 
 twin_service_count() {
-  curl -sS "${TWIN_URL}/data/tapi-connectivity:connectivity-context/connectivity-service" \
+  curl -sS "${TWIN_URL}/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service" \
     | python3 -c "
 import json, sys
 print(len(json.load(sys.stdin)['tapi-connectivity:connectivity-context']['connectivity-service']))

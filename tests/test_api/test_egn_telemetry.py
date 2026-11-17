@@ -23,7 +23,7 @@ from tests.conftest import MeshRefs, _mesh_config, tapi_end_point
 from twinlight.app import create_app
 from twinlight.physics.ber_conversion import ber_to_q_db, gsnr_to_ber
 
-_SVC = "/data/tapi-connectivity:connectivity-context/connectivity-service"
+_SVC = "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 
 
 def _no_gnpy_propagation(monkeypatch: pytest.MonkeyPatch) -> None:

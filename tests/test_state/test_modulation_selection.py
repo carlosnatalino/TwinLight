@@ -159,7 +159,7 @@ def test_without_physics_the_most_robust_format_is_chosen(app) -> None:
     for ep in end_points:
         del ep["layer-protocol-constraint"]
     resp = app.post(
-        "/data/tapi-connectivity:connectivity-context/connectivity-service",
+        "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
         json={"end-point": end_points},
     )
     assert resp.status_code == 201

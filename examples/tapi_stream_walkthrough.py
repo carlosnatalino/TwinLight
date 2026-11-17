@@ -244,7 +244,7 @@ async def run(http: httpx.AsyncClient, opts: Options) -> int:
     resp = await http.get(f"{context}/tapi-oam:oam-context/oam-job")
     resp.raise_for_status()
     jobs = resp.json().get("tapi-oam:oam-job", [])
-    resp = await http.get(f"{root}/data/tapi-connectivity:connectivity-context/connectivity-service")
+    resp = await http.get(f"{root}/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service")
     resp.raise_for_status()
     services = {
         s["uuid"]: next((n["value"] for n in s.get("name", [])), s["uuid"])

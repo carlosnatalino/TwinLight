@@ -264,7 +264,7 @@ Settings. The *Services* page does not poll, so reload it after provisioning.
 
 ```bash
 # 1. establish that the twin has no such lightpath
-curl -s localhost:8080/data/tapi-connectivity:connectivity-context/connectivity-service \
+curl -s localhost:8080/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service \
   | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["tapi-connectivity:connectivity-context"]["connectivity-service"]), "services")'
 
 # 2. provision it FROM ONOS — a flow rule, nothing T-API in sight

@@ -50,7 +50,7 @@ class Twin:
             "/data/tapi-common:context/service-interface-point"
         )).json()["tapi-common:context"]["service-interface-point"]
         resp = await self.rest.post(
-            "/data/tapi-connectivity:connectivity-context/connectivity-service",
+            "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
             json={"tapi-connectivity:connectivity-service": {"end-point": [
                 tapi_end_point("a", sips[0]["uuid"]), tapi_end_point("z", sips[1]["uuid"]),
             ]}},

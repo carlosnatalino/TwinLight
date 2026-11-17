@@ -119,7 +119,7 @@ class TestRestconfErrors:
 
     def test_404_returns_yang_data_errors(self, app: TestClient) -> None:
         resp = app.get(
-            "/data/tapi-connectivity:connectivity-context/"
+            "/data/tapi-common:context/tapi-connectivity:connectivity-context/"
             "connectivity-service=nonexistent"
         )
         assert resp.status_code == 404

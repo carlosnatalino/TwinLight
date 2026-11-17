@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import MeshRefs, tapi_end_point
 from twinlight.models.connectivity import MCG_CSEP_SPEC, OTSIA_CSEP_SPEC
 
-_BASE = "/data/tapi-connectivity:connectivity-context"
+_BASE = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
 
 
 def _get_two_sip_uuids(app: TestClient) -> tuple[str, str]:

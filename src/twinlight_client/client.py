@@ -107,7 +107,7 @@ class TapiClient:
     async def get_connectivity_services(self) -> list[dict[str, Any]]:
         """Return the list of connectivity services (T-API standard endpoint)."""
         resp = await self._client.get(
-            "/data/tapi-connectivity:connectivity-context/connectivity-service"
+            "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
         )
         resp.raise_for_status()
         body = resp.json()

@@ -2,11 +2,9 @@
 
 ``tapi-connectivity``, ``tapi-path-computation`` and ``tapi-equipment`` augment
 ``/tapi-common:context``, so RFC 8040 §3.5.3 puts their data resources under
-``…/data/tapi-common:context/<module>:<container>/…``. Earlier releases served
-them as siblings of the context (``…/data/<module>:<container>/…``); those
-short forms stay as aliases, hidden from OpenAPI. These tests pin that the
-two forms are one resource: same routes, same bodies, same state, at both the
-RESTCONF root and the bare ``/data/`` mount.
+``…/data/tapi-common:context/<module>:<container>/…``, and that is the only
+place they are served. Earlier releases served them as siblings of the
+context (``…/data/<module>:<container>/…``); those short forms are gone.
 """
 
 from __future__ import annotations
@@ -21,23 +19,20 @@ from twinlight.app import create_app
 
 ROOTS = ("", "/restconf")
 
-#: module → (canonical, short alias), relative to the mount.
-CONTAINERS = {
-    "connectivity": (
-        "/data/tapi-common:context/tapi-connectivity:connectivity-context",
-        "/data/tapi-connectivity:connectivity-context",
-    ),
+#: module → its container's RESTCONF path, relative to the mount.
+LONG = {
+    "connectivity": "/data/tapi-common:context/tapi-connectivity:connectivity-context",
     "path-computation": (
-        "/data/tapi-common:context/tapi-path-computation:path-computation-context",
-        "/data/tapi-path-computation:path-computation-context",
+        "/data/tapi-common:context/tapi-path-computation:path-computation-context"
     ),
-    "equipment": (
-        "/data/tapi-common:context/tapi-equipment:physical-context",
-        "/data/tapi-equipment:physical-context",
-    ),
+    "equipment": "/data/tapi-common:context/tapi-equipment:physical-context",
 }
-LONG = {module: forms[0] for module, forms in CONTAINERS.items()}
-SHORT = {module: forms[1] for module, forms in CONTAINERS.items()}
+#: The short forms earlier releases served, which must now be gone.
+SHORT = {
+    "connectivity": "/data/tapi-connectivity:connectivity-context",
+    "path-computation": "/data/tapi-path-computation:path-computation-context",
+    "equipment": "/data/tapi-equipment:physical-context",
+}
 
 #: Every route of the three modules, relative to its container, with the
 #: methods it serves. The route-table test below checks this list against
@@ -96,15 +91,13 @@ def mesh(request: pytest.FixtureRequest, tmp_path: Path) -> TestClient:
 def admitted(mesh: TestClient) -> TestClient:
     """The mesh twin with two lightpaths and a path-comp-service.
 
-    Admitted through the short forms, which is how existing clients do it;
-    the mutation tests below cover the long forms.
     """
     refs = MeshRefs(mesh.app.state.context)
     for a in ("trx A", "trx B"):
-        resp = mesh.post(f"{SHORT['connectivity']}/connectivity-service",
+        resp = mesh.post(f"{ROOTS[-1]}{LONG['connectivity']}/connectivity-service",
                          json=_service_body(refs, a, "trx C"))
         assert resp.status_code == 201, resp.text
-    resp = mesh.post(f"{SHORT['path-computation']}/path-comp-service",
+    resp = mesh.post(f"{ROOTS[-1]}{LONG['path-computation']}/path-comp-service",
                      json=_pcs_body(refs, "trx A", "trx B"))
     assert resp.status_code == 201, resp.text
     return mesh
@@ -167,20 +160,27 @@ def _probe(app: TestClient, method: str, url: str) -> tuple[int, str]:
 class TestRouteTable:
     @pytest.mark.parametrize("root", ROOTS)
     @pytest.mark.parametrize("module", list(ROUTES))
-    def test_both_forms_serve_every_route_and_method(
+    def test_every_route_and_method_is_served(
         self, app: TestClient, root: str, module: str,
     ) -> None:
         for path, methods in ROUTES[module].items():
             concrete = path.replace("{device_uuid}", "x").replace("{uuid}", "x")
             for method in _METHODS:
                 long = _probe(app, method, f"{root}{LONG[module]}{concrete}")
-                short = _probe(app, method, f"{root}{SHORT[module]}{concrete}")
                 where = (method, f"{root}{LONG[module]}{path}")
-                assert long == short, where
                 if method in methods:
                     assert long != (404, "Not Found") and long[0] != 405, (where, long)
                 else:
                     assert long[0] == 405, (where, long)
+
+    @pytest.mark.parametrize("root", ROOTS)
+    @pytest.mark.parametrize("module", list(ROUTES))
+    def test_the_short_forms_are_gone(self, app: TestClient, root: str, module: str) -> None:
+        for path in ROUTES[module]:
+            concrete = path.replace("{device_uuid}", "x").replace("{uuid}", "x")
+            for method in _METHODS:
+                url = f"{root}{SHORT[module]}{concrete}"
+                assert _probe(app, method, url) == (404, "Not Found"), (method, url)
 
     def test_the_paths_follow_the_v2_6_tree(self) -> None:
         # RFC 8040 §3.5.3: the augment's top node is qualified with its own
@@ -194,43 +194,28 @@ class TestRouteTable:
                 assert ":" not in sub
 
 
-class TestLongFormEqualsShortForm:
+class TestCanonicalForm:
     @pytest.mark.parametrize("root", ROOTS)
-    def test_with_nothing_admitted(self, mesh: TestClient, root: str) -> None:
-        for module, url in _get_urls(mesh, admitted=False):
-            long = _get(mesh, f"{root}{LONG[module]}{url}")
-            assert long == _get(mesh, f"{root}{SHORT[module]}{url}"), (module, url)
-
-    @pytest.mark.parametrize("root", ROOTS)
-    def test_with_services_and_a_path_comp_service_admitted(
-        self, admitted: TestClient, root: str,
-    ) -> None:
+    def test_every_get_answers(self, admitted: TestClient, root: str) -> None:
         for module, url in _get_urls(admitted, admitted=True):
-            long = _get(admitted, f"{root}{LONG[module]}{url}")
-            assert long == _get(admitted, f"{root}{SHORT[module]}{url}"), (module, url)
-
-    def test_the_two_mounts_agree(self, admitted: TestClient) -> None:
-        for module, url in _get_urls(admitted, admitted=True):
-            assert _get(admitted, f"/restconf{LONG[module]}{url}") == _get(
-                admitted, f"{LONG[module]}{url}"
-            ), (module, url)
+            _get(admitted, f"{root}{LONG[module]}{url}")
 
     def test_the_containers_equal_the_full_context(self, admitted: TestClient) -> None:
-        full = _get(admitted, "/restconf/data/tapi-common:context")["tapi-common:context"]
+        root = ROOTS[-1]
+        full = _get(admitted, f"{root}/data/tapi-common:context")["tapi-common:context"]
         for module, path in LONG.items():
-            ((key, section),) = _get(admitted, f"/restconf{path}").items()
+            ((key, section),) = _get(admitted, f"{root}{path}").items()
             assert full[key] == section, module
 
     def test_percent_encoded_colons_route(self, app: TestClient) -> None:
-        encoded = LONG["equipment"].replace(":", "%3A")
-        assert _get(app, encoded) == _get(app, LONG["equipment"])
+        url = f"{ROOTS[-1]}{LONG['equipment']}"
+        assert _get(app, url.replace(":", "%3A")) == _get(app, url)
 
 
 class TestConnectivityContainerGet:
     @pytest.mark.parametrize("root", ROOTS)
-    @pytest.mark.parametrize("form", [0, 1], ids=["long", "short"])
-    def test_serves_the_container(self, admitted: TestClient, root: str, form: int) -> None:
-        container = CONTAINERS["connectivity"][form]
+    def test_serves_the_container(self, admitted: TestClient, root: str) -> None:
+        container = LONG["connectivity"]
         body = _get(admitted, f"{root}{container}")
         assert set(body) == {"tapi-connectivity:connectivity-context"}
         services = body["tapi-connectivity:connectivity-context"]["connectivity-service"]
@@ -239,10 +224,9 @@ class TestConnectivityContainerGet:
         assert body == _get(admitted, f"{root}{container}/connectivity-service")
 
     def test_empty(self, app: TestClient) -> None:
-        for container in CONTAINERS["connectivity"]:
-            assert _get(app, container) == {
-                "tapi-connectivity:connectivity-context": {"connectivity-service": []}
-            }
+        assert _get(app, f"{ROOTS[-1]}{LONG['connectivity']}") == {
+            "tapi-connectivity:connectivity-context": {"connectivity-service": []}
+        }
 
     def test_operational_state_is_refreshed_first(
         self, app: TestClient, monkeypatch: pytest.MonkeyPatch,
@@ -257,11 +241,10 @@ class TestConnectivityContainerGet:
 
         monkeypatch.setattr(ctx, "refresh_operational_states", counting)
         for root in ROOTS:
-            for container in CONTAINERS["connectivity"]:
-                for path in ("", "/connectivity-service"):
-                    before = len(calls)
-                    _get(app, f"{root}{container}{path}")
-                    assert len(calls) == before + 1, f"{root}{container}{path}"
+            for path in ("", "/connectivity-service"):
+                before = len(calls)
+                _get(app, f"{root}{LONG['connectivity']}{path}")
+                assert len(calls) == before + 1, f"{root}{path}"
 
 
 def _services(app: TestClient, root: str = "") -> dict[str, dict]:
@@ -274,77 +257,62 @@ def _services(app: TestClient, root: str = "") -> dict[str, dict]:
 
 @pytest.mark.parametrize("root", ROOTS)
 class TestConnectivityMutations:
-    @pytest.mark.parametrize(("write", "read"), [(0, 1), (1, 0)], ids=["long-to-short", "short-to-long"])
-    def test_create_read_replace_update_delete(
-        self, mesh: TestClient, root: str, write: int, read: int,
-    ) -> None:
+    def test_create_read_replace_update_delete(self, mesh: TestClient, root: str) -> None:
         refs = MeshRefs(mesh.app.state.context)
-        writes = f"{root}{CONTAINERS['connectivity'][write]}/connectivity-service"
-        reads = f"{root}{CONTAINERS['connectivity'][read]}/connectivity-service"
+        services = f"{root}{LONG['connectivity']}/connectivity-service"
 
-        resp = mesh.post(writes, json=_service_body(refs, "trx A", "trx C"))
+        resp = mesh.post(services, json=_service_body(refs, "trx A", "trx C"))
         assert resp.status_code == 201, resp.text
         assert resp.headers["content-type"].startswith("application/yang-data+json")
         uuid = resp.json()[_SVC_KEY]["uuid"]
 
-        mine = _get(mesh, f"{writes}={uuid}")
-        assert _get(mesh, f"{reads}={uuid}") == mine
+        mine = _get(mesh, f"{services}={uuid}")
         assert _services(mesh, root)[uuid] == mine[_SVC_KEY]
 
         # PUT: a full replacement to another source transceiver.
-        resp = mesh.put(f"{writes}={uuid}",
+        resp = mesh.put(f"{services}={uuid}",
                         json=_service_body(refs, "trx B", "trx C", uuid=uuid))
         assert resp.status_code == 200, resp.text
-        replaced = _get(mesh, f"{reads}={uuid}")[_SVC_KEY]
+        replaced = _get(mesh, f"{services}={uuid}")[_SVC_KEY]
         sip = replaced["end-point"][0]["service-interface-point"]["service-interface-point-uuid"]
         assert sip == refs.sip("trx B")
 
         # PATCH: a name.
-        name = [{"value-name": "service-name", "value": f"renamed-{write}"}]
-        resp = mesh.patch(f"{writes}={uuid}", json={"name": name})
+        name = [{"value-name": "service-name", "value": "renamed"}]
+        resp = mesh.patch(f"{services}={uuid}", json={"name": name})
         assert resp.status_code == 200, resp.text
-        assert _get(mesh, f"{reads}={uuid}")[_SVC_KEY]["name"] == name
+        assert _get(mesh, f"{services}={uuid}")[_SVC_KEY]["name"] == name
         assert _services(mesh, root)[uuid]["name"] == name
 
-        assert mesh.delete(f"{writes}={uuid}").status_code == 204
-        assert mesh.get(f"{reads}={uuid}").status_code == 404
-        assert mesh.delete(f"{reads}={uuid}").status_code == 404
+        assert mesh.delete(f"{services}={uuid}").status_code == 204
+        assert mesh.get(f"{services}={uuid}").status_code == 404
+        assert mesh.delete(f"{services}={uuid}").status_code == 404
         assert uuid not in _services(mesh, root)
-
-    def test_a_uuid_taken_on_one_form_conflicts_on_the_other(
-        self, mesh: TestClient, root: str,
-    ) -> None:
-        refs = MeshRefs(mesh.app.state.context)
-        long, short = (f"{root}{c}/connectivity-service" for c in CONTAINERS["connectivity"])
-        uuid = "8a6f3f5e-0000-4000-8000-000000000001"
-        body = _service_body(refs, "trx A", "trx C", uuid=uuid)
-        assert mesh.post(short, json=body).status_code == 201
-        assert mesh.post(long, json=body).status_code == 409
 
 
 @pytest.mark.parametrize("root", ROOTS)
 class TestPathCompServiceMutations:
-    @pytest.mark.parametrize(("write", "read"), [(0, 1), (1, 0)], ids=["long-to-short", "short-to-long"])
-    def test_create_read_delete(self, mesh: TestClient, root: str, write: int, read: int) -> None:
+    def test_create_read_delete(self, mesh: TestClient, root: str) -> None:
         refs = MeshRefs(mesh.app.state.context)
-        writes = f"{root}{CONTAINERS['path-computation'][write]}"
-        reads = f"{root}{CONTAINERS['path-computation'][read]}"
+        container = f"{root}{LONG['path-computation']}"
 
-        resp = mesh.post(f"{writes}/path-comp-service", json=_pcs_body(refs, "trx A", "trx B"))
+        resp = mesh.post(f"{container}/path-comp-service", json=_pcs_body(refs, "trx A", "trx B"))
         assert resp.status_code == 201, resp.text
         service = resp.json()[_PCS_KEY]
         path_uuid = service["path"][0]["path-uuid"]
 
-        assert _get(mesh, f"{reads}/path-comp-service={service['uuid']}") == {_PCS_KEY: service}
-        assert _get(mesh, f"{reads}/path={path_uuid}")
+        assert _get(mesh, f"{container}/path-comp-service={service['uuid']}") == {
+            _PCS_KEY: service
+        }
+        assert _get(mesh, f"{container}/path={path_uuid}")
         full = _get(mesh, f"{root}/data/tapi-common:context")["tapi-common:context"]
         section = full["tapi-path-computation:path-computation-context"]
         assert [s["uuid"] for s in section["path-comp-service"]] == [service["uuid"]]
 
-        assert mesh.delete(f"{writes}/path-comp-service={service['uuid']}").status_code == 204
-        assert mesh.get(f"{reads}/path-comp-service={service['uuid']}").status_code == 404
-        assert mesh.get(f"{reads}/path={path_uuid}").status_code == 404
-        assert _get(mesh, reads) == {
+        assert mesh.delete(f"{container}/path-comp-service={service['uuid']}").status_code == 204
+        assert mesh.get(f"{container}/path-comp-service={service['uuid']}").status_code == 404
+        assert mesh.get(f"{container}/path={path_uuid}").status_code == 404
+        assert _get(mesh, container) == {
             "tapi-path-computation:path-computation-context": {
                 "path-comp-service": [], "path": [],
             }
@@ -366,8 +334,7 @@ class TestErrorsOnTheLongForm:
         assert resp.headers["content-type"].startswith("application/yang-data+json")
         (error,) = resp.json()["ietf-restconf:errors"]["error"]
         assert error["error-tag"] == "data-missing"
-        short = app.get(f"{root}{url.replace('/tapi-common:context', '', 1)}")
-        assert (short.status_code, short.json()) == (resp.status_code, resp.json())
+        assert error["error-message"] != "Not Found"  # the handler's, not the router's
 
     @pytest.mark.parametrize("root", ROOTS)
     @pytest.mark.parametrize(("method", "module", "path"), [
@@ -384,24 +351,22 @@ class TestErrorsOnTheLongForm:
         assert long.status_code == 405
         assert long.headers["allow"]
         assert "ietf-restconf:errors" in long.json()
-        short = app.request(method, f"{root}{SHORT[module]}{path}", json={})
-        assert (short.status_code, short.headers["allow"]) == (405, long.headers["allow"])
 
     def test_422_on_a_malformed_body(self, app: TestClient) -> None:
-        resp = app.post(f"/restconf{LONG['connectivity']}/connectivity-service",
+        resp = app.post(f"{ROOTS[-1]}{LONG['connectivity']}/connectivity-service",
                         json={_SVC_KEY: [{"end-point": "nope"}]})
         assert resp.status_code == 422
         assert resp.headers["content-type"].startswith("application/yang-data+json")
         assert "ietf-restconf:errors" in resp.json()
 
     def test_sip_routes_are_not_shadowed(self, app: TestClient) -> None:
-        sips = _get(app, "/restconf/data/tapi-common:context/service-interface-point")
+        sips = _get(app, f"{ROOTS[-1]}/data/tapi-common:context/service-interface-point")
         uuid = sips["tapi-common:context"]["service-interface-point"][0]["uuid"]
-        _get(app, f"/restconf/data/tapi-common:context/service-interface-point={uuid}")
+        _get(app, f"{ROOTS[-1]}/data/tapi-common:context/service-interface-point={uuid}")
 
 
 class TestOpenApi:
-    def test_documents_the_long_forms_only(self, app: TestClient) -> None:
+    def test_documents_the_canonical_forms_only(self, app: TestClient) -> None:
         paths = app.get("/openapi.json").json()["paths"]
         for module, routes in ROUTES.items():
             for path, methods in routes.items():

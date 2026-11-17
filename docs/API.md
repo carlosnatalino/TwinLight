@@ -24,17 +24,29 @@ Endpoints fall into two groups, kept strictly apart (see
 > scheduled for removal — see [ROADMAP.md](ROADMAP.md). New clients should use
 > the RESTCONF root.
 
-> **The connectivity, path-computation and physical contexts are under the
-> context.** `tapi-connectivity`, `tapi-path-computation` and `tapi-equipment`
-> augment `/tapi-common:context`, so their RESTCONF paths are
-> `/data/tapi-common:context/<module>:<container>/…` (RFC 8040 §3.5.3), like
-> the topology, OAM and stream contexts; the tables below give that form. Each
-> of these routes is also served at the short
-> `/data/<module>:<container>/…` of earlier releases (for example
-> `/data/tapi-connectivity:connectivity-context/connectivity-service`), with
-> the same handlers, bodies and state, at both mounts. The short forms are
-> aliases: they are not in the OpenAPI schema, and they are scheduled for
-> removal together with the bare mount — see [ROADMAP.md](ROADMAP.md).
+> **Every augment of the context is under the context.** `tapi-topology`,
+> `tapi-connectivity`, `tapi-path-computation`, `tapi-equipment`, `tapi-oam`
+> and `tapi-streaming` augment `/tapi-common:context`, so their RESTCONF paths
+> are `/data/tapi-common:context/<module>:<container>/…` (RFC 8040 §3.5.3),
+> and that is the only place each is served. Earlier releases also served the
+> connectivity, path-computation and physical contexts at a short
+> `/data/<module>:<container>/…`; those paths are gone — see
+> [Migrating from earlier releases](#migrating-from-earlier-releases).
+
+## Migrating from earlier releases
+
+Each T-API resource has exactly one path, the one the v2.6.0 YANG gives it.
+Paths earlier releases served anywhere else are removed, not redirected, and
+answer `404` (`401` without a token when authentication is on):
+
+| Removed path | Standard path |
+|--------------|---------------|
+| `/data/tapi-connectivity:connectivity-context/…` | `/data/tapi-common:context/tapi-connectivity:connectivity-context/…` |
+| `/data/tapi-path-computation:path-computation-context/…` | `/data/tapi-common:context/tapi-path-computation:path-computation-context/…` |
+| `/data/tapi-equipment:physical-context/…` | `/data/tapi-common:context/tapi-equipment:physical-context/…` |
+
+Everything after the container is unchanged, and so are request and response
+bodies.
 
 ## Authentication
 

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import MeshRefs, tapi_end_point
 from twinlight.models.connectivity import MCG_CSEP_SPEC, OTSIA_CSEP_SPEC
 
-_SVC = "/data/tapi-connectivity:connectivity-context/connectivity-service"
+_SVC = "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 GRID_LOWER = 190_696_875_000_000   # 193.1 THz - 384.5 x 6.25 GHz
 SLOT = 6_250_000_000
 WIDTH = 9                          # 8 slots (50 GHz) + 1 guard

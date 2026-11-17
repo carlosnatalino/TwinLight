@@ -20,7 +20,7 @@ from twinlight.app import create_app
 from twinlight.models.connectivity import OTSIA_CSEP_SPEC
 
 _FIXTURES = Path(__file__).parents[2] / "twinlight-ui" / "src" / "__tests__" / "fixtures"
-_SVC = "/data/tapi-connectivity:connectivity-context/connectivity-service"
+_SVC = "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 
 
 def _request(name: str, ctx) -> dict:

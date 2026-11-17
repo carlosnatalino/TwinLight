@@ -31,7 +31,7 @@ def _create_service_via_api(client: TestClient) -> str:
             ],
         }
     }
-    base = "/data/tapi-connectivity:connectivity-context"
+    base = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
     r = client.post(f"{base}/connectivity-service", json=body)
     assert r.status_code == 201, r.text
     return r.json()["tapi-connectivity:connectivity-service"]["uuid"]

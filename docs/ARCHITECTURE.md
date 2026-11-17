@@ -201,7 +201,6 @@ src/twinlight_client/    Companion client library and CLI
 ### Creating a connectivity service
 
 `POST /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service`
-(or the short alias `/data/tapi-connectivity:connectivity-context/connectivity-service`)
 
 1. Resolve both endpoint SIP UUIDs to GNPy element UIDs via
    `TapiContext._sip_to_gnpy_uid` (populated at build time — `TapiBuilder`

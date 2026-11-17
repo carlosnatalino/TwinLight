@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import tapi_end_point
 
-_BASE = "/data/tapi-connectivity:connectivity-context"
+_BASE = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
 
 
 def _get_two_sips(app: TestClient) -> tuple[str, str]:

@@ -110,7 +110,7 @@ def _create_service(base: str, sips: list, modulation: str, attempts: int) -> bo
             }
         }
         req = urllib.request.Request(
-            f"{base}/data/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{base}/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
             data=json.dumps(body).encode(),
             method="POST",
             headers={"Content-Type": "application/json"},

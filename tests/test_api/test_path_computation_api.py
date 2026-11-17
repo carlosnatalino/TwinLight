@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import MeshRefs
 
-_BASE = "/data/tapi-path-computation:path-computation-context"
+_BASE = "/data/tapi-common:context/tapi-path-computation:path-computation-context"
 _SVC = f"{_BASE}/path-comp-service"
 _SVC_KEY = "tapi-path-computation:path-comp-service"
 

@@ -9,8 +9,13 @@ from tests.conftest import MeshRefs, _mesh_config, tapi_end_point
 from twinlight.app import create_app
 from twinlight.models.connectivity import MCG_CSEP_SPEC
 
-_SVC = "/data/tapi-connectivity:connectivity-context/connectivity-service"
-_PATH_COMP_SVC = "/data/tapi-path-computation:path-computation-context/path-comp-service"
+_SVC = (
+    "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+)
+_PATH_COMP_SVC = (
+    "/data/tapi-common:context/tapi-path-computation:path-computation-context"
+    "/path-comp-service"
+)
 
 
 class TestGetContext:
@@ -63,31 +68,26 @@ class TestGetSipByUuid:
 # The full-context GET carries every augment of /tapi-common:context the twin
 # serves. Each section must equal what that module's own GETs serve: rows
 # keyed by the module-qualified name (RFC 7951 §4), each with the URLs whose
-# response carries the same container under the same key. The first URL of
-# each row is the container's RESTCONF path (RFC 8040 §3.5.3: it is an augment
-# of tapi-common:context); the others are the short aliases earlier releases
-# served, and the connectivity-service list GET, which answers with the
-# container's envelope.
+# response carries the same container under the same key: the container's
+# RESTCONF path (RFC 8040 §3.5.3: it is an augment of tapi-common:context)
+# and, for connectivity, the connectivity-service list GET, which answers
+# with the container's envelope.
 _SECTIONS = {
     "tapi-topology:topology-context": [
         "/data/tapi-common:context/tapi-topology:topology-context",
     ],
     "tapi-connectivity:connectivity-context": [
         "/data/tapi-common:context/tapi-connectivity:connectivity-context",
-        "/data/tapi-connectivity:connectivity-context",
         (
             "/data/tapi-common:context/tapi-connectivity:connectivity-context"
             "/connectivity-service"
         ),
-        "/data/tapi-connectivity:connectivity-context/connectivity-service",
     ],
     "tapi-path-computation:path-computation-context": [
         "/data/tapi-common:context/tapi-path-computation:path-computation-context",
-        "/data/tapi-path-computation:path-computation-context",
     ],
     "tapi-equipment:physical-context": [
         "/data/tapi-common:context/tapi-equipment:physical-context",
-        "/data/tapi-equipment:physical-context",
     ],
     "tapi-oam:oam-context": [
         "/data/tapi-common:context/tapi-oam:oam-context",

@@ -50,7 +50,7 @@ import httpx
 from twinlight_client.credentials import add_token_argument, bearer_headers, resolve_token
 from twinlight_client.transparent import TransparentClient, TransparentError
 
-CONNECTIVITY = "/restconf/data/tapi-connectivity:connectivity-context"
+CONNECTIVITY = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
 OTSIA = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
 
 

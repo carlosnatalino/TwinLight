@@ -241,7 +241,7 @@ service-interface-point (SIP) UUIDs from
 `GET /data/tapi-common:context/service-interface-point`, then:
 
 ```bash
-curl -X POST http://localhost:8080/data/tapi-connectivity:connectivity-context/connectivity-service \
+curl -X POST http://localhost:8080/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service \
   -H "Content-Type: application/json" \
   -d '{
     "tapi-connectivity:connectivity-service": {
@@ -302,7 +302,7 @@ than requested, which the script reports per format.
 
 Then open the **Monitoring** page in the web UI, or follow one on the T-API
 measurement stream with `twinlight-client`. To clear them again, delete each service by UUID with
-`DELETE /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}`.
+`DELETE /data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}`.
 
 > **Why a printed GSNR differs from the admission figure.** Admission tests the
 > *static* QoT baseline, while the GSNR printed above is the *live* reading with

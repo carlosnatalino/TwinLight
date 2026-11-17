@@ -531,7 +531,7 @@ async def get_connectivity_context(request: Request) -> JSONResponse:
     try:
         payload = await _twin_get(
             request,
-            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{TWIN_DATA_ROOT}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
         )
     except TwinUnavailableError as exc:
         raise HTTPException(
@@ -641,7 +641,7 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
 
     try:
         response = await request.app.state.client.post(
-            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{TWIN_DATA_ROOT}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
             json=twin_body,
         )
     except httpx.HTTPError as exc:
@@ -697,7 +697,7 @@ async def delete_connectivity_service(uuid: str, request: Request) -> Response:
     """Delete a lightpath. ONOS treats only 204 as success."""
     try:
         response = await request.app.state.client.delete(
-            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context"
+            f"{TWIN_DATA_ROOT}/tapi-common:context/tapi-connectivity:connectivity-context"
             f"/connectivity-service={uuid}"
         )
     except httpx.HTTPError as exc:
