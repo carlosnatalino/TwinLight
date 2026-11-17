@@ -73,8 +73,10 @@ def quoted(uid: str) -> str:
 def print_qot(rows: list[dict[str, Any]]) -> None:
     for row in rows:
         cur, pred = row["current"] or {}, row["predicted"] or {}
+        # A service with no signal (link-failed, out-of-band) has a status, no GSNR.
+        before = f"{cur.get('gsnr_db')} dB" if cur.get("status") == "ok" else cur.get("status")
         print(
-            f"   {row['name'] or row['service']}: GSNR {cur.get('gsnr_db')} dB -> "
+            f"   {row['name'] or row['service']}: GSNR {before} -> "
             f"{pred.get('gsnr_db') if pred.get('status') == 'ok' else pred.get('status')}"
             f" (delta {row['delta_gsnr_db']}), required {row['required_gsnr_db']} dB, "
             f"margin {row['qot_margin_db']} dB: "

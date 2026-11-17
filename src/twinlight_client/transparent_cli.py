@@ -75,6 +75,18 @@ def _print_changes(changes: list[dict[str, Any]]) -> None:
         print(f"{verb:6} {c['path']}: {c['previous']} -> {c['value']}{unit}")
 
 
+def _no_signal(summary: dict[str, Any] | None) -> str | None:
+    """The status of a QoT summary with no signal (``link-failed``,
+    ``out-of-band``: any status but ``ok``), else None. The report gives such
+    a summary no numbers, so none is printed for it."""
+    status = (summary or {}).get("status")
+    return status if status not in (None, "ok") else None
+
+
+def _no_signal_text(status: str) -> str:
+    return "cut" if status == "link-failed" else "no signal"
+
+
 def _print_qot(rows: list[dict[str, Any]]) -> None:
     if not rows:
         print("no service is affected")
@@ -82,9 +94,11 @@ def _print_qot(rows: list[dict[str, Any]]) -> None:
     print(f"{'service':38} {'current':>9} {'predicted':>10} {'delta':>7}  verdict")
     for row in rows:
         cur = (row["current"] or {}).get("gsnr_db")
+        cur_status = _no_signal(row["current"])
         pred = row["predicted"] or {}
-        if pred.get("status") == "link-failed":
-            pred_text, verdict = "cut", "LINK FAILED"
+        if status := _no_signal(pred):
+            pred_text = _no_signal_text(status)
+            verdict = status.upper().replace("-", " ")  # LINK FAILED, OUT OF BAND
         else:
             pred_text = f"{pred.get('gsnr_db', float('nan')):.2f}"
             verdict = (
@@ -92,10 +106,14 @@ def _print_qot(rows: list[dict[str, Any]]) -> None:
                 else "below admission margin" if row["above_required"]
                 else "BELOW REQUIRED GSNR"
             )
+        cur_text = (
+            _no_signal_text(cur_status) if cur_status
+            else str(cur) if cur is None else f"{cur:.2f}"
+        )
         delta = row["delta_gsnr_db"]
         print(
             f"{row['name'] or row['service']:38} "
-            f"{cur if cur is None else f'{cur:.2f}':>9} {pred_text:>10} "
+            f"{cur_text:>9} {pred_text:>10} "
             f"{'' if delta is None else f'{delta:+.2f}':>7}  {verdict}"
         )
 
