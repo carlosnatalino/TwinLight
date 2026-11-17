@@ -321,6 +321,18 @@ below on the two-site example):
 answers *would the controller still admit it today* — judged against the
 candidate's `rmsa.qot_margin_db` when the change moves it.
 
+A service with no signal, before or after the change, reports the reason as its
+`status` and no numbers: `link-failed` when a fiber on its path is (or would be)
+cut, `out-of-band` when its block lies outside the band the amplifiers on its
+path pass, so the first of them drops the channel (only a service restored from
+a version-1 snapshot can be). Its summary is
+`{"status": "out-of-band", "gsnr_db": null, "osnr_db": null}`,
+`delta_gsnr_db` is null, and both flags are false. `link-failed` takes
+precedence when both hold, as in the OPM. No parameter the controller can write
+moves an amplifier's band, so a service out of band stays out of band in every
+prediction. `twinlight-transparent validate --qot` prints the status as the
+verdict (`LINK FAILED`, `OUT OF BAND`) and no GSNR.
+
 How it works (`TapiContext.preview_qot`): under the propagation lock, every
 changed attribute is captured, written to the live element, the affected
 allocated paths are propagated by the backend, and every attribute is restored

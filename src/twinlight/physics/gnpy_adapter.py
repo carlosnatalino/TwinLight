@@ -60,8 +60,9 @@ class OpmBaseline:
     pdl_elements: list[tuple[str, str]] = field(default_factory=list)
     # Non-OK propagation state. ``None`` means the metrics above are valid
     # GNPy-computed values; ``"link-failed"`` means an element on the path
-    # (e.g. a failed fiber) prevented propagation and the numeric fields are
-    # sentinel zeros — callers must check ``status`` before reporting metrics.
+    # (e.g. a failed fiber) prevented propagation, ``"out-of-band"`` that an
+    # amplifier drops the channel; either way the numeric fields are sentinel
+    # zeros — callers must check ``status`` before reporting metrics.
     status: str | None = None
 
 

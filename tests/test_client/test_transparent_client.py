@@ -6,16 +6,20 @@ twin with no server.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import MeshRefs, tapi_end_point
 from tests.test_api.test_config_api import _create_service_via_api
+from twinlight.models.connectivity import ConnectivityService
 from twinlight_client.transparent import (
     TransparentClient,
     TransparentError,
     path_url,
 )
-from twinlight_client.transparent_cli import _parse_assignment, main
+from twinlight_client.transparent_cli import _parse_assignment, _print_qot, main
 
 FWD_FIBER = "fiber (Brest → Morlaix)-F"
 
@@ -123,3 +127,85 @@ class TestCli:
     ) -> None:
         assert main(["set", "/Config/rmsa/qot_margin_db=-1"], client=gnpy_app) == 2
         assert "must be >= 0" in capsys.readouterr().err
+
+
+class TestCliNoSignal:
+    """``validate --qot`` for a service with no signal: the status as the
+    verdict, never a number, on both backends."""
+
+    @staticmethod
+    def _twin(tmp_path, backend: str) -> TestClient:
+        from tests.conftest import _mesh_config
+        from twinlight.app import create_app
+
+        return TestClient(create_app(_mesh_config(tmp_path, backend)))
+
+    @staticmethod
+    def _fiber_on(client: TestClient, uuid: str) -> str:
+        ctx = client.app.state.context
+        path = ctx._allocated_path_uids(uuid)
+        fibers = set(ctx._backend.route_fibers(path))
+        return next(uid for uid in path if uid in fibers)
+
+    @staticmethod
+    def _row(out: str, uuid: str) -> list[str]:
+        [line] = [ln for ln in out.splitlines() if ln.startswith(uuid)]
+        return line[len(uuid):].split()
+
+    @pytest.mark.parametrize("backend", ["egn", "gnpy"])
+    def test_out_of_band(
+        self, backend: str, tmp_path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from tests.test_state.test_snapshot import _v1_snapshot
+
+        client = self._twin(tmp_path, backend)
+        snapshot = tmp_path / "v1.json"
+        uuid = _v1_snapshot(client.app.state.context, snapshot)
+        assert client.post("/admin/restore", json={"path": str(snapshot)}).status_code == 200
+        fiber = self._fiber_on(client, uuid)
+        assert main(["set", "--candidate", f'/ElementList/"{fiber}"/loss_coef=0.25'],
+                    client=client) == 0
+        capsys.readouterr()
+        assert main(["validate", "--qot"], client=client) == 0
+        assert self._row(capsys.readouterr().out, uuid) == [
+            "no", "signal", "no", "signal", "OUT", "OF", "BAND"]
+
+    @pytest.mark.parametrize("backend", ["egn", "gnpy"])
+    def test_link_failed(
+        self, backend: str, tmp_path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        client = self._twin(tmp_path, backend)
+        refs = MeshRefs(client.app.state.context)
+        svc = ConnectivityService.model_validate({"end-point": [
+            tapi_end_point("a", refs.sip("trx A")), tapi_end_point("z", refs.sip("trx C"))]})
+        asyncio.run(client.app.state.context.add_service(svc))
+        fiber = self._fiber_on(client, svc.uuid)
+        assert main(["set", "--candidate", f'/ElementList/"{fiber}"/failed=true'],
+                    client=client) == 0
+        capsys.readouterr()
+        assert main(["validate", "--qot"], client=client) == 0
+        current, *rest = self._row(capsys.readouterr().out, svc.uuid)
+        assert float(current) > 0
+        assert rest == ["cut", "LINK", "FAILED"]
+
+
+class TestPrintQot:
+    @staticmethod
+    def _row(current: dict | None, predicted: dict | None) -> dict:
+        return {"service": "s", "name": "svc", "current": current, "predicted": predicted,
+                "delta_gsnr_db": None, "above_required": False,
+                "meets_admission_margin": False}
+
+    @pytest.mark.parametrize(("status", "cell", "verdict"), [
+        ("link-failed", "cut", "LINK FAILED"),
+        ("out-of-band", "no signal", "OUT OF BAND"),
+        ("some-future-status", "no signal", "SOME FUTURE STATUS"),
+    ])
+    def test_no_signal_prints_no_number(
+        self, status: str, cell: str, verdict: str, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        none = {"status": status, "gsnr_db": None, "osnr_db": None}
+        _print_qot([self._row(none, none)])
+        line = capsys.readouterr().out.splitlines()[1]
+        assert line.split(None, 1)[1].split() == [*cell.split(), *cell.split(), *verdict.split()]
+        assert not any(ch.isdigit() for ch in line)
