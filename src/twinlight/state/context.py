@@ -1664,6 +1664,45 @@ class TapiContext:
         _edges, start, width = allocation
         return assignable is not None and not assignable[start:start + width].all()
 
+    def _no_signal_status(
+        self, uuid: str, path: list[str], failed: set[str],
+    ) -> str | None:
+        """Why the service's channel carries no signal, or None if it does.
+
+        The one rule for "no signal", shared by the OPM baseline and the QoT
+        what-if, in precedence order:
+
+        * ``link-failed`` — a fiber on the route is in ``failed`` (the
+          current failures, or those a what-if would leave);
+        * ``out-of-band`` — the block lies outside the band every amplifier
+          on the route passes, so the first of them drops the channel. Only
+          a restored snapshot from before the band was enforced holds one.
+
+        The band test reads only the service's allocation and the
+        amplifiers' bands (GNPy's ``Edfa.params.bands``; the EGN backend's
+        copy of them, taken at load). No runtime-writable attribute changes
+        either: the element allow-lists (``element_params``, the EGN
+        backend's) write gains, attenuations, power targets, noise figure
+        and PMD, never a band, and the spectrum grid is restart-only. A
+        what-if can therefore evaluate it against the current state.
+        """
+        if any(uid in failed for uid in path):
+            return "link-failed"
+        if self._out_of_band(uuid):
+            return "out-of-band"
+        return None
+
+    @staticmethod
+    def _no_signal_baseline(status: str) -> OpmBaseline:
+        """A sentinel baseline for a channel with no signal: ``status`` set,
+        every number 0.0. Readers check ``status`` before any number."""
+        from twinlight.physics.gnpy_adapter import OpmBaseline
+
+        return OpmBaseline(
+            gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
+            latency_ms=0.0, total_fiber_km=0.0, status=status,
+        )
+
     def _line_load(self, exclude: str | None = None) -> list[LitChannel]:
         """The admitted lightpaths' channels (all but ``exclude``), for a
         backend that models the actual line load; empty for one that
@@ -1712,28 +1751,12 @@ class TapiContext:
         if not path:
             return None
 
-        # Link-failure short-circuit: any UID on the path is in
-        # ``_failed_links`` → emit a sentinel baseline so the OPM layer can
-        # report ``status="link-failed"`` without invoking GNPy propagation
-        # (which would crash on a missing edge anyway).
-        if self.is_path_failed(path):
-            from twinlight.physics.gnpy_adapter import OpmBaseline
-
-            return OpmBaseline(
-                gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
-                latency_ms=0.0, total_fiber_km=0.0, status="link-failed",
-            )
-        # A channel outside the band its amplifiers pass is dropped by the
-        # first of them: there is nothing to propagate, and reporting mock
-        # values would hide it. Only a restored snapshot from before the band
-        # was enforced holds one.
-        if self._out_of_band(svc.uuid):
-            from twinlight.physics.gnpy_adapter import OpmBaseline
-
-            return OpmBaseline(
-                gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0, pmd_ps=0.0,
-                latency_ms=0.0, total_fiber_km=0.0, status="out-of-band",
-            )
+        # No-signal short-circuit (link-failed, out-of-band): emit a sentinel
+        # baseline so the OPM layer reports the status without invoking
+        # propagation, which would crash on a missing edge or drop the channel.
+        status = self._no_signal_status(svc.uuid, path, self._failed_links)
+        if status is not None:
+            return self._no_signal_baseline(status)
 
         async with self._propagation_lock:
             # Re-check after acquiring lock (another coroutine may have computed it)
@@ -2057,7 +2080,10 @@ class TapiContext:
         every written attribute is restored from its capture token in a
         ``finally``. Failure changes are evaluated hypothetically — a path
         through a fiber that would be failed reports ``link-failed`` — so the
-        routing graphs are never touched.
+        routing graphs are never touched. A service with no signal before or
+        after (:meth:`_no_signal_status`: ``link-failed``, ``out-of-band``)
+        is reported with its status and null values, no delta, both flags
+        false.
 
         The whole write → propagate → restore sequence runs under
         ``_propagation_lock`` and the backends' ``compute_baseline`` does not
@@ -2116,14 +2142,8 @@ class TapiContext:
                     path = self._allocated_path_uids(svc.uuid)
                     if not path:
                         predicted[svc.uuid] = None
-                    elif any(uid in failed_after for uid in path):
-                        from twinlight.physics.gnpy_adapter import OpmBaseline
-
-                        predicted[svc.uuid] = OpmBaseline(
-                            gsnr_db=0.0, osnr_ase_db=0.0, cd_ps_nm=0.0,
-                            pmd_ps=0.0, latency_ms=0.0, total_fiber_km=0.0,
-                            status="link-failed",
-                        )
+                    elif status := self._no_signal_status(svc.uuid, path, failed_after):
+                        predicted[svc.uuid] = self._no_signal_baseline(status)
                     else:
                         centre_hz, width_hz, power_dbm = self._service_channel(svc, path)
                         try:
@@ -2146,8 +2166,8 @@ class TapiContext:
         def summary(b: OpmBaseline | None) -> dict[str, Any] | None:
             if b is None:
                 return None
-            if b.status == "link-failed":
-                return {"status": "link-failed", "gsnr_db": None, "osnr_db": None}
+            if b.status is not None:  # no signal (link-failed, out-of-band): no numbers
+                return {"status": b.status, "gsnr_db": None, "osnr_db": None}
             return {
                 "status": b.status or "ok",
                 "gsnr_db": round(b.gsnr_db, 4),
