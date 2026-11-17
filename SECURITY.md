@@ -8,6 +8,9 @@ gNMI call needs one of those bearer tokens; without it, both interfaces are
 open. Neither interface implements authorization scopes or TLS, so a token
 travels in plaintext and any accepted token may do anything. Tokens keep
 unintended clients off the twin, not attackers who can observe the network.
+The web UI asks the user for a token when the twin needs one and keeps it in
+the browser tab's session storage only, until the tab or browser is closed;
+no token is ever delivered to it through its `config.js` or any other file.
 On an open twin the `/admin/`, `/config/` and `/transparent/` planes let any
 client with network access mutate twin state and write snapshot files.
 `/transparent/` in particular can change every parameter the twin models.

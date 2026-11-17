@@ -31,19 +31,43 @@ Run these from `twinlight-ui/`, or from the repository root with
 2. Open <http://localhost:5173>
 3. Go to **Settings** and enter the twin's base URL (default
    `http://localhost:8080`)
-4. If the twin has authentication on (`TWINLIGHT_API_TOKENS` is set), enter
-   one of its tokens under **API Token** and click **Save token**. The header
-   shows *Token required* until you do.
+4. If the twin has authentication on (`TWINLIGHT_API_TOKENS` is set), the UI
+   asks for one of its tokens in a dialog the first time a call needs it (see
+   below). Dismiss it and the header shows *Token required*; the banner's
+   **Enter token** or **Settings → API Token** asks again.
 5. Click **Test Connection**, then **Refresh** on any page to load data
+
+The UI reads the twin's RESTCONF root from `/.well-known/host-meta` once per
+base URL (RFC 8040 §3.1) and sends its T-API requests under it
+(`/restconf/data/…` by default); it does not assume `/restconf`.
 
 ### API token
 
-The token is sent as `Authorization: Bearer <token>` on every request and is
-saved with the other settings in this browser's localStorage. It is never
-injected through `TWIN_URL`/`config.js` like the base URL is: anything there
-can be read by whoever can load the UI. **Test Connection** checks the token
-as typed, before it is saved, through `GET /internal/whoami`. `/health` is
-public, so it cannot tell whether a token is accepted.
+The token is sent as `Authorization: Bearer <token>` on every request.
+
+- **Asked for when needed.** On start-up, and on every connection check, the
+  UI calls `GET /health` (public) and then `GET /internal/whoami`. A `401`
+  there means the twin needs a token, or rejected the one in use, and the UI
+  opens a token dialog over whatever page is shown. A twin with
+  authentication off answers `whoami` with `"authentication": "disabled"` and
+  never triggers it. Pages wait for that check (and for the token, if one is
+  needed) before they load, because finding the twin's RESTCONF root
+  (`/.well-known/host-meta`) also needs the token.
+- **Checked before it is kept.** The dialog tries the token against
+  `/internal/whoami`; a rejected one is reported and nothing is stored. An
+  accepted one is kept and the pages that were waiting load, with no refresh.
+- **Dismissible.** *Not now* (or Escape) closes the dialog for this twin and
+  token: polling does not reopen it. The banner's **Enter token**, Settings,
+  or a change (a token that worked being rejected later) asks again.
+- **Kept for the session.** The token lives in this browser tab's
+  `sessionStorage`: a reload keeps it, closing the tab or browser forgets it.
+  It is never written to `localStorage` (a token an earlier build left there
+  is moved into the session once and deleted), never read from a file or
+  from `config.js` — anything there can be read by whoever can load the UI —
+  and never put in a URL or an error message. Where `sessionStorage` is
+  blocked, it is kept in memory for the page instead.
+- **Settings → API Token** changes it, or clears it with an empty field.
+  **Test Connection** checks the token as typed, before it is saved.
 
 ### CORS
 

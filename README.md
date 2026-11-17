@@ -452,8 +452,12 @@ twinlight-client                                   # REST and gNMI, token from .
 
 A request without a valid token gets `401` with a `WWW-Authenticate: Bearer`
 challenge; a gNMI call gets `UNAUTHENTICATED`. With no tokens configured the
-check is not installed at all, so an open twin pays nothing for it. In the web
-UI, enter the token under **Settings → API Token**. In the Compose stack, put
+check is not installed at all, so an open twin pays nothing for it. The web UI
+asks for a token when the twin needs one (it answers `401` to
+`GET /internal/whoami`), checks it before accepting it, and keeps it in that
+browser tab's session storage until the tab or browser is closed; it never
+reads a token from a file or from its `config.js`, and never writes one to
+`localStorage`. **Settings → API Token** changes or clears it. In the Compose stack, put
 `TWINLIGHT_API_TOKENS` in a `.env` next to `docker-compose.yml`; Compose passes
 it to the twin. To keep Prometheus scraping, follow the comment in
 [`docker/prometheus.yml`](docker/prometheus.yml).

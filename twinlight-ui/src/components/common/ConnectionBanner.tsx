@@ -3,7 +3,7 @@ import { AlertTriangle, Lock, WifiOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 export default function ConnectionBanner() {
-  const { status, baseUrl, apiToken } = useConnectionStore();
+  const { status, baseUrl, apiToken, requestToken } = useConnectionStore();
   const navigate = useNavigate();
 
   if (status === "connected" || status === "checking") return null;
@@ -18,8 +18,14 @@ export default function ConnectionBanner() {
             : `The DT at ${baseUrl} requires an API token.`}
         </span>
         <button
-          onClick={() => navigate("/settings")}
+          onClick={() => requestToken({ force: true })}
           className="ml-auto underline hover:no-underline"
+        >
+          Enter token
+        </button>
+        <button
+          onClick={() => navigate("/settings")}
+          className="underline hover:no-underline"
         >
           Settings
         </button>

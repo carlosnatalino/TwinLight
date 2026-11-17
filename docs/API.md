@@ -138,7 +138,8 @@ request authenticated as:
 With authentication off, it returns `{"principal": null, "authentication":
 "disabled"}`. With authentication on, a request without a valid token gets 401,
 which makes it a cheap credential check. The web UI uses it as its connection
-probe.
+probe: a `401` there is what makes it ask the user for a token (kept in that
+browser tab's session storage until it is closed, never read from a file).
 
 When tokens are configured, the OpenAPI schema declares the bearer scheme
 (`components.securitySchemes.bearerAuth`) and marks `/health` `security: []`.
