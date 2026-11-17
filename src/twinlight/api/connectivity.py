@@ -313,19 +313,30 @@ def _connectivity_service_payload(ctx, svc) -> dict:
     return payload
 
 
-@router.get(f"{_BASE}/connectivity-service")
-async def get_services(request: Request) -> dict:
-    """Return all connectivity services, with assigned spectrum when held."""
-    ctx = request.app.state.context
+async def connectivity_context_payload(ctx) -> dict:
+    """The ``tapi-connectivity:connectivity-context`` container.
+
+    One function for both views of it, this module's list GET and the full
+    context GET (``api/common.py``), so the two cannot disagree. Assembled
+    per request: each service carries live spectrum and an
+    operational-state that follows the current QoT.
+    """
     # operational-state follows the current QoT: re-evaluate what a change
     # (a parameter write, a failure, a neighbour) invalidated.
     await ctx.refresh_operational_states()
     return {
-        "tapi-connectivity:connectivity-context": {
-            "connectivity-service": [
-                _connectivity_service_payload(ctx, s) for s in ctx.get_services()
-            ]
-        }
+        "connectivity-service": [
+            _connectivity_service_payload(ctx, s) for s in ctx.get_services()
+        ]
+    }
+
+
+@router.get(f"{_BASE}/connectivity-service")
+async def get_services(request: Request) -> dict:
+    """Return all connectivity services, with assigned spectrum when held."""
+    ctx = request.app.state.context
+    return {
+        "tapi-connectivity:connectivity-context": await connectivity_context_payload(ctx)
     }
 
 

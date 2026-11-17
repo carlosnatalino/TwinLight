@@ -103,10 +103,17 @@ that sends one, or read the schema with `curl -H "Authorization: Bearer …"`.
 | GET | `/data/tapi-common:context/service-interface-point` |
 | GET | `/data/tapi-common:context/service-interface-point={uuid}` |
 
-The context is the northbound entry point: it carries the service-interface-point
-(SIP) list, the topology context, the OAM context and the stream context. Each SIP's `name` list
-carries the underlying GNPy element UID under the value-name `node-name`, which
-is how SIPs map back to physical elements.
+The context is the northbound entry point. `GET /data/tapi-common:context`
+returns the whole tree in one response, which is what a T-API client reads for
+its initial sync: the service-interface-point (SIP) list and every augment of
+the context the twin serves — `tapi-topology:topology-context`,
+`tapi-connectivity:connectivity-context`,
+`tapi-path-computation:path-computation-context`,
+`tapi-equipment:physical-context`, `tapi-oam:oam-context` and
+`tapi-streaming:stream-context`. Each section is exactly what that module's own
+GET returns (built by the same function), so a client may read either. Each
+SIP's `name` list carries the underlying GNPy element UID under the value-name
+`node-name`, which is how SIPs map back to physical elements.
 
 ### Topology
 
