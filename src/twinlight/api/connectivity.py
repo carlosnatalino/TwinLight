@@ -1,8 +1,18 @@
-"""TAPI Connectivity API endpoints.
+"""T-API v2.6.0 connectivity (``tapi-connectivity:connectivity-context``).
 
-POST /data/tapi-connectivity:connectivity-context/connectivity-service
-GET  /data/tapi-connectivity:connectivity-context/connectivity-service
-GET  /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}
+GET    /data/tapi-common:context/tapi-connectivity:connectivity-context
+GET    …/connectivity-service
+POST   …/connectivity-service
+GET    …/connectivity-service={uuid}
+PUT    …/connectivity-service={uuid}
+PATCH  …/connectivity-service={uuid}
+DELETE …/connectivity-service={uuid}
+
+``tapi-connectivity`` augments ``/tapi-common:context`` with
+``connectivity-context``, so RFC 8040 §3.5.3 puts its data resource under
+the context. Every route is also served, hidden from OpenAPI, at the short
+``/data/tapi-connectivity:connectivity-context/…`` of earlier releases (see
+``CONTAINER_PATHS``).
 """
 
 from __future__ import annotations
@@ -30,7 +40,18 @@ from twinlight.state.context import (
 
 router = APIRouter(prefix="/data", tags=["tapi-connectivity"])
 
-_BASE = "/tapi-connectivity:connectivity-context"
+#: Where the container is served, canonical first: the augment's RESTCONF
+#: path (RFC 8040 §3.5.3: a node is module-qualified where its module
+#: differs from its parent's), then the short alias earlier releases served.
+#: The routes below are relative to the container and mounted at each, at the
+#: end of this module; the alias is hidden from OpenAPI.
+CONTAINER_PATHS = (
+    "/tapi-common:context/tapi-connectivity:connectivity-context",
+    "/tapi-connectivity:connectivity-context",
+)
+
+# The container's routes, relative to it; mounted on ``router`` below.
+_container = APIRouter()
 
 
 def _single_service(body: dict) -> dict:
@@ -230,8 +251,8 @@ def _parse_service(body: dict) -> ConnectivityService:
     return svc
 
 
-@router.post(
-    f"{_BASE}/connectivity-service",
+@_container.post(
+    "/connectivity-service",
     status_code=status.HTTP_201_CREATED,
 )
 async def create_service(body: dict, request: Request) -> dict:
@@ -331,16 +352,27 @@ async def connectivity_context_payload(ctx) -> dict:
     }
 
 
-@router.get(f"{_BASE}/connectivity-service")
-async def get_services(request: Request) -> dict:
-    """Return all connectivity services, with assigned spectrum when held."""
+@_container.get("")
+async def get_connectivity_context(request: Request) -> dict:
+    """The whole connectivity context: every service, with live spectrum."""
     ctx = request.app.state.context
     return {
         "tapi-connectivity:connectivity-context": await connectivity_context_payload(ctx)
     }
 
 
-@router.get(f"{_BASE}/connectivity-service={{uuid}}")
+@_container.get("/connectivity-service")
+async def get_services(request: Request) -> dict:
+    """Return all connectivity services, with assigned spectrum when held.
+
+    Answers with the container's envelope, the same body as the container
+    GET, as it always has: the UI, the client library and the ONOS adapter
+    read it that way.
+    """
+    return await get_connectivity_context(request)
+
+
+@_container.get("/connectivity-service={uuid}")
 async def get_service(uuid: str, request: Request) -> dict:
     """Return one connectivity service, with assigned spectrum when held."""
     ctx = request.app.state.context
@@ -355,7 +387,7 @@ async def get_service(uuid: str, request: Request) -> dict:
     }
 
 
-@router.put(f"{_BASE}/connectivity-service={{uuid}}")
+@_container.put("/connectivity-service={uuid}")
 async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     """Replace a connectivity service by UUID (full replacement).
 
@@ -399,7 +431,7 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     }
 
 
-@router.patch(f"{_BASE}/connectivity-service={{uuid}}")
+@_container.patch("/connectivity-service={uuid}")
 async def update_service(
     uuid: str, body: UpdateConnectivityServiceRequest, request: Request
 ) -> dict:
@@ -424,8 +456,8 @@ async def update_service(
     }
 
 
-@router.delete(
-    f"{_BASE}/connectivity-service={{uuid}}",
+@_container.delete(
+    "/connectivity-service={uuid}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_service(uuid: str, request: Request) -> None:
@@ -437,3 +469,8 @@ async def delete_service(uuid: str, request: Request) -> None:
         raise HTTPException(
             status_code=404, detail=f"Service {uuid} not found"
         )
+
+
+# After every route is declared: include_router copies the routes it is given.
+for _prefix, _documented in zip(CONTAINER_PATHS, (True, False), strict=True):
+    router.include_router(_container, prefix=_prefix, include_in_schema=_documented)

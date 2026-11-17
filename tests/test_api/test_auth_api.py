@@ -106,6 +106,33 @@ class TestRejection:
             ("GET", "/data/tapi-path-computation:path-computation-context/path"),
             ("GET", "/data/tapi-equipment:physical-context/device"),
             ("GET", "/data/tapi-equipment:physical-context/physical-span"),
+            # The same three contexts at their YANG paths, under the context.
+            ("GET", "/data/tapi-common:context/tapi-connectivity:connectivity-context"),
+            ("GET", "/restconf/data/tapi-connectivity:connectivity-context"),
+            ("POST", (
+                "/restconf/data/tapi-common:context"
+                "/tapi-connectivity:connectivity-context/connectivity-service"
+            )),
+            ("PATCH", (
+                "/restconf/data/tapi-common:context"
+                "/tapi-connectivity:connectivity-context/connectivity-service=x"
+            )),
+            ("DELETE", (
+                "/data/tapi-common:context"
+                "/tapi-connectivity:connectivity-context/connectivity-service=x"
+            )),
+            ("POST", (
+                "/restconf/data/tapi-common:context"
+                "/tapi-path-computation:path-computation-context/path-comp-service"
+            )),
+            ("DELETE", (
+                "/data/tapi-common:context"
+                "/tapi-path-computation:path-computation-context/path-comp-service=x"
+            )),
+            ("GET", (
+                "/restconf/data/tapi-common:context"
+                "/tapi-equipment:physical-context/device=x/equipment=y"
+            )),
             # Unknown paths too: a 404 would map the API for an anonymous probe.
             ("GET", "/no/such/route"),
             # Exact matches only.
@@ -132,6 +159,44 @@ class TestRejection:
                 assert resp.status_code == 401, (method, route)
                 checked += 1
         assert checked > 50  # the walk did reach the API
+
+    def test_routes_hidden_from_the_schema_are_protected(
+        self, secured: TestClient
+    ) -> None:
+        """The walk above sees only documented operations. The bare /data/
+        mount and the short context aliases are hidden from the schema, so
+        each documented /restconf/data/ operation is also checked at its bare
+        and, for the three augment containers, its short form."""
+        aliases = (
+            "tapi-connectivity:connectivity-context",
+            "tapi-path-computation:path-computation-context",
+            "tapi-equipment:physical-context",
+        )
+        checked: set[str] = set()
+        for route, operations in secured.app.openapi()["paths"].items():
+            if not route.startswith("/restconf/data/"):
+                continue
+            path = route.replace("{", "").replace("}", "")
+            hidden = {path.removeprefix("/restconf")}
+            for container in aliases:
+                long = f"/data/tapi-common:context/{container}"
+                if f"/restconf{long}" in path:
+                    short = path.replace(long, f"/data/{container}")
+                    hidden |= {short, short.removeprefix("/restconf")}
+            for method in operations:
+                for url in hidden:
+                    resp = secured.request(method.upper(), url)
+                    assert resp.status_code == 401, (method, url)
+                    checked.add(url)
+        # The short forms were reached, at both mounts.
+        for container in aliases:
+            assert f"/data/{container}" in checked
+            assert f"/restconf/data/{container}" in checked
+        # Without a token the walk is sure to hit a real route: with one, the
+        # hidden forms answer (the 401s above are not 404s in disguise).
+        for container in aliases:
+            resp = secured.get(f"/data/{container}", headers=_bearer(UI))
+            assert resp.status_code == 200, container
 
     def test_a_rejected_request_has_no_side_effect(
         self, secured: TestClient

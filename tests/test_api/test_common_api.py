@@ -61,23 +61,42 @@ class TestGetSipByUuid:
 
 
 # The full-context GET carries every augment of /tapi-common:context the twin
-# serves. Each section must equal what that module's own GET serves: one
-# row per section, keyed by the module-qualified name (RFC 7951 §4), with the
-# URL whose response carries the same container under the same key.
+# serves. Each section must equal what that module's own GETs serve: rows
+# keyed by the module-qualified name (RFC 7951 §4), each with the URLs whose
+# response carries the same container under the same key. The first URL of
+# each row is the container's RESTCONF path (RFC 8040 §3.5.3: it is an augment
+# of tapi-common:context); the others are the short aliases earlier releases
+# served, and the connectivity-service list GET, which answers with the
+# container's envelope.
 _SECTIONS = {
-    "tapi-topology:topology-context":
+    "tapi-topology:topology-context": [
         "/data/tapi-common:context/tapi-topology:topology-context",
-    "tapi-connectivity:connectivity-context":
+    ],
+    "tapi-connectivity:connectivity-context": [
+        "/data/tapi-common:context/tapi-connectivity:connectivity-context",
+        "/data/tapi-connectivity:connectivity-context",
+        (
+            "/data/tapi-common:context/tapi-connectivity:connectivity-context"
+            "/connectivity-service"
+        ),
         "/data/tapi-connectivity:connectivity-context/connectivity-service",
-    "tapi-path-computation:path-computation-context":
+    ],
+    "tapi-path-computation:path-computation-context": [
+        "/data/tapi-common:context/tapi-path-computation:path-computation-context",
         "/data/tapi-path-computation:path-computation-context",
-    "tapi-equipment:physical-context":
+    ],
+    "tapi-equipment:physical-context": [
+        "/data/tapi-common:context/tapi-equipment:physical-context",
         "/data/tapi-equipment:physical-context",
-    "tapi-oam:oam-context":
+    ],
+    "tapi-oam:oam-context": [
         "/data/tapi-common:context/tapi-oam:oam-context",
-    "tapi-streaming:stream-context":
+    ],
+    "tapi-streaming:stream-context": [
         "/data/tapi-common:context/tapi-streaming:stream-context",
+    ],
 }
+_SECTION_URLS = [(section, url) for section, urls in _SECTIONS.items() for url in urls]
 
 
 def _full_context(app: TestClient, root: str = "") -> dict:
@@ -86,8 +105,8 @@ def _full_context(app: TestClient, root: str = "") -> dict:
     return resp.json()["tapi-common:context"]
 
 
-def _per_module(app: TestClient, section: str, root: str = "") -> dict:
-    resp = app.get(f"{root}{_SECTIONS[section]}")
+def _per_module(app: TestClient, section: str, url: str, root: str = "") -> dict:
+    resp = app.get(f"{root}{url}")
     assert resp.status_code == 200, resp.text
     return resp.json()[section]
 
@@ -118,28 +137,28 @@ class TestFullContextAugments:
     def test_carries_every_augment(self, app: TestClient) -> None:
         assert set(_SECTIONS) <= set(_full_context(app))
 
-    @pytest.mark.parametrize("section", list(_SECTIONS))
+    @pytest.mark.parametrize(("section", "url"), _SECTION_URLS)
     def test_section_equals_its_module_get_with_nothing_admitted(
-        self, app: TestClient, section: str,
+        self, app: TestClient, section: str, url: str,
     ) -> None:
-        assert _full_context(app)[section] == _per_module(app, section)
+        assert _full_context(app)[section] == _per_module(app, section, url)
 
     @pytest.mark.parametrize("admitted", ["gnpy", "egn"], indirect=True)
-    @pytest.mark.parametrize("section", list(_SECTIONS))
+    @pytest.mark.parametrize(("section", "url"), _SECTION_URLS)
     def test_section_equals_its_module_get_with_services_admitted(
-        self, admitted: TestClient, section: str,
+        self, admitted: TestClient, section: str, url: str,
     ) -> None:
         full = _full_context(admitted)
         assert len(full["tapi-connectivity:connectivity-context"]["connectivity-service"]) == 2
         assert full["tapi-path-computation:path-computation-context"]["path"]
-        assert full[section] == _per_module(admitted, section)
+        assert full[section] == _per_module(admitted, section, url)
 
     @pytest.mark.parametrize("admitted", ["gnpy"], indirect=True)
     def test_restconf_root_serves_the_same_context(self, admitted: TestClient) -> None:
         full = _full_context(admitted, root="/restconf")
         assert full == _full_context(admitted)
-        for section in _SECTIONS:
-            assert full[section] == _per_module(admitted, section, root="/restconf")
+        for section, url in _SECTION_URLS:
+            assert full[section] == _per_module(admitted, section, url, root="/restconf")
 
     @pytest.mark.parametrize("admitted", ["gnpy", "egn"], indirect=True)
     def test_oam_jobs_reference_services_in_the_same_response(
