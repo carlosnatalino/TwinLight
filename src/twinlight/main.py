@@ -15,6 +15,7 @@ from twinlight.auth import TOKENS_ENV_VAR, TokenAuthenticator
 from twinlight.cli import load_config
 from twinlight.config import TwinConfig
 from twinlight.grpc_server import start_grpc_server
+from twinlight.streaming.measurement_stream import MeasurementStream
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,21 @@ def configure_logging(config: TwinConfig) -> None:
         level=config.logging.level.value,
         format=config.logging.format,
         force=True,
+    )
+
+
+def log_measurement_stream(config: TwinConfig, stream: MeasurementStream) -> None:
+    """Say at startup how the measurement stream samples and where it is.
+
+    The address is the stream's own, the value every discovery response
+    publishes, so the log and the T-API context cannot disagree.
+    """
+    logger.info(
+        "Measurement stream (T-API over gNMI): sample_interval_s=%g "
+        "record_retention_min=%d connection-address=%s",
+        config.streaming.sample_interval_s,
+        config.streaming.record_retention_min,
+        stream.connection_address,
     )
 
 
@@ -114,14 +130,7 @@ async def async_main() -> None:
 
     log.info("REST server: %s:%d", config.server.rest_host, config.server.rest_port)
     log.info("gRPC server port: %d", config.server.grpc_port)
-    streaming = config.streaming
-    log.info(
-        "Measurement stream (T-API over gNMI): sample_interval_s=%g "
-        "record_retention_min=%d connection-address=%s",
-        streaming.sample_interval_s,
-        streaming.record_retention_min,
-        streaming.connection_address(config.server.grpc_port),
-    )
+    log_measurement_stream(config, app.state.measurement_stream)
     log_auth_mode(app.state.authenticator)
 
     uvicorn_config = uvicorn.Config(

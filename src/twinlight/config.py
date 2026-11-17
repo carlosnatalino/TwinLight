@@ -22,7 +22,6 @@ Hierarchy:
 from __future__ import annotations
 
 import re
-import socket
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -411,10 +410,6 @@ class StreamingConfig(BaseModel):
                 f"advertised_address must be grpc://<host>:<port> (got {value!r})"
             )
         return value
-
-    def connection_address(self, grpc_port: int) -> str:
-        """The address to publish: the configured one, else grpc://<fqdn>:<port>."""
-        return self.advertised_address or f"grpc://{socket.getfqdn()}:{grpc_port}"
 
 
 # -- Logging section --------------------------------------------------------

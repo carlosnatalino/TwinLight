@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import socket
 import time
 import uuid as uuid_lib
 from collections.abc import Callable
@@ -43,6 +44,20 @@ SUPPORTED_STREAM_TYPE_UUID = str(
 AVAILABLE_STREAM_UUID = str(
     uuid_lib.uuid5(_STREAM_NAMESPACE, "available-stream/measurement-details/gnmi")
 )
+
+
+def _resolve_connection_address(config: Any) -> str:
+    """``streaming.advertised_address``, else ``grpc://<this host's FQDN>:<grpc_port>``.
+
+    TR-548 §6.3.1 asks for the FQDN. ``socket.getfqdn()`` is a blocking
+    resolver call (seconds on a host without reverse DNS), so only
+    ``MeasurementStream.__init__`` calls this; everything else reads
+    ``MeasurementStream.connection_address``.
+    """
+    address: str = config.streaming.advertised_address
+    if address:
+        return address
+    return f"grpc://{socket.getfqdn()}:{config.server.grpc_port}"
 
 
 class StreamState(str, Enum):
@@ -72,6 +87,12 @@ class MeasurementStream:
         # Bumped after every tick; subscribers wait for it to change.
         self._generation = 0
         self._new_records: asyncio.Condition | None = None
+        # Derived here, once per stream (so once per twin), never per request:
+        # the FQDN lookup blocks on the resolver, and the discovery handlers
+        # that publish the address run on the event loop the sampler and the
+        # gRPC server share. streaming and server.grpc_port are restart-only,
+        # so the value cannot go stale while the twin runs.
+        self._connection_address = _resolve_connection_address(config)
 
     # -- configuration views ----------------------------------------------
 
@@ -85,7 +106,11 @@ class MeasurementStream:
 
     @property
     def connection_address(self) -> str:
-        return self._config.streaming.connection_address(self._config.server.grpc_port)
+        """The connection-address published on the available-stream.
+
+        Fixed when the stream is built; reading it never touches the resolver.
+        """
+        return self._connection_address
 
     def now_ns(self) -> int:
         """The clock logged times come from, in ns since the epoch."""

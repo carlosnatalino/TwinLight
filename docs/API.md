@@ -546,7 +546,8 @@ TR-548 §6.2.2 makes mandatory for performance data — and one
 
 `record-retention` is `streaming.record_retention_min` (minutes);
 `connection-address` is `streaming.advertised_address`, or
-`grpc://<FQDN>:<grpc_port>` when that is empty; see
+`grpc://<FQDN>:<grpc_port>` when that is empty, resolved once at startup
+(the `Measurement stream` log line shows it); see
 [When the advertised address cannot be reached](#when-the-advertised-address-cannot-be-reached)
 for when that default is wrong. `stream-state` is `ALIGNING`
 from startup until the first sampling tick has been logged and `ACTIVE` from

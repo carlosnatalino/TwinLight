@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import socket
-
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -20,17 +18,11 @@ def test_defaults() -> None:
     assert cfg.advertised_address == ""
 
 
-def test_connection_address_derived_from_fqdn_and_port() -> None:
-    assert StreamingConfig().connection_address(50052) == (
-        f"grpc://{socket.getfqdn()}:50052"
-    )
-
-
 @pytest.mark.parametrize(
     "address", ["grpc://twin.example.org:50051", "grpc://10.0.0.1:1", "grpc://[::1]:50051"]
 )
-def test_advertised_address_overrides(address: str) -> None:
-    assert StreamingConfig(advertised_address=address).connection_address(1) == address
+def test_advertised_address_accepts_grpc_host_port(address: str) -> None:
+    assert StreamingConfig(advertised_address=address).advertised_address == address
 
 
 @pytest.mark.parametrize(
