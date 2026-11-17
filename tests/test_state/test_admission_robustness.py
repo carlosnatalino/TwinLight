@@ -22,7 +22,7 @@ from twinlight.models.connectivity import OTSIA_CSEP_SPEC, ConnectivityService
 from twinlight.physics.backend import PropagationError
 from twinlight.state.context import InsufficientQoTError, TapiContext
 
-_SVC = "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 
 
 def _service(ctx: TapiContext, a: str = "trx A", z: str = "trx C", fmt: str | None = None):

@@ -344,7 +344,7 @@ class TestDeprecatedSnapshot:
         assert opm["status"] == "out-of-band"
         assert opm["measurements"]["gsnr-db"] is None
         service = client.get(
-            f"/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}",
+            f"/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}",
         ).json()["tapi-connectivity:connectivity-service"]
         assert service["operational-state"] == "DISABLED"
         assert f'twinlight_service_enabled{{service_name="{uuid[:8]}",service_uuid="{uuid}"}} 0.0' in (

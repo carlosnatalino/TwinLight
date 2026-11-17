@@ -13,7 +13,7 @@ from tests.conftest import tapi_end_point
 
 def _create_service(app: TestClient) -> str:
     """Create a test connectivity service and return its UUID."""
-    sips_resp = app.get("/data/tapi-common:context/service-interface-point")
+    sips_resp = app.get("/restconf/data/tapi-common:context/service-interface-point")
     sips = sips_resp.json()["tapi-common:context"]["service-interface-point"]
     sip_a, sip_z = sips[0]["uuid"], sips[1]["uuid"]
 
@@ -27,7 +27,7 @@ def _create_service(app: TestClient) -> str:
         }
     }
     resp = app.post(
-        "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
         json=body,
     )
     assert resp.status_code == 201

@@ -16,18 +16,18 @@ Endpoints fall into two groups, kept strictly apart (see
   transparent* controller view: every element and parameter, addressed
   independently of T-API objects.
 
-> **The T-API paths below are written as `/data/…` throughout.** Every one is
-> also served under the RESTCONF root — `/restconf/data/…` by default, set by
-> `server.restconf_root` — which is the canonical location per RFC 8040 §3.1
-> and the one a client discovers from `/.well-known/host-meta`. The bare
-> `/data/…` mount is kept for clients written against earlier releases and is
-> scheduled for removal — see [ROADMAP.md](ROADMAP.md). New clients should use
-> the RESTCONF root.
+> **T-API is served under the RESTCONF root only.** The paths below use the
+> default root, `/restconf`; a twin can be configured with another
+> (`server.restconf_root`, see
+> [CONFIGURATION.md](CONFIGURATION.md#server--listening-sockets)), and an empty root puts the data
+> resource at `/data/…`. A client should not assume `/restconf`: RFC 8040 §3.1
+> has it read the root from `GET /.well-known/host-meta`, which every bundled
+> client does — see [Finding the RESTCONF root](#finding-the-restconf-root).
 
 > **Every augment of the context is under the context.** `tapi-topology`,
 > `tapi-connectivity`, `tapi-path-computation`, `tapi-equipment`, `tapi-oam`
 > and `tapi-streaming` augment `/tapi-common:context`, so their RESTCONF paths
-> are `/data/tapi-common:context/<module>:<container>/…` (RFC 8040 §3.5.3),
+> are `/restconf/data/tapi-common:context/<module>:<container>/…` (RFC 8040 §3.5.3),
 > and that is the only place each is served. Earlier releases also served the
 > connectivity, path-computation and physical contexts at a short
 > `/data/<module>:<container>/…`; those paths are gone — see
@@ -41,12 +41,44 @@ answer `404` (`401` without a token when authentication is on):
 
 | Removed path | Standard path |
 |--------------|---------------|
-| `/data/tapi-connectivity:connectivity-context/…` | `/data/tapi-common:context/tapi-connectivity:connectivity-context/…` |
-| `/data/tapi-path-computation:path-computation-context/…` | `/data/tapi-common:context/tapi-path-computation:path-computation-context/…` |
-| `/data/tapi-equipment:physical-context/…` | `/data/tapi-common:context/tapi-equipment:physical-context/…` |
+| `/data/tapi-connectivity:connectivity-context/…` | `/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/…` |
+| `/data/tapi-path-computation:path-computation-context/…` | `/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/…` |
+| `/data/tapi-equipment:physical-context/…` | `/restconf/data/tapi-common:context/tapi-equipment:physical-context/…` |
+| `/restconf/data/tapi-connectivity:connectivity-context/…` | `/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/…` |
+| `/restconf/data/tapi-path-computation:path-computation-context/…` | `/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/…` |
+| `/restconf/data/tapi-equipment:physical-context/…` | `/restconf/data/tapi-common:context/tapi-equipment:physical-context/…` |
+| `/data/tapi-common:context` and every path below it (the bare mount) | `/restconf/data/tapi-common:context` and the same path below it |
 
-Everything after the container is unchanged, and so are request and response
-bodies.
+The standard paths are given for the default root, `/restconf`; on a twin
+configured with another, substitute it. Everything after the container is
+unchanged, and so are request and response bodies. A twin configured with
+`server.restconf_root: ""` serves the data resource at `/data/…` by
+definition, so on such a twin only the short context paths change.
+
+## Finding the RESTCONF root
+
+The twin advertises its root in an RFC 6415 host-meta document, as RFC 8040
+§3.1 specifies:
+
+```
+GET /.well-known/host-meta
+
+<XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>
+    <Link rel='restconf' href='/restconf'/>
+</XRD>
+```
+
+T-API is then at `{href}/data/…`. host-meta needs a token when authentication
+is on, like every path except `/health`. A twin with an empty root serves no
+host-meta (`404`); a twin from before the RESTCONF root did not either, and
+both serve T-API at `/data/…`, so a `404` means the root is empty. Any other
+error, a `401` included, is an error, not a missing root.
+
+The bundled clients follow this rule and discover the root once per twin,
+before their first T-API request: the web UI (once per base URL), the
+`twinlight_client` library (`TapiClient`, once per client; pass
+`restconf_root=` to pin it), the CLIs built on it, the examples, and the ONOS
+adapter and its scripts (`TWIN_DATA_ROOT` pins the adapter's instead).
 
 ## Authentication
 
@@ -123,11 +155,11 @@ that sends one, or read the schema with `curl -H "Authorization: Bearer …"`.
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-common:context` |
-| GET | `/data/tapi-common:context/service-interface-point` |
-| GET | `/data/tapi-common:context/service-interface-point={uuid}` |
+| GET | `/restconf/data/tapi-common:context` |
+| GET | `/restconf/data/tapi-common:context/service-interface-point` |
+| GET | `/restconf/data/tapi-common:context/service-interface-point={uuid}` |
 
-The context is the northbound entry point. `GET /data/tapi-common:context`
+The context is the northbound entry point. `GET /restconf/data/tapi-common:context`
 returns the whole tree in one response, which is what a T-API client reads for
 its initial sync: the service-interface-point (SIP) list and every augment of
 the context the twin serves — `tapi-topology:topology-context`,
@@ -143,7 +175,7 @@ SIP's `name` list carries the underlying GNPy element UID under the value-name
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-common:context/tapi-topology:topology-context` |
+| GET | `/restconf/data/tapi-common:context/tapi-topology:topology-context` |
 | GET | `…/topology={uuid}` |
 | GET | `…/topology={uuid}/node={node_uuid}` |
 | GET | `…/topology={uuid}/node={node_uuid}/owned-node-edge-point={nep_uuid}` |
@@ -160,7 +192,7 @@ e.g. `"392.110"` for 80 km.
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-common:context/tapi-connectivity:connectivity-context` |
+| GET | `/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context` |
 | GET | `…/connectivity-service` |
 | POST | `…/connectivity-service` |
 | GET | `…/connectivity-service={uuid}` |
@@ -367,7 +399,7 @@ pushes a co-propagating one below threshold; that one then reads `DISABLED`.
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-common:context/tapi-path-computation:path-computation-context` |
+| GET | `/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context` |
 | GET | `…/path-comp-service` |
 | POST | `…/path-comp-service` |
 | GET | `…/path-comp-service={uuid}` |
@@ -432,7 +464,7 @@ The ranked view with a candidate count, which T-API has no leaf for, is
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-common:context/tapi-equipment:physical-context` |
+| GET | `/restconf/data/tapi-common:context/tapi-equipment:physical-context` |
 | GET | `…/device` |
 | GET | `…/device={uuid}` |
 | GET | `…/device={uuid}/equipment={uuid}` |
@@ -507,7 +539,7 @@ supportable band, merged into maximal contiguous runs.
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-common:context/tapi-oam:oam-context` |
+| GET | `/restconf/data/tapi-common:context/tapi-oam:oam-context` |
 | GET | `…/tapi-oam:oam-context/oam-job` |
 | GET | `…/tapi-oam:oam-context/oam-job={uuid}` |
 
@@ -545,7 +577,7 @@ carry GSNR, OSNR, BER and the other QoT measures.
 
 | Method | Path |
 |--------|------|
-| GET | `/data/tapi-common:context/tapi-streaming:stream-context` |
+| GET | `/restconf/data/tapi-common:context/tapi-streaming:stream-context` |
 | GET | `…/tapi-streaming:stream-context/supported-stream-type` |
 | GET | `…/tapi-streaming:stream-context/supported-stream-type={uuid}` |
 | GET | `…/tapi-streaming:stream-context/available-stream` |
@@ -593,7 +625,7 @@ then on (TR-548 ST-1.1). Both UUIDs are name-based and stable across restarts.
 
 ### Error format
 
-Errors under `/data/` use the RESTCONF format of
+Errors under `/restconf/data/` use the RESTCONF format of
 [RFC 8040](https://www.rfc-editor.org/rfc/rfc8040), served as
 `application/yang-data+json`. A rejected token uses the same body with
 `error-tag: access-denied` (see [Authentication](#authentication)):
@@ -637,8 +669,8 @@ both spellings work.
 
 RFC 8040 §3.1 has a client discover the root rather than assume it, so
 `host-meta` is XML by specification — a JSON variant would not be found. The
-root path itself is `server.restconf_root`; setting it to `""` serves only the
-bare `/data/…` paths and omits these three resources.
+root path itself is `server.restconf_root`; setting it to `""` puts the data
+resource at `/data/…` and omits these three resources.
 
 ## Non-standard endpoints
 

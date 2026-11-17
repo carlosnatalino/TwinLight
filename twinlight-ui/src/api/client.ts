@@ -76,6 +76,36 @@ export function setTokenProvider(provider: () => string | undefined): void {
   tokenProvider = provider;
 }
 
+/**
+ * The RESTCONF root advertised in an RFC 6415 host-meta document (RFC 8040
+ * §3.1), without a trailing slash: "/restconf" for the default twin, "" when
+ * the root is the server root or no root is advertised. An absolute href is
+ * reduced to its path, since requests go to the configured base URL.
+ */
+export function parseRestconfRoot(xrd: string): string {
+  for (const tag of xrd.match(/<Link\b[^>]*>/gi) ?? []) {
+    const rel = /\brel\s*=\s*(['"])(.*?)\1/i.exec(tag)?.[2];
+    if (rel !== "restconf") continue;
+    let href = /\bhref\s*=\s*(['"])(.*?)\1/i.exec(tag)?.[2] ?? "";
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(href)) href = new URL(href).pathname;
+    return href.replace(/\/+$/, "");
+  }
+  return "";
+}
+
+/**
+ * The discovered RESTCONF root, per base URL. Pages build a client for each
+ * request, so the cache lives here rather than on the client: discovery costs
+ * one host-meta request per twin, not one per call. A failed discovery (a
+ * rejected token, the twin down) is forgotten so the next call retries.
+ */
+const restconfRoots = new Map<string, Promise<string>>();
+
+/** Forget every discovered root (tests; a twin restarted with a new root). */
+export function resetRestconfRoots(): void {
+  restconfRoots.clear();
+}
+
 export class TapiApiClient {
   private baseUrl: string;
   private token: string | undefined;
@@ -97,6 +127,45 @@ export class TapiApiClient {
       ...extra,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
+  }
+
+  /**
+   * Where the T-API data resources are: `{root}/data`, the root discovered
+   * from /.well-known/host-meta (RFC 8040 §3.1), which needs the token on a
+   * twin with authentication on. A twin without host-meta (404) predates the
+   * RESTCONF root or runs with an empty one, and serves T-API at /data.
+   */
+  private dataRoot(): Promise<string> {
+    let root = restconfRoots.get(this.baseUrl);
+    if (!root) {
+      root = this.discoverRoot();
+      restconfRoots.set(this.baseUrl, root);
+      root.catch(() => restconfRoots.delete(this.baseUrl));
+    }
+    return root.then((r) => `${r}/data`);
+  }
+
+  private async discoverRoot(): Promise<string> {
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseUrl}/.well-known/host-meta`, {
+        headers: this.headers({ Accept: "application/xrd+xml" }),
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new NetworkError("Request timed out");
+      }
+      throw new NetworkError(err instanceof Error ? err.message : "Network error");
+    }
+    if (resp.status === 404) return "";
+    if (!resp.ok) throw await apiErrorFrom(resp);
+    return parseRestconfRoot(await resp.text());
+  }
+
+  /** A T-API data resource, e.g. tapi("/tapi-common:context"). */
+  private async tapi(path: string): Promise<string> {
+    return `${await this.dataRoot()}${path}`;
   }
 
   private async get<T>(path: string): Promise<T> {
@@ -184,31 +253,31 @@ export class TapiApiClient {
     return this.get<WhoamiResponse>("/internal/whoami");
   }
 
-  getContext(): Promise<ContextResponse> {
-    return this.get<ContextResponse>("/data/tapi-common:context");
+  async getContext(): Promise<ContextResponse> {
+    return this.get<ContextResponse>(await this.tapi("/tapi-common:context"));
   }
 
-  getTopologyContext(): Promise<TopologyContextResponse> {
+  async getTopologyContext(): Promise<TopologyContextResponse> {
     return this.get<TopologyContextResponse>(
-      "/data/tapi-common:context/tapi-topology:topology-context"
+      await this.tapi("/tapi-common:context/tapi-topology:topology-context")
     );
   }
 
-  getTopology(uuid: string): Promise<TopologyResponse> {
+  async getTopology(uuid: string): Promise<TopologyResponse> {
     return this.get<TopologyResponse>(
-      `/data/tapi-common:context/tapi-topology:topology-context/topology=${uuid}`
+      await this.tapi(`/tapi-common:context/tapi-topology:topology-context/topology=${uuid}`)
     );
   }
 
-  getNode(topoUuid: string, nodeUuid: string): Promise<NodeResponse> {
+  async getNode(topoUuid: string, nodeUuid: string): Promise<NodeResponse> {
     return this.get<NodeResponse>(
-      `/data/tapi-common:context/tapi-topology:topology-context/topology=${topoUuid}/node=${nodeUuid}`
+      await this.tapi(`/tapi-common:context/tapi-topology:topology-context/topology=${topoUuid}/node=${nodeUuid}`)
     );
   }
 
-  getLink(topoUuid: string, linkUuid: string): Promise<LinkResponse> {
+  async getLink(topoUuid: string, linkUuid: string): Promise<LinkResponse> {
     return this.get<LinkResponse>(
-      `/data/tapi-common:context/tapi-topology:topology-context/topology=${topoUuid}/link=${linkUuid}`
+      await this.tapi(`/tapi-common:context/tapi-topology:topology-context/topology=${topoUuid}/link=${linkUuid}`)
     );
   }
 
@@ -224,40 +293,42 @@ export class TapiApiClient {
     return this.get<ServiceInfoResponse>(`/internal/services/${serviceUuid}`);
   }
 
-  createConnectivityService(
+  async createConnectivityService(
     body: CreateConnectivityServiceRequest
   ): Promise<CreateConnectivityServiceResponse> {
     return this.post<CreateConnectivityServiceResponse>(
-      "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
+      await this.tapi("/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"),
       body
     );
   }
 
-  getServices(): Promise<ConnectivityContextResponse> {
+  async getServices(): Promise<ConnectivityContextResponse> {
     return this.get<ConnectivityContextResponse>(
-      "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+      await this.tapi("/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service")
     );
   }
 
-  updateService(
+  async updateService(
     uuid: string,
     body: UpdateConnectivityServiceRequest
   ): Promise<UpdateConnectivityServiceResponse> {
     return this.patch<UpdateConnectivityServiceResponse>(
-      `/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`,
+      await this.tapi(`/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`),
       body
     );
   }
 
-  deleteService(uuid: string): Promise<void> {
+  async deleteService(uuid: string): Promise<void> {
     return this.delete(
-      `/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`
+      await this.tapi(
+        `/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`
+      )
     );
   }
 
-  getPhysicalContext(): Promise<PhysicalContextResponse> {
+  async getPhysicalContext(): Promise<PhysicalContextResponse> {
     return this.get<PhysicalContextResponse>(
-      "/data/tapi-common:context/tapi-equipment:physical-context"
+      await this.tapi("/tapi-common:context/tapi-equipment:physical-context")
     );
   }
 

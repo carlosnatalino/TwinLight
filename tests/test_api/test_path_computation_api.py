@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import MeshRefs
 
-_BASE = "/data/tapi-common:context/tapi-path-computation:path-computation-context"
+_BASE = "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
 _SVC = f"{_BASE}/path-comp-service"
 _SVC_KEY = "tapi-path-computation:path-comp-service"
 
@@ -20,7 +20,7 @@ def _end_points(sip_a: str, sip_z: str) -> list[dict]:
 
 
 def _two_sips(app: TestClient) -> tuple[str, str]:
-    data = app.get("/data/tapi-common:context/service-interface-point").json()
+    data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
     sips = data["tapi-common:context"]["service-interface-point"]
     return sips[0]["uuid"], sips[1]["uuid"]
 

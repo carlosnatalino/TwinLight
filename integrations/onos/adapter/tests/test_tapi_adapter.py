@@ -117,11 +117,27 @@ class TwinStub:
         self.services: list[dict] = []
         # Mutable so a test can change what spectrum the twin reports.
         self.sips: list[dict] = list(SIPS)
+        # The twin's RESTCONF root as host-meta advertises it; None: no
+        # host-meta (an empty root, or a twin that predates it).
+        self.restconf_root: str | None = "/restconf"
+        self.paths: list[str] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        self.paths.append(path)
         if path == "/health":
             return httpx.Response(200, json={"status": "ok"})
+        if path == "/.well-known/host-meta":
+            if self.restconf_root is None:
+                return httpx.Response(404)
+            return httpx.Response(200, text=(
+                "<?xml version='1.0' encoding='UTF-8'?>\n"
+                "<XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>\n"
+                f"    <Link rel='restconf' href='{self.restconf_root}'/>\n</XRD>\n"
+            ))
+        data = "/data" if self.restconf_root is None else f"{self.restconf_root}/data"
+        if not path.startswith(f"{data}/tapi-common:context/"):
+            return httpx.Response(404)  # the twin serves T-API only there
         if path.endswith("/service-interface-point"):
             return httpx.Response(
                 200,
@@ -157,6 +173,7 @@ def client(twin: TwinStub):
     tapi_adapter.catalogue = tapi_adapter.SipCatalogue()
     tapi_adapter.registry = tapi_adapter.OnosServiceRegistry()
     tapi_adapter.MODULATION_FORMAT = "DP-QPSK"
+    tapi_adapter._data_root = tapi_adapter.TWIN_DATA_ROOT
 
     with TestClient(app) as c:
         c.app.state.client = httpx.AsyncClient(
@@ -472,6 +489,8 @@ def test_delete_still_surfaces_real_failures(client, twin):
     """A 500 is not 'already gone' — ONOS must keep the rule and retry."""
 
     def broken(request):
+        if request.url.path == "/.well-known/host-meta":
+            return twin.handler(request)  # the twin is up; its delete fails
         return httpx.Response(500, json={"detail": "boom"})
 
     client.app.state.client = httpx.AsyncClient(
@@ -654,3 +673,63 @@ def test_list_or_object_both_reach_the_twin(client, twin):
         json=body,
     )
     assert r.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# Finding the twin's RESTCONF root
+# ---------------------------------------------------------------------------
+
+
+def _twin_paths(twin: TwinStub) -> list[str]:
+    return [p for p in twin.paths if p not in ("/health", "/.well-known/host-meta")]
+
+
+def test_upstream_calls_use_the_discovered_root(client, twin):
+    client.get("/restconf/data/tapi-common:context")
+    client.get("/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/")
+    assert twin.paths.count("/.well-known/host-meta") == 1
+    assert _twin_paths(twin)
+    assert all(
+        p.startswith("/restconf/data/tapi-common:context/") for p in _twin_paths(twin)
+    )
+
+
+def test_a_custom_root_is_followed(twin):
+    twin.restconf_root = "/api"
+    with _client_for(twin) as c:
+        assert c.get("/restconf/data/tapi-common:context").status_code == 200
+    assert all(p.startswith("/api/data/tapi-common:context/") for p in _twin_paths(twin))
+
+
+def test_a_twin_without_host_meta_is_served_at_data(twin):
+    twin.restconf_root = None
+    with _client_for(twin) as c:
+        assert c.get("/restconf/data/tapi-common:context").status_code == 200
+    assert all(p.startswith("/data/tapi-common:context/") for p in _twin_paths(twin))
+
+
+def test_twin_data_root_pins_the_root(twin, monkeypatch):
+    twin.restconf_root = "/api"
+    monkeypatch.setattr(tapi_adapter, "TWIN_DATA_ROOT", "/api/data")
+    with _client_for(twin) as c:
+        assert c.get("/restconf/data/tapi-common:context").status_code == 200
+    assert "/.well-known/host-meta" not in twin.paths
+
+
+def _client_for(twin: TwinStub):
+    tapi_adapter.catalogue = tapi_adapter.SipCatalogue()
+    tapi_adapter.registry = tapi_adapter.OnosServiceRegistry()
+    tapi_adapter._data_root = tapi_adapter.TWIN_DATA_ROOT
+
+    class _Ctx:
+        def __enter__(self):
+            self.tc = TestClient(app).__enter__()
+            self.tc.app.state.client = httpx.AsyncClient(
+                transport=httpx.MockTransport(twin.handler), base_url="http://twin"
+            )
+            return self.tc
+
+        def __exit__(self, *exc):
+            self.tc.__exit__(*exc)
+
+    return _Ctx()

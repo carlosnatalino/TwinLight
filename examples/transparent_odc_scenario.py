@@ -6,7 +6,8 @@ service-interface points, nodes, links and services (T-API), and keeps the
 physical layer to itself. A *fully transparent* one also exposes every
 element and every parameter it models, so an upper orchestrator can plan,
 check and apply physical-layer changes itself. TwinLight serves both: T-API
-under ``/restconf/data``, and the transparent view under ``/transparent``.
+under its RESTCONF root (``/restconf/data`` by default, read from
+``/.well-known/host-meta``), and the transparent view under ``/transparent``.
 
 This script plays the orchestrator through one maintenance window:
 
@@ -48,9 +49,11 @@ from typing import Any
 import httpx
 
 from twinlight_client.credentials import add_token_argument, bearer_headers, resolve_token
+from twinlight_client.restconf import discover_root_sync
 from twinlight_client.transparent import TransparentClient, TransparentError
 
-CONNECTIVITY = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+# Relative to the RESTCONF root, which run() discovers (RFC 8040 §3.1).
+CONNECTIVITY = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
 OTSIA = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
 
 
@@ -85,7 +88,9 @@ def print_qot(rows: list[dict[str, Any]]) -> None:
         )
 
 
-def create_lightpath(http: httpx.Client, sip_a: str, sip_z: str) -> str | None:
+def create_lightpath(
+    http: httpx.Client, connectivity: str, sip_a: str, sip_z: str
+) -> str | None:
     def end_point(local_id: str, sip: str) -> dict[str, Any]:
         return {
             "local-id": local_id,
@@ -99,7 +104,7 @@ def create_lightpath(http: httpx.Client, sip_a: str, sip_z: str) -> str | None:
         "name": [{"value-name": "service-name", "value": "odc-scenario"}],
         "end-point": [end_point("a", sip_a), end_point("z", sip_z)],
     }}
-    r = http.post(f"{CONNECTIVITY}/connectivity-service", json=body)
+    r = http.post(f"{connectivity}/connectivity-service", json=body)
     if r.status_code == 409:  # admission refused: no path, spectrum or QoT
         return None
     r.raise_for_status()
@@ -109,6 +114,7 @@ def create_lightpath(http: httpx.Client, sip_a: str, sip_z: str) -> str | None:
 
 def run(http: httpx.Client, keep: bool) -> None:
     odc = TransparentClient(client=http)
+    connectivity = f"{discover_root_sync(http)}{CONNECTIVITY}"
 
     heading(1, "Discover the transparent controller")
     root = odc.root()
@@ -138,7 +144,7 @@ def run(http: httpx.Client, keep: bool) -> None:
     pairs = [(a, z) for i, a in enumerate(sips) for z in sips[i + 1:]]
     uuid = None
     for attempt, (sip_a, sip_z) in enumerate(pairs[:200], start=1):
-        uuid = create_lightpath(http, sip_a, sip_z)
+        uuid = create_lightpath(http, connectivity, sip_a, sip_z)
         if uuid:
             break
     if uuid is None:
@@ -258,7 +264,7 @@ def run(http: httpx.Client, keep: bool) -> None:
     reverted = odc.revert("/")
     print(f"   DELETE /transparent/data reverted {len(reverted['changes'])} leaves")
     print("   running vs startup now:", odc.compare("running", "startup") or "identical")
-    http.delete(f"{CONNECTIVITY}/connectivity-service={uuid}")
+    http.delete(f"{connectivity}/connectivity-service={uuid}")
     print(f"   T-API deleted {uuid}")
 
 

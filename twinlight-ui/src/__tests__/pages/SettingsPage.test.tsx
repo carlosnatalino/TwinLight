@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { withHostMeta } from "../helpers/hostMeta";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import SettingsPage from "@/pages/SettingsPage";
@@ -8,7 +9,7 @@ import { useTopologyStore } from "@/store/topology";
 // Mock fetch globally
 const mockFetch = vi.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-(globalThis as any).fetch = mockFetch;
+(globalThis as any).fetch = withHostMeta(mockFetch);
 
 beforeEach(() => {
   localStorage.clear();

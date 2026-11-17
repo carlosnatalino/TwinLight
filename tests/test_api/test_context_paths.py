@@ -17,7 +17,12 @@ from fastapi.testclient import TestClient
 from tests.conftest import MeshRefs, _mesh_config, tapi_end_point
 from twinlight.app import create_app
 
-ROOTS = ("", "/restconf")
+#: The mounts the canonical paths are tested at: the default RESTCONF root.
+#: (The bare /data/ mount is gone; tests/test_api/test_restconf_root.py
+#: covers it and other roots.)
+ROOTS = ("/restconf",)
+#: Where earlier releases served the short forms: under the root and bare.
+FORMER_MOUNTS = ("", "/restconf")
 
 #: module → its container's RESTCONF path, relative to the mount.
 LONG = {
@@ -173,13 +178,21 @@ class TestRouteTable:
                 else:
                     assert long[0] == 405, (where, long)
 
-    @pytest.mark.parametrize("root", ROOTS)
+    @pytest.mark.parametrize("root", FORMER_MOUNTS)
     @pytest.mark.parametrize("module", list(ROUTES))
     def test_the_short_forms_are_gone(self, app: TestClient, root: str, module: str) -> None:
         for path in ROUTES[module]:
             concrete = path.replace("{device_uuid}", "x").replace("{uuid}", "x")
             for method in _METHODS:
                 url = f"{root}{SHORT[module]}{concrete}"
+                assert _probe(app, method, url) == (404, "Not Found"), (method, url)
+
+    @pytest.mark.parametrize("module", list(ROUTES))
+    def test_the_bare_mount_is_gone(self, app: TestClient, module: str) -> None:
+        for path in ROUTES[module]:
+            concrete = path.replace("{device_uuid}", "x").replace("{uuid}", "x")
+            for method in _METHODS:
+                url = f"{LONG[module]}{concrete}"
                 assert _probe(app, method, url) == (404, "Not Found"), (method, url)
 
     def test_the_paths_follow_the_v2_6_tree(self) -> None:
@@ -382,7 +395,7 @@ class TestOpenApi:
             for short in SHORT.values():
                 assert not path.startswith(f"/restconf{short}"), path
                 assert not path.startswith(short), path
-            assert not path.startswith("/data/"), path  # the bare mount
+            assert not path.startswith("/data/"), path  # the bare mount is gone
 
     def test_operation_ids_are_unique(self, app: TestClient) -> None:
         paths = app.get("/openapi.json").json()["paths"]

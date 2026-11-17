@@ -69,7 +69,7 @@ class TestRejection:
     @pytest.mark.parametrize(
         ("method", "path"),
         [
-            ("GET", "/data/tapi-common:context"),
+            ("GET", "/restconf/data/tapi-common:context"),
             ("GET", "/restconf"),
             ("GET", "/internal/opm"),
             ("GET", "/internal/whoami"),
@@ -80,33 +80,33 @@ class TestRejection:
             ("GET", "/redoc"),
             ("GET", "/openapi.json"),
             ("GET", "/transparent/data"),
-            ("GET", "/data/tapi-common:context/tapi-streaming:stream-context"),
-            ("GET", "/data/tapi-common:context/tapi-oam:oam-context"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-streaming:stream-context"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-oam:oam-context"),
             ("POST", "/admin/snapshot"),
             ("POST", "/config/parameters"),
             ("DELETE", (
-                "/data/tapi-common:context/tapi-connectivity:connectivity-context"
+                "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
                 "/connectivity-service=x"
             )),
             ("PUT", (
-                "/data/tapi-common:context/tapi-connectivity:connectivity-context"
+                "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
                 "/connectivity-service=x"
             )),
             # Path computation, inventory and the ranked-candidates endpoint.
             ("POST", "/internal/compute-path"),
             ("GET", "/internal/path-info"),
             ("GET", (
-                "/data/tapi-common:context/tapi-path-computation:path-computation-context"
+                "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
                 "/path-comp-service"
             )),
             ("POST", (
-                "/data/tapi-common:context/tapi-path-computation:path-computation-context"
+                "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
                 "/path-comp-service"
             )),
-            ("GET", "/data/tapi-common:context/tapi-path-computation:path-computation-context/path"),
-            ("GET", "/data/tapi-common:context/tapi-equipment:physical-context/device"),
-            ("GET", "/data/tapi-common:context/tapi-equipment:physical-context/physical-span"),
-            ("GET", "/data/tapi-common:context/tapi-connectivity:connectivity-context"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/path"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-equipment:physical-context/device"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-equipment:physical-context/physical-span"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"),
             ("POST", (
                 "/restconf/data/tapi-common:context"
                 "/tapi-connectivity:connectivity-context/connectivity-service"
@@ -114,10 +114,6 @@ class TestRejection:
             ("PATCH", (
                 "/restconf/data/tapi-common:context"
                 "/tapi-connectivity:connectivity-context/connectivity-service=x"
-            )),
-            ("POST", (
-                "/restconf/data/tapi-common:context"
-                "/tapi-path-computation:path-computation-context/path-comp-service"
             )),
             ("DELETE", (
                 "/restconf/data/tapi-common:context"
@@ -154,12 +150,12 @@ class TestRejection:
                 checked += 1
         assert checked > 50  # the walk did reach the API
 
-    def test_routes_hidden_from_the_schema_are_protected(
+    def test_the_removed_bare_mount_is_401_then_404(
         self, secured: TestClient
     ) -> None:
-        """The walk above sees only documented operations. The bare /data/
-        mount is hidden from the schema, so each documented /restconf/data/
-        operation is also checked at its bare form."""
+        """The bare /data/ mount is gone. A request there is denied without a
+        token like any path (no route map for an anonymous probe), and is
+        404 with one: checked for every documented T-API operation."""
         checked = 0
         for route, operations in secured.app.openapi()["paths"].items():
             if not route.startswith("/restconf/data/"):
@@ -167,6 +163,8 @@ class TestRejection:
             bare = route.replace("{", "").replace("}", "").removeprefix("/restconf")
             for method in operations:
                 assert secured.request(method.upper(), bare).status_code == 401, (method, bare)
+                resp = secured.request(method.upper(), bare, headers=_bearer(UI))
+                assert resp.status_code == 404, (method, bare)
                 checked += 1
         assert checked > 20
 

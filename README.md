@@ -140,11 +140,18 @@ Once the stack reports healthy:
 | <http://localhost:5173> | Web UI — topology, services, spectrum, live OPM |
 | <http://localhost:8080/health> | Twin health check |
 | <http://localhost:8080/docs> | Interactive OpenAPI documentation |
-| <http://localhost:8080/data/tapi-common:context> | T-API context — the northbound entry point |
+| <http://localhost:8080/restconf/data/tapi-common:context> | T-API context — the northbound entry point |
 | <http://localhost:8080/metrics> | Prometheus exposition |
 | <http://localhost:9090> | Prometheus UI |
 | <http://localhost:3000> | Grafana (`admin` / `admin`); the dashboard is provisioned in the *TwinLight* folder and starred, so it appears under *Starred* on the home page |
-| `localhost:50051` | gNMI: the T-API measurement stream (discover it at `/data/tapi-common:context/tapi-streaming:stream-context`); from the host, run `twinlight-client --gnmi-target localhost:50051`, since the advertised `grpc://twin:50051` resolves only inside the Compose network |
+| `localhost:50051` | gNMI: the T-API measurement stream (discover it at `/restconf/data/tapi-common:context/tapi-streaming:stream-context`); from the host, run `twinlight-client --gnmi-target localhost:50051`, since the advertised `grpc://twin:50051` resolves only inside the Compose network |
+
+T-API is served under the RESTCONF root only, `/restconf/data/…` by default.
+The root is configurable (`server.restconf_root`) and advertised at
+`/.well-known/host-meta`, which the bundled clients read instead of assuming
+`/restconf`; releases before this one also answered at a bare `/data/…`, and
+[docs/API.md](docs/API.md#migrating-from-earlier-releases) maps the old paths to
+the new ones.
 
 The default scenario is **CORONET CONUS** — a 75-ROADM US continental backbone
 with 198 fiber spans. To run the small two-site scenario instead:
@@ -238,10 +245,10 @@ arguments always win over the configuration file.
 
 Services are created through the standard T-API connectivity endpoint. Pick two
 service-interface-point (SIP) UUIDs from
-`GET /data/tapi-common:context/service-interface-point`, then:
+`GET /restconf/data/tapi-common:context/service-interface-point`, then:
 
 ```bash
-curl -X POST http://localhost:8080/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service \
+curl -X POST http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service \
   -H "Content-Type: application/json" \
   -d '{
     "tapi-connectivity:connectivity-service": {
@@ -302,7 +309,7 @@ than requested, which the script reports per format.
 
 Then open the **Monitoring** page in the web UI, or follow one on the T-API
 measurement stream with `twinlight-client`. To clear them again, delete each service by UUID with
-`DELETE /data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}`.
+`DELETE /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}`.
 
 > **Why a printed GSNR differs from the admission figure.** Admission tests the
 > *static* QoT baseline, while the GSNR printed above is the *live* reading with

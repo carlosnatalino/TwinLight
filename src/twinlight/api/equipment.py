@@ -1,6 +1,6 @@
 """T-API v2.6.0 physical inventory (``tapi-equipment:physical-context``).
 
-GET /data/tapi-common:context/tapi-equipment:physical-context
+GET {root}/data/tapi-common:context/tapi-equipment:physical-context
 GET …/device
 GET …/device={uuid}
 GET …/device={uuid}/equipment={uuid}

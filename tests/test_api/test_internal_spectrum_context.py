@@ -35,7 +35,7 @@ class TestInternalSpectrumContext:
 class TestNotOnTheTapiSurface:
     def test_gone_from_data(self, app: TestClient) -> None:
         for path in (
-            "/data/tapi-photonic-media:spectrum-context",
+            "/restconf/data/tapi-photonic-media:spectrum-context",
             "/restconf/data/tapi-photonic-media:spectrum-context",
         ):
             assert app.get(path).status_code == 404, path

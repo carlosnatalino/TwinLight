@@ -76,11 +76,14 @@ stack the UI is published on `http://localhost:5173`, which the shipped examples
 already allow.
 
 `restconf_root` is the RFC 8040 §3.1 root resource the T-API modules are served
-under, and the value advertised by `GET /.well-known/host-meta`. It must be
-absolute; a trailing slash is trimmed. The modules stay reachable at the bare
-`/data/…` whatever it is set to, so changing it adds a location rather than
-moving one — set it to `""` to serve only the bare paths and omit the root
-resource and `host-meta` entirely.
+under — at `{restconf_root}/data/…` and nowhere else — and the value advertised
+by `GET /.well-known/host-meta`. It must be absolute; a trailing slash is
+trimmed. Changing it moves T-API: the bundled clients (web UI, client library,
+CLIs, examples, ONOS adapter) read it from host-meta, but a client that
+hard-codes `/restconf` will not find the new location. Set it to `""` to put the
+data resource at `/data/…`; the twin then serves no root resource and no
+`host-meta`, and the bundled clients read that `404` as "T-API is at `/data/…`"
+(see [API.md](API.md#finding-the-restconf-root)).
 
 ## Authentication — API tokens
 

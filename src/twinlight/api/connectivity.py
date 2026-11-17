@@ -1,6 +1,6 @@
 """T-API v2.6.0 connectivity (``tapi-connectivity:connectivity-context``).
 
-GET    /data/tapi-common:context/tapi-connectivity:connectivity-context
+GET    {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
 GET    …/connectivity-service
 POST   …/connectivity-service
 GET    …/connectivity-service={uuid}

@@ -39,6 +39,8 @@ import sys
 import urllib.error
 import urllib.request
 
+from tapi_fields import twin_data_root  # same directory: on sys.path when run
+
 # Required GSNR per format, plus the default rmsa.qot_margin_db of 1.5 dB.
 # Ordered high to low: a probe is filed under the best format it supports.
 # Kept in step with physics/modulation.py MODULATION_TABLE.
@@ -56,7 +58,7 @@ def _get(url: str) -> dict:
 
 def _cities(base: str) -> dict[str, str]:
     """City name -> SIP UUID, from the twin's T-API context."""
-    payload = _get(f"{base}/data/tapi-common:context/service-interface-point")
+    payload = _get(f"{twin_data_root(base)}/tapi-common:context/service-interface-point")
     sips = payload["tapi-common:context"]["service-interface-point"]
     out: dict[str, str] = {}
     for sip in sips:

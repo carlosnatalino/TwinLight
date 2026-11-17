@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from tests.conftest import tapi_end_point
 
-_BASE_CONN = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_BASE_CONN = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
 
 
 def _get_two_sips(app):
-    data = app.get("/data/tapi-common:context/service-interface-point").json()
+    data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
     sips = data["tapi-common:context"]["service-interface-point"]
     assert len(sips) >= 2
     return sips[0]["uuid"], sips[1]["uuid"]

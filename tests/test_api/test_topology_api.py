@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-PREFIX = "/data/tapi-common:context/tapi-topology:topology-context"
+PREFIX = "/restconf/data/tapi-common:context/tapi-topology:topology-context"
 
 
 class TestGetTopologyContext:
@@ -119,7 +119,7 @@ class TestRestconfErrors:
 
     def test_404_returns_yang_data_errors(self, app: TestClient) -> None:
         resp = app.get(
-            "/data/tapi-common:context/tapi-connectivity:connectivity-context/"
+            "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/"
             "connectivity-service=nonexistent"
         )
         assert resp.status_code == 404

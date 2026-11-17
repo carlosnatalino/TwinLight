@@ -34,6 +34,14 @@ ok()   { printf '%s  OK%s %s\n' "${C_GREEN}" "${C_RESET}" "$*"; }
 warn() { printf '%s WARN%s %s\n' "${C_YELLOW}" "${C_RESET}" "$*"; }
 die()  { printf '%sFAIL%s %s\n' "${C_RED}${C_BOLD}" "${C_RESET}" "$*" >&2; exit 1; }
 
+# The twin's T-API data resource as a URL, {TWIN_URL}{root}/data, with the
+# RESTCONF root read from its /.well-known/host-meta (/data when it serves
+# none). Call it once per script, when the twin is up, and keep the result.
+twin_data() {
+  python3 -c "import sys; sys.path.insert(0, sys.argv[1]); from tapi_fields import twin_data_root; print(twin_data_root(sys.argv[2]))" \
+    "${SCRIPT_DIR}" "${TWIN_URL}"
+}
+
 compose() { ( cd "${REPO_ROOT}" && docker compose "${COMPOSE_FILES[@]}" "$@" ); }
 
 onos_api() {

@@ -1,6 +1,6 @@
 """T-API v2.6.0 path computation (``tapi-path-computation``).
 
-GET    /data/tapi-common:context/tapi-path-computation:path-computation-context
+GET    {root}/data/tapi-common:context/tapi-path-computation:path-computation-context
 GET    …/path-comp-service
 POST   …/path-comp-service
 GET    …/path-comp-service={uuid}

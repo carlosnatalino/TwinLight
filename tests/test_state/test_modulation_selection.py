@@ -153,13 +153,13 @@ def test_no_spectrum_anywhere(mesh_context) -> None:
 def test_without_physics_the_most_robust_format_is_chosen(app) -> None:
     """No QoT model: a request that names no format gets DP-QPSK, never the
     densest format the twin has no way to check."""
-    data = app.get("/data/tapi-common:context/service-interface-point").json()
+    data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
     sips = [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
     end_points = [tapi_end_point("a", sips[0]), tapi_end_point("z", sips[1])]
     for ep in end_points:
         del ep["layer-protocol-constraint"]
     resp = app.post(
-        "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
         json={"end-point": end_points},
     )
     assert resp.status_code == 201

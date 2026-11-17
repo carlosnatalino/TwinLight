@@ -19,7 +19,7 @@ def _device_uids_by_type(client: TestClient) -> dict[str, list[str]]:
 def _create_service_via_api(client: TestClient) -> str:
     """Create a service A→Z via the public TAPI route; return its UUID."""
     sips = client.get(
-        "/data/tapi-common:context/service-interface-point"
+        "/restconf/data/tapi-common:context/service-interface-point"
     ).json()["tapi-common:context"]["service-interface-point"]
     sip_a, sip_z = sips[0]["uuid"], sips[1]["uuid"]
     body = {
@@ -31,7 +31,7 @@ def _create_service_via_api(client: TestClient) -> str:
             ],
         }
     }
-    base = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
+    base = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
     r = client.post(f"{base}/connectivity-service", json=body)
     assert r.status_code == 201, r.text
     return r.json()["tapi-connectivity:connectivity-service"]["uuid"]

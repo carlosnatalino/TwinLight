@@ -22,7 +22,7 @@ from twinlight.streaming.measurement_stream import (
     SUPPORTED_STREAM_TYPE_UUID,
 )
 
-_SC = "/data/tapi-common:context/tapi-streaming:stream-context"
+_SC = "/restconf/data/tapi-common:context/tapi-streaming:stream-context"
 # Every route whose response is built from the available-stream, including
 # the full context controllers poll.
 _ROUTES = (
@@ -31,7 +31,7 @@ _ROUTES = (
     f"{_SC}/supported-stream-type={SUPPORTED_STREAM_TYPE_UUID}",
     f"{_SC}/available-stream",
     f"{_SC}/available-stream={AVAILABLE_STREAM_UUID}",
-    "/data/tapi-common:context",
+    "/restconf/data/tapi-common:context",
 )
 
 

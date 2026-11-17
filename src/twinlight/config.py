@@ -79,10 +79,10 @@ class ServerConfig(BaseModel):
         default="/restconf",
         description=(
             "RESTCONF root resource (RFC 8040 §3.1). The T-API modules are "
-            "served under {restconf_root}/data/... and advertised at "
-            "/.well-known/host-meta. They stay reachable at the bare "
-            "/data/... as well, for clients written against earlier "
-            "TwinLight releases. Empty string serves only the bare paths."
+            "served under {restconf_root}/data/... only, and the root is "
+            "advertised at /.well-known/host-meta for clients to discover. "
+            "An empty string puts the data resource at /data/... and serves "
+            "no host-meta; clients then fall back to /data."
         ),
     )
 
@@ -363,7 +363,7 @@ class SpectrumConfig(BaseModel):
 # -- Streaming section ------------------------------------------------------
 # The T-API v2.6.0 performance-measurement stream over gNMI (TR-548 §6).
 # Served on server.grpc_port; discovered at
-# /data/tapi-common:context/tapi-streaming:stream-context.
+# {server.restconf_root}/data/tapi-common:context/tapi-streaming:stream-context.
 
 _CONNECTION_ADDRESS = re.compile(r"^grpc://[^\s/:]+:[0-9]{1,5}$|^grpc://\[[0-9a-fA-F:.]+\]:[0-9]{1,5}$")
 

@@ -32,7 +32,7 @@ def _make_client(backend: str = "gnpy") -> TestClient:
 
 def _create_service(client: TestClient) -> str:
     sips = client.get(
-        "/data/tapi-common:context/service-interface-point"
+        "/restconf/data/tapi-common:context/service-interface-point"
     ).json()["tapi-common:context"]["service-interface-point"]
     sip_a, sip_z = sips[0]["uuid"], sips[1]["uuid"]
     body = {
@@ -45,7 +45,7 @@ def _create_service(client: TestClient) -> str:
         }
     }
     r = client.post(
-        "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
         json=body,
     )
     assert r.status_code == 201, r.text

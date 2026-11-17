@@ -186,9 +186,9 @@ RFC 8040 §3.1 locates the API under a root resource discovered via
 
 The six T-API routers are mounted under `server.restconf_root` (default
 `/restconf`). `host-meta` returns XRD per RFC 6415, and
-`{root}/yang-library-version` answers. The bare `/data/` mount remains for
-clients written against earlier releases and is scheduled for removal; see
-[docs/ROADMAP.md](../../docs/ROADMAP.md).
+`{root}/yang-library-version` answers. T-API is served there only; the bare
+`/data/` mount of earlier releases is gone. The adapter reads the twin's root
+from its host-meta rather than assuming `/restconf`.
 
 This does **not** remove the need for the adapter: A1 and A2 still require it.
 

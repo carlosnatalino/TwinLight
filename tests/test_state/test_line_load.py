@@ -28,7 +28,7 @@ from twinlight.physics.egn_kernel import Neighbour, cross_channel_nli_power, dbm
 from twinlight.physics.modulation import ModulationFormat, get_params
 from twinlight.state.context import TapiContext
 
-_SVC = "/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 _REQUIRED_64QAM = get_params(ModulationFormat.DP_64QAM).req_gsnr_db
 
 

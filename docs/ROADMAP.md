@@ -18,22 +18,6 @@ Bug reports and feature requests are welcome as
 
 ## Known issues
 
-### The bare `/data/` mount is deprecated
-
-**Current behaviour:** every T-API resource is served twice — under the RESTCONF
-root (`/restconf/data/…` by default, set by `server.restconf_root`, as RFC 8040
-§3.1 specifies) and at the bare `/data/…` used by earlier releases. The bare
-mount is hidden from the OpenAPI documentation.
-
-**Planned:** serve T-API only under the RESTCONF root. Setting
-`server.restconf_root: ""` will remain available for anyone who needs the old
-paths.
-
-**What to do now:** point new clients at `/restconf/data/…`, or discover the
-root from `GET /.well-known/host-meta`. The bundled web UI and client library
-(including the measurement-stream discovery in `twinlight_client.streaming`)
-will be migrated in the same release that removes the bare mount.
-
 ### A GET on a single list entry returns its parent container
 
 **Current behaviour:** `GET …/service-interface-point={uuid}` (and the other

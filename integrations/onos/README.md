@@ -11,7 +11,7 @@ with real GNPy physics — including refusing requests that will not close.
                  │  T-API v2.1 over /restconf/data/…
                  ▼
      T-API adapter  (:8282)          ← integrations/onos/adapter/tapi_adapter.py
-                 │  T-API v2.6.0 over /data/…
+                 │  T-API v2.6.0 over /restconf/data/… (root read from host-meta)
                  ▼
        TwinLight  (:8080 REST, :50051 gNMI)
                  │  GNPy split-step propagation, RMSA, four transient models
@@ -264,7 +264,7 @@ Settings. The *Services* page does not poll, so reload it after provisioning.
 
 ```bash
 # 1. establish that the twin has no such lightpath
-curl -s localhost:8080/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service \
+curl -s localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service \
   | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["tapi-connectivity:connectivity-context"]["connectivity-service"]), "services")'
 
 # 2. provision it FROM ONOS — a flow rule, nothing T-API in sight
@@ -439,6 +439,7 @@ Introspection, safe to call any time:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `TWIN_BASE_URL` | `http://twin:8080` | |
+| `TWIN_DATA_ROOT` | *(discovered)* | The twin's T-API data resource, e.g. `/restconf/data`. Unset, the adapter reads the twin's RESTCONF root from `/.well-known/host-meta` on its first call (a `404` there means `/data`); set it to pin the root and skip discovery |
 | `ADAPTER_MODULATION` | `DP-QPSK` | Requested format; runtime-switchable |
 | `ADAPTER_GRID_GRANULARITY` | `G_50GHZ` | **Only `G_50GHZ` and `G_25GHZ` are safe** — ONOS's `getChannelSpacing()` has trailing spaces in its other case labels (`"G_100GHZ "`, `"G_12_5GHZ "`), so those fall through to `CHL_0GHZ` and then divide by zero in `getOchSignal()` |
 | `ADAPTER_EXPOSE_TWIN_SERVICES` | `false` | See below |
@@ -502,7 +503,7 @@ What this integration does not do:
   observability surfaces them.
 - **ONOS sees one OLS device, not the 75-node graph.** That is how ODTN models
   a line system — the twin's topology stays inside the domain. The T-API
-  topology context is served at `/data/tapi-common:context/tapi-topology:topology-context`
+  topology context is served at `/restconf/data/tapi-common:context/tapi-topology:topology-context`
   but ONOS's `ols` driver does not consume it.
 - **No authentication anywhere.** The demo assumes the twin runs with
   authentication off (no `TWINLIGHT_API_TOKENS`): neither the adapter nor the

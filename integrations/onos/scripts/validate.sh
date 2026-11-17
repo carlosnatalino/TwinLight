@@ -42,8 +42,10 @@ say "Layer 1 — TwinLight digital twin"
 check "twin /health returns ok" \
   bash -c "curl -sSf '${TWIN_URL}/health' | grep -q '\"status\":\"ok\"'"
 
-check "twin serves T-API v2.6.0 SIPs" \
-  bash -c "curl -sSf '${TWIN_URL}/data/tapi-common:context/service-interface-point' \
+# Empty when the twin is unreachable; the check below then fails.
+TWIN_DATA="$(twin_data 2>/dev/null || true)"
+check "twin serves T-API v2.6.0 SIPs at its RESTCONF root" \
+  bash -c "curl -sSf '${TWIN_DATA}/tapi-common:context/service-interface-point' \
     | python3 -c 'import json,sys; n=len(json.load(sys.stdin)[\"tapi-common:context\"][\"service-interface-point\"]); assert n>0, \"no SIPs\"; print(n)'"
 
 # --- Layer 2: the adapter --------------------------------------------------

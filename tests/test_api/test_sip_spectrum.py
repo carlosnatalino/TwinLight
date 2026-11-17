@@ -17,8 +17,8 @@ from tests.conftest import tapi_end_point
 from twinlight.api.common import PHOTONIC_SIP_SPEC
 from twinlight.models.connectivity import MCG_CSEP_SPEC
 
-_BASE = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
-_SIPS = "/data/tapi-common:context/service-interface-point"
+_BASE = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_SIPS = "/restconf/data/tapi-common:context/service-interface-point"
 
 # The default grid: 768 slots of 6.25 GHz, slot 384 centred on 193.1 THz.
 # Slot index denotes a slot *centre* (see TapiContext._slot_range_hz), so the
@@ -168,7 +168,7 @@ class TestOccupancyIsSipLocal:
 
 def test_augment_present_in_the_context_listing(app: TestClient) -> None:
     """All three SIP resources carry the augment, not just the single GET."""
-    for path in ("/data/tapi-common:context", _SIPS):
+    for path in ("/restconf/data/tapi-common:context", _SIPS):
         sips = app.get(path).json()["tapi-common:context"][
             "service-interface-point"
         ]
