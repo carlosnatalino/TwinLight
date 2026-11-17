@@ -14,7 +14,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 
 | Aspect | Status | Notes |
 |--------|--------|------|
-| **Context** | ✓ | `GET /data/tapi-common:context` returns context with SIP list and topology-context ref |
+| **Context** | ✓ | `GET /data/tapi-common:context` returns the whole context: the SIP list and the topology, connectivity, path-computation, physical, OAM and stream contexts, each identical to its own module's GET |
 | **Service interface points** | ✓ | `GET .../service-interface-point`, `GET .../service-interface-point={uuid}`; each SIP carries the `tapi-photonic-media:photonic-media-service-interface-point-spec` augment |
 | **Path & JSON keys** | ✓ | Hyphenated keys, `tapi-common:context` wrapper |
 | **Content-Type** | ✓ | Responses under `/data/` and `{restconf-root}/data/` use `application/yang-data+json` (RESTCONF) |

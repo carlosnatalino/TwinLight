@@ -62,7 +62,6 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
       const sips = ctx["service-interface-point"] ?? [];
 
       const topologyData: TopologyData = {
-        context: ctx,
         topologies,
         sips,
       };

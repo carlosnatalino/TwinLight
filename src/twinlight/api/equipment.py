@@ -25,10 +25,21 @@ def _dump(model) -> dict:
     return model.model_dump(by_alias=True)
 
 
+def physical_context_payload(ctx) -> dict:
+    """The ``tapi-equipment:physical-context`` container.
+
+    One function for both views of it, this module's GET and the full
+    context GET (``api/common.py``), so the two cannot disagree.
+    """
+    return _dump(ctx.physical_context())
+
+
 @router.get(_BASE)
 async def get_physical_context(request: Request) -> dict:
     """Every device (with its equipment) and every physical span."""
-    return {"tapi-equipment:physical-context": _dump(request.app.state.context.physical_context())}
+    return {
+        "tapi-equipment:physical-context": physical_context_payload(request.app.state.context)
+    }
 
 
 @router.get(f"{_BASE}/device")

@@ -62,15 +62,25 @@ def _parse(body: dict) -> PathCompService:
         ) from exc
 
 
+def path_computation_context_payload(ctx) -> dict[str, Any]:
+    """The ``tapi-path-computation:path-computation-context`` container.
+
+    One function for both views of it, this module's GET and the full
+    context GET (``api/common.py``), so the two cannot disagree.
+    """
+    return {
+        "path-comp-service": [_dump(s) for s in ctx.get_path_comp_services()],
+        "path": ctx.get_paths(),
+    }
+
+
 @router.get(_BASE)
 async def get_path_computation_context(request: Request) -> dict:
     """The whole path-computation context: services and computed paths."""
-    ctx = request.app.state.context
     return {
-        "tapi-path-computation:path-computation-context": {
-            "path-comp-service": [_dump(s) for s in ctx.get_path_comp_services()],
-            "path": ctx.get_paths(),
-        }
+        "tapi-path-computation:path-computation-context": (
+            path_computation_context_payload(request.app.state.context)
+        )
     }
 
 

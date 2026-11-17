@@ -469,9 +469,11 @@ export interface ComputePathResponse {
   path: PathCandidate[];
 }
 
-// Derived / enriched types used by the UI
+// Derived / enriched types used by the UI.
+// Cached in localStorage: it keeps only what the UI reads from the full
+// context, not the context itself, which also carries the connectivity,
+// path-computation and physical contexts.
 export interface TopologyData {
-  context: ContextResponse["tapi-common:context"];
   topologies: Topology[];
   sips: ServiceInterfacePoint[];
 }
