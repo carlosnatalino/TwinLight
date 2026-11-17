@@ -144,7 +144,7 @@ Once the stack reports healthy:
 | <http://localhost:8080/metrics> | Prometheus exposition |
 | <http://localhost:9090> | Prometheus UI |
 | <http://localhost:3000> | Grafana (`admin` / `admin`); the dashboard is provisioned in the *TwinLight* folder and starred, so it appears under *Starred* on the home page |
-| `localhost:50051` | gNMI: the T-API measurement stream (discover it at `/data/tapi-common:context/tapi-streaming:stream-context`) |
+| `localhost:50051` | gNMI: the T-API measurement stream (discover it at `/data/tapi-common:context/tapi-streaming:stream-context`); from the host, run `twinlight-client --gnmi-target localhost:50051`, since the advertised `grpc://twin:50051` resolves only inside the Compose network |
 
 The default scenario is **CORONET CONUS** — a 75-ROADM US continental backbone
 with 198 fiber spans. To run the small two-site scenario instead:
@@ -319,9 +319,9 @@ measurement stream with `twinlight-client`. To clear them again, delete each ser
 The companion client library and CLI ship in the same distribution:
 
 ```bash
-twinlight-client                                   # localhost defaults
-twinlight-client --rest-url http://host:8080       # stream address comes from discovery
-twinlight-client --gnmi-target host:50051          # override the advertised address
+twinlight-client                                   # REST on localhost:8080, stream address from discovery
+twinlight-client --gnmi-target localhost:50051     # Compose stack, or a host name that does not resolve
+twinlight-client --rest-url http://host:8080       # another twin
 ```
 
 It lists the active services and lets you pick one, then discovers the T-API
@@ -329,13 +329,20 @@ measurement stream and the service's oam-job over RESTCONF and prints that
 job's records: the transient-aware OPM (OSNR, GSNR, Q-factor, pre- and post-FEC
 BER, NGMI, chromatic dispersion, PMD), decoded from TAPI protobuf. After a
 dropped connection it resubscribes from its last record, so no sample is lost.
-See [docs/API.md § gNMI streaming](docs/API.md#gnmi-streaming), which also
-covers migrating from the earlier, custom gNMI paths.
+
+The stream address is the one the twin advertises, `grpc://<its FQDN>:50051` by
+default. From the host, the Compose stack's `grpc://twin:50051` does not
+resolve, and neither does a laptop's bare host name; the client then stops at
+once, names the address it tried, and suggests the two remedies: pass
+`--gnmi-target localhost:50051`, or set `streaming.advertised_address` on the
+twin ([details](docs/API.md#when-the-advertised-address-cannot-be-reached)).
+[docs/API.md § gNMI streaming](docs/API.md#gnmi-streaming) has the rest, including
+migrating from the earlier, custom gNMI paths.
 
 To see every step of the protocol — discovery, Capabilities, history replay,
 decoding, resume after a dropped connection, value qualifiers on a fiber cut —
 run [`examples/tapi_stream_walkthrough.py`](examples/tapi_stream_walkthrough.py)
-(`--fail-link --follow` for the full tour). Any gNMI client can subscribe too;
+(`--fail-link --follow` for the full tour; it takes `--gnmi-target` too). Any gNMI client can subscribe too;
 [docs/API.md § Testing with gnmic](docs/API.md#testing-with-gnmic) shows the
 commands for [gnmic](https://gnmic.openconfig.net).
 
@@ -433,7 +440,7 @@ TWINLIGHT_API_TOKEN=<token-1>
 twinlight --config examples/twin_config.yaml       # logs "bearer token required on REST and gNMI"
 curl -H "Authorization: Bearer <token-1>" http://localhost:8080/internal/whoami
 # {"principal":"ui","authentication":"bearer-token"}
-twinlight-client                                   # REST and gNMI, token from ./.env
+twinlight-client                                   # REST and gNMI, token from ./.env (--gnmi-target: see Stream live OPM)
 ```
 
 A request without a valid token gets `401` with a `WWW-Authenticate: Bearer`

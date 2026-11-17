@@ -38,13 +38,64 @@ CONNECTION_PROTOCOL_GNMI = "tapi-streaming:CONNECTION_PROTOCOL_GNMI"
 ENCODING_FORMAT_PROTOBUF = "tapi-streaming:ENCODING_FORMAT_PROTOBUF"
 STREAM_STATE_ACTIVE = "tapi-streaming:STREAM_STATE_ACTIVE"
 
-# Status codes worth a resubscription; anything else (a rejected subscription,
-# a wrong token) would fail the same way again.
+# Status codes worth a resubscription once the stream has been reached;
+# anything else (a rejected subscription, a wrong token) would fail the same
+# way again.
 _TRANSIENT = {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.CANCELLED, grpc.StatusCode.UNKNOWN}
 
 
 class StreamDiscoveryError(RuntimeError):
     """The twin offers no stream this client can consume."""
+
+
+class StreamUnreachableError(RuntimeError):
+    """The stream at ``target`` never answered a subscription: the address
+    cannot be reached from here (``UNAVAILABLE`` before any response).
+
+    Distinct from a connection lost after the server has answered, which
+    :meth:`TapiStreamClient.follow` retries. ``rpc_error`` is the underlying
+    ``grpc.aio.AioRpcError``.
+    """
+
+    def __init__(self, target: str, rpc_error: grpc.aio.AioRpcError) -> None:
+        self.target = target
+        self.rpc_error = rpc_error
+        super().__init__(
+            f"cannot reach the measurement stream at {target}: "
+            f"{rpc_error.code().name}: {rpc_error.details()}"
+        )
+
+    @property
+    def code(self) -> grpc.StatusCode:
+        return self.rpc_error.code()
+
+    @property
+    def details(self) -> str:
+        return self.rpc_error.details() or ""
+
+
+def unreachable_message(
+    error: StreamUnreachableError, connection_address: str | None = None
+) -> str:
+    """What to tell a user whose stream cannot be reached.
+
+    ``connection_address`` is the address the twin advertised when that is
+    what was tried, None when the user's ``--gnmi-target`` overrode it. Only
+    the advertised case gets the remedies: an explicit target is the user's
+    own to fix.
+    """
+    reason = f"{error.code.name}: {error.details}"
+    if connection_address is None:
+        return (
+            f"Cannot reach the measurement stream at {error.target} "
+            f"(from --gnmi-target): {reason}"
+        )
+    return (
+        f"Cannot reach the measurement stream at {error.target}, the "
+        f"connection-address the twin advertises ({connection_address}): {reason}\n"
+        "Pass --gnmi-target HOST:PORT to connect elsewhere, or set "
+        "streaming.advertised_address on the twin to an address clients can reach."
+    )
 
 
 @dataclass(frozen=True)
@@ -216,10 +267,15 @@ class TapiStreamClient:
             "gnmi_version": resp.gNMI_version,
         }
 
-    async def records(
-        self, *, start_ns: int | None = None, job_uuid: str | None = None
-    ) -> AsyncIterator[MeasurementRecord]:
-        """One subscription's records, optionally of one oam-job only."""
+    async def _responses(
+        self, start_ns: int | None
+    ) -> AsyncIterator[gnmi_pb2.SubscribeResponse]:
+        """One subscription's raw responses, ``sync_response`` included.
+
+        ``UNAVAILABLE`` before the first response raises
+        :class:`StreamUnreachableError`; every other failure is the
+        ``grpc.aio.AioRpcError`` itself.
+        """
         hold = asyncio.Event()
 
         async def requests() -> AsyncIterator[gnmi_pb2.SubscribeRequest]:
@@ -227,14 +283,32 @@ class TapiStreamClient:
             await hold.wait()  # keep the send side open while subscribed
 
         call = self._require_stub().Subscribe(requests(), metadata=self._metadata)
+        answered = False
         try:
             async for response in call:
-                for record in decode_record(response):
-                    if job_uuid is None or record.job_uuid == job_uuid:
-                        yield record
+                answered = True
+                yield response
+        except grpc.aio.AioRpcError as exc:
+            if not answered and exc.code() == grpc.StatusCode.UNAVAILABLE:
+                raise StreamUnreachableError(self._target, exc) from exc
+            raise
         finally:
             hold.set()
             call.cancel()
+
+    async def records(
+        self, *, start_ns: int | None = None, job_uuid: str | None = None
+    ) -> AsyncIterator[MeasurementRecord]:
+        """One subscription's records, optionally of one oam-job only.
+
+        Raises :class:`StreamUnreachableError` if the stream cannot be reached
+        at all, ``grpc.aio.AioRpcError`` for any other failure; nothing is
+        retried.
+        """
+        async for response in self._responses(start_ns):
+            for record in decode_record(response):
+                if job_uuid is None or record.job_uuid == job_uuid:
+                    yield record
 
     async def follow(
         self,
@@ -245,35 +319,64 @@ class TapiStreamClient:
     ) -> AsyncIterator[MeasurementRecord]:
         """Records across reconnections, resuming without loss (ST-6.4).
 
-        After a transient failure it resubscribes from the timestamp of the
-        last record it yielded. The twin replays from that time inclusive,
-        so records already seen at that timestamp are dropped here.
+        The subscription counts as established once the server has answered
+        it at all; the twin sends a ``sync_response`` right after a subscribe,
+        so a stream with no records yet for ``job_uuid`` is established too.
+
+        Not retried: a failure before the subscription is established. A
+        stream that cannot be reached at the first connection raises
+        :class:`StreamUnreachableError` at once (a wrong address is not a
+        dropped connection); any other early failure raises its
+        ``grpc.aio.AioRpcError``. A non-transient status (a rejected
+        subscription, a wrong token) is never retried either.
+
+        Retried: once established, a lost connection (``UNAVAILABLE``,
+        ``CANCELLED``, ``UNKNOWN``, or a server that cannot be reached while
+        it is down), every ``retry_delay_s``, up to ``max_retries`` failures in
+        a row (None: without end; the count restarts whenever the server
+        answers again). When retries run out, the last ``grpc.aio.AioRpcError``
+        is raised. Each resubscription starts at the timestamp of the last
+        record yielded; the twin replays from that time inclusive, so records
+        already seen at that timestamp are dropped here.
         """
         last_ns: int | None = None
         seen_at_last: set[str] = set()
+        established = False
         failures = 0
         while True:
             try:
-                async for record in self.records(start_ns=last_ns, job_uuid=job_uuid):
+                async for response in self._responses(last_ns):
+                    established = True
                     failures = 0
-                    if last_ns is not None and (
-                        record.logged_ns < last_ns
-                        or (record.logged_ns == last_ns and record.job_uuid in seen_at_last)
-                    ):
-                        continue  # already yielded before the reconnection
-                    if record.logged_ns != last_ns:
-                        last_ns, seen_at_last = record.logged_ns, set()
-                    seen_at_last.add(record.job_uuid)
-                    yield record
+                    for record in decode_record(response):
+                        if job_uuid is not None and record.job_uuid != job_uuid:
+                            continue
+                        if last_ns is not None and (
+                            record.logged_ns < last_ns
+                            or (record.logged_ns == last_ns and record.job_uuid in seen_at_last)
+                        ):
+                            continue  # already yielded before the reconnection
+                        if record.logged_ns != last_ns:
+                            last_ns, seen_at_last = record.logged_ns, set()
+                        seen_at_last.add(record.job_uuid)
+                        yield record
                 return
+            except StreamUnreachableError as exc:
+                if not established:
+                    raise
+                error = exc.rpc_error  # the server is down: a lost connection
             except grpc.aio.AioRpcError as exc:
-                if exc.code() not in _TRANSIENT:
+                if not established:
                     raise
-                failures += 1
-                if max_retries is not None and failures > max_retries:
-                    raise
-                logger.warning(
-                    "stream interrupted (%s); resubscribing in %.1f s from %s",
-                    exc.code().name, retry_delay_s, last_ns,
-                )
-                await asyncio.sleep(retry_delay_s)
+                error = exc
+            if error.code() not in _TRANSIENT:
+                raise error
+            failures += 1
+            if max_retries is not None and failures > max_retries:
+                raise error
+            logger.warning(
+                "stream interrupted (%s); resubscribing in %.1f s %s",
+                error.code().name, retry_delay_s,
+                "for new records" if last_ns is None else f"from {last_ns}",
+            )
+            await asyncio.sleep(retry_delay_s)

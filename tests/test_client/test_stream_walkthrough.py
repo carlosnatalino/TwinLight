@@ -96,3 +96,40 @@ def test_without_a_token_it_says_so(
 
     assert asyncio.run(go()) == 1
     assert "requires an API token" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("override", [False, True], ids=["advertised", "gnmi-target"])
+async def test_unreachable_stream_stops_with_a_hint(
+    twin_config: TwinConfig, capsys: pytest.CaptureFixture[str], override: bool,
+    dead_target: str,
+) -> None:
+    """The first gNMI call names the address it tried and, for the advertised
+    one, how to fix it."""
+    walkthrough = _load()
+    dead = dead_target
+    if not override:
+        twin_config.streaming.advertised_address = f"grpc://{dead}"
+    twin = await start_twin(twin_config)
+    try:
+        await twin.add_service()
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=twin.app), base_url="http://twin"
+        ) as http:
+            opts = walkthrough.Options(gnmi_target=dead if override else None)
+            assert await asyncio.wait_for(walkthrough.run(http, opts), 10.0) == 1
+    finally:
+        await twin.close()
+
+    err = capsys.readouterr().err
+    if override:
+        assert err.startswith(
+            f"Cannot reach the measurement stream at {dead} (from --gnmi-target): UNAVAILABLE: "
+        )
+        assert "advertised_address" not in err
+    else:
+        assert err.startswith(
+            f"Cannot reach the measurement stream at {dead}, the connection-address the twin "
+            f"advertises (grpc://{dead}): UNAVAILABLE: "
+        )
+        assert "Pass --gnmi-target HOST:PORT" in err
+        assert "streaming.advertised_address" in err

@@ -169,7 +169,7 @@ or is not followed, with the reason for each.
 |-------|--------|-----------|--------|
 | Auth token (ST-0.1) | Client acquires a token, e.g. from an authorisation service (§7.11.2) | Optional pre-shared tokens from `TWINLIGHT_API_TOKENS`, sent as `authorization: Bearer <token>` gRPC metadata; `UNAUTHENTICATED` otherwise. The same tokens gate the RESTCONF discovery (ST-0.2). No token service, no TLS | Lab tool; the tokens keep unintended clients off the twin without an identity provider |
 | `log-record-strategy` | May be omitted when it is the default (`WHOLE_ENTITY`) | Stated explicitly | A client can match all six §6.2.2 properties without knowing YANG defaults |
-| `connection-address` | `grpc://<host-fqdn>:<port>` | `streaming.advertised_address`, else `grpc://<FQDN>:<grpc_port>` | The FQDN is wrong behind NAT or a Compose port mapping, so it can be overridden |
+| `connection-address` | `grpc://<host-fqdn>:<port>` | `streaming.advertised_address`, else `grpc://<FQDN>:<grpc_port>` | The FQDN is wrong behind NAT or a Compose port mapping, or when it does not resolve, so it can be overridden. `twinlight-client` connects to it unless `--gnmi-target` says otherwise, and stops with an error if it cannot reach it ([API.md](API.md#when-the-advertised-address-cannot-be-reached)) |
 
 **Subscription (§6.3.4)**
 

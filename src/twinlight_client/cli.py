@@ -6,7 +6,10 @@ Flow (TR-548 ST-0.2, ST-6.2, ST-6.4):
      find the oam-job that measures the chosen service.
   3. Subscribe over gNMI, decode each tapi.MeasurementDetails record of that
      job, and print it. After a dropped connection, resubscribe from the last
-     record's timestamp so no sample is lost.
+     record's timestamp so no sample is lost. A stream that cannot be reached
+     at the first connection is an error: the CLI names the address it tried
+     and exits 1 (pass --gnmi-target when the advertised address is not
+     reachable from here).
 
 The values are the twin's live OPM, transient fluctuations included (EDFA
 reservoir, polarization/PDL, phase noise, environmental) — the same values
@@ -39,9 +42,11 @@ from twinlight.auth import CLIENT_TOKEN_ENV_VAR
 from twinlight_client.client import TapiClient
 from twinlight_client.credentials import add_token_argument, resolve_token
 from twinlight_client.streaming import (
+    StreamUnreachableError,
     TapiStreamClient,
     discover_stream,
     oam_job_for_service,
+    unreachable_message,
 )
 
 _TOKEN_HINT = f"set {CLIENT_TOKEN_ENV_VAR} (environment or ./.env) or pass --token"
@@ -154,8 +159,11 @@ async def _stream_service(
     gnmi_target: str | None,
     token: str | None,
     service: dict[str, Any],
-) -> None:
-    """Follow the selected service's records on the measurement stream."""
+) -> int:
+    """Follow the selected service's records on the measurement stream.
+
+    Returns the exit status: 1 when the stream cannot be reached at all.
+    """
     uuid = service["uuid"]
     async with TapiClient(rest_url, token=token) as rest:
         endpoint = await discover_stream(rest)
@@ -176,16 +184,24 @@ async def _stream_service(
 
     async with TapiStreamClient(target, token) as stream:
         count = 0
-        async for record in stream.follow(job_uuid=job_uuid):
-            count += 1
-            when = (
-                # tz-aware, then rendered in the operator's local time.
-                _dt.datetime.fromtimestamp(record.sampled_ms / 1000, tz=_dt.UTC)
-                .astimezone()
-                .strftime("%H:%M:%S")
-            )
-            # flush each line so the stream is visible when piped/redirected.
-            print(_value_line(count, when, record.measurements), flush=True)
+        try:
+            async for record in stream.follow(job_uuid=job_uuid):
+                count += 1
+                when = (
+                    # tz-aware, then rendered in the operator's local time.
+                    _dt.datetime.fromtimestamp(record.sampled_ms / 1000, tz=_dt.UTC)
+                    .astimezone()
+                    .strftime("%H:%M:%S")
+                )
+                # flush each line so the stream is visible when piped/redirected.
+                print(_value_line(count, when, record.measurements), flush=True)
+        except StreamUnreachableError as exc:
+            # Never reached: a wrong address, not a dropped connection, so
+            # stop and say which address and how to fix it.
+            advertised = None if gnmi_target else endpoint.connection_address
+            print(unreachable_message(exc, advertised), file=sys.stderr, flush=True)
+            return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -207,7 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "gNMI host:port, overriding the connection-address the twin "
-            "advertises (useful behind NAT or a port mapping)"
+            "advertises (needed when that address is not reachable from "
+            "here: a Compose stack seen from the host, NAT, a port mapping)"
         ),
     )
     add_token_argument(parser)
@@ -239,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        asyncio.run(_stream_service(args.rest_url, args.gnmi_target, token, service))
+        return asyncio.run(_stream_service(args.rest_url, args.gnmi_target, token, service))
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
     except grpc.aio.AioRpcError as exc:

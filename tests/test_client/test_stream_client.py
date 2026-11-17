@@ -15,11 +15,13 @@ from twinlight.auth import parse_tokens
 from twinlight.config import TwinConfig
 from twinlight.grpc_server import build_grpc_server
 from twinlight.models.oam import oam_job_uuid
+from twinlight.streaming.proto import gnmi_pb2
 from twinlight_client.client import TapiClient
 from twinlight_client.streaming import (
     MeasurementRecord,
     StreamDiscoveryError,
     StreamEndpoint,
+    StreamUnreachableError,
     TapiStreamClient,
     discover_stream,
     oam_job_for_service,
@@ -190,3 +192,69 @@ async def test_follow_resumes_across_a_server_restart_without_loss(twin: Twin) -
     times = [r.logged_ns for r in seen]
     logged = [r.logged_ns for r in twin.stream.log.replay(0) if r.job_uuid == job]
     assert times == logged  # every tick, in order, exactly once
+
+
+# -- A stream that cannot be reached ------------------------------------------------
+
+
+async def test_follow_stops_when_the_stream_is_never_reached(
+    dead_target: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A wrong address is an error at once, not an interruption to retry."""
+    async with TapiStreamClient(dead_target) as client:
+        with pytest.raises(StreamUnreachableError) as info:
+            await take(client.follow(retry_delay_s=0.01), 1)
+    assert info.value.target == dead_target
+    assert info.value.code == grpc.StatusCode.UNAVAILABLE
+    assert isinstance(info.value.rpc_error, grpc.aio.AioRpcError)
+    assert info.value.details
+    assert "resubscribing" not in caplog.text
+
+
+async def test_records_raises_unreachable_too(dead_target: str) -> None:
+    async with TapiStreamClient(dead_target) as client:
+        with pytest.raises(StreamUnreachableError):
+            await take(client.records(), 1)
+
+
+class _AnsweredSpy(TapiStreamClient):
+    """Sets ``answered`` once the server has answered a subscription."""
+
+    def __init__(self, target: str) -> None:
+        super().__init__(target)
+        self.answered = asyncio.Event()
+
+    async def _responses(self, start_ns: int | None) -> AsyncIterator[gnmi_pb2.SubscribeResponse]:
+        async for response in super()._responses(start_ns):
+            self.answered.set()
+            yield response
+
+
+async def test_follow_retries_once_answered_even_before_a_record(
+    twin: Twin, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The sync_response alone establishes the subscription: a twin with no
+    records yet for the job was reached, so losing it later is retried."""
+    svc = await twin.add_service()
+    job = oam_job_uuid(svc)
+    port = twin.port
+
+    async with _AnsweredSpy(twin.target) as client:
+        consumer = asyncio.create_task(take(client.follow(job_uuid=job, retry_delay_s=0.02), 1))
+        await asyncio.wait_for(client.answered.wait(), TIMEOUT)
+        assert not twin.stream.log.replay(0)  # answered, but no record yet
+
+        await twin.server.stop(None)
+        await asyncio.sleep(0.2)  # several resubscriptions to a dead server
+        assert not consumer.done()  # still retrying, not failed
+        assert "resubscribing in 0.0 s for new records" in caplog.text
+
+        twin.server = build_grpc_server(twin.app)
+        twin.server.add_insecure_port(f"127.0.0.1:{port}")
+        await twin.server.start()
+        client.answered.clear()
+        await asyncio.wait_for(client.answered.wait(), TIMEOUT)
+        await twin.stream.tick()
+        records = await consumer
+
+    assert [r.job_uuid for r in records] == [job]

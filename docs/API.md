@@ -546,7 +546,9 @@ TR-548 §6.2.2 makes mandatory for performance data — and one
 
 `record-retention` is `streaming.record_retention_min` (minutes);
 `connection-address` is `streaming.advertised_address`, or
-`grpc://<FQDN>:<grpc_port>` when that is empty. `stream-state` is `ALIGNING`
+`grpc://<FQDN>:<grpc_port>` when that is empty; see
+[When the advertised address cannot be reached](#when-the-advertised-address-cannot-be-reached)
+for when that default is wrong. `stream-state` is `ALIGNING`
 from startup until the first sampling tick has been logged and `ACTIVE` from
 then on (TR-548 ST-1.1). Both UUIDs are name-based and stable across restarts.
 
@@ -1053,9 +1055,9 @@ logged at or after `start` (so the records at `start` arrive again), sends
 ### Consuming it
 
 ```bash
-twinlight-client                                   # localhost defaults
-twinlight-client --rest-url http://host:8080       # address from discovery
-twinlight-client --gnmi-target host:50051          # override the address
+twinlight-client                                   # REST on localhost:8080, stream address from discovery
+twinlight-client --rest-url http://host:8080       # another twin, stream address from discovery
+twinlight-client --gnmi-target localhost:50051     # override the advertised stream address
 TWINLIGHT_API_TOKEN=<token> twinlight-client       # a twin with tokens
 ```
 
@@ -1064,6 +1066,38 @@ service's oam-job over RESTCONF, and prints that job's records, resuming
 automatically after a dropped connection. The one token serves the REST
 lookups and the stream; `--token` overrides `TWINLIGHT_API_TOKEN` (environment
 or `./.env`).
+
+#### When the advertised address cannot be reached
+
+The client connects to the `connection-address` the twin advertises
+([Streaming discovery](#streaming-discovery)) unless `--gnmi-target` overrides
+it. The default, `grpc://<FQDN>:<grpc_port>`, is not always reachable from where
+the client runs:
+
+- **Compose stack, client on the host**: the address is `grpc://twin:50051`,
+  a name that resolves only inside the Compose network. Pass
+  `--gnmi-target localhost:50051` (the published port).
+- **Twin run natively, on a host whose name does not resolve** (common on a
+  laptop, macOS included): pass `--gnmi-target localhost:50051`, or set
+  `streaming.advertised_address` on the twin
+  ([CONFIGURATION.md](CONFIGURATION.md#streaming--the-t-api-measurement-stream)).
+- **NAT or a port mapping**: pass the outside `host:port`, or advertise it.
+
+A stream that cannot be reached at the first connection is an error, not a
+dropped connection: the client stops at once, exits `1`, and prints the address
+it tried, where that address came from, and the gRPC status:
+
+```text
+Cannot reach the measurement stream at twin:50051, the connection-address the twin advertises (grpc://twin:50051): UNAVAILABLE: errors resolving twin:50051: […: Domain name not found]
+Pass --gnmi-target HOST:PORT to connect elsewhere, or set streaming.advertised_address on the twin to an address clients can reach.
+```
+
+With `--gnmi-target`, the message names that target instead (`… at
+localhost:50051 (from --gnmi-target): UNAVAILABLE: …`). Only once the twin has
+answered the subscription (it sends a `sync_response` at once, records or not)
+is a lost connection retried, every second, resuming from the last record
+without loss or duplicates. The walkthrough below fails the same way at its
+first gNMI call.
 
 Programmatically:
 
@@ -1078,6 +1112,10 @@ async with TapiStreamClient(endpoint.target, token) as stream:
     async for record in stream.follow(job_uuid=job):  # ST-6.2 + ST-6.4
         print(record.sampled_ms, record.measurements["gsnr-db"])
 ```
+
+`follow()` raises `StreamUnreachableError` (with `target` and the underlying
+`rpc_error`) when the stream cannot be reached at all; `unreachable_message()`
+turns it into the text above. Its docstring lists what is and is not retried.
 
 `record.measurements` is keyed by the OPM keys of `GET /internal/opm`, with
 `None` for a MISSING measure; `record.details` is the decoded
@@ -1101,8 +1139,9 @@ it; `--follow` ends in `TapiStreamClient.follow`, the library's resume loop.
 ```bash
 python examples/demo_services.py                      # a few services to measure
 python examples/tapi_stream_walkthrough.py --fail-link --follow
+python examples/tapi_stream_walkthrough.py --gnmi-target localhost:50051  # Compose, from the host
 python examples/tapi_stream_walkthrough.py --rest-url http://host:8080 \
-    --gnmi-target localhost:50051 --history 30        # behind a port mapping
+    --gnmi-target host:50051 --history 30             # behind a port mapping
 ```
 
 Steps 5–10 use the raw gNMI stub rather than the library, so the protocol is
@@ -1164,7 +1203,7 @@ are gone:
 | ONCE / POLL, or subscribing to context or topology paths | Read them over RESTCONF |
 | `GnmiConsumer(target)` | `TapiStreamClient(target, token)`, with the target from `discover_stream()` |
 | `streaming.auth_token` (gNMI only) | The twin-wide `TWINLIGHT_API_TOKENS`, required on REST and gNMI alike |
-| `twinlight-client --gnmi-target` required | Optional; the address comes from the stream-context |
+| `twinlight-client --gnmi-target HOST:PORT`, default `localhost:50051` | Optional, no default: the address comes from the stream-context. Pass it when that address is not reachable from the client (a Compose stack seen from the host, a host name that does not resolve); the client then stops at the first connection and says so ([details](#when-the-advertised-address-cannot-be-reached)) |
 | Link-failed BER reported as 1.0 | Every measure `MISSING` (`None` once decoded), for a link-failed or out-of-band service alike |
 
 ## Known gaps

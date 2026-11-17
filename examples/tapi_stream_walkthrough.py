@@ -63,10 +63,12 @@ from twinlight_client.credentials import add_token_argument, bearer_headers, res
 from twinlight_client.streaming import (
     MeasurementRecord,
     StreamEndpoint,
+    StreamUnreachableError,
     TapiStreamClient,
     decode_record,
     select_stream,
     subscribe_request,
+    unreachable_message,
 )
 
 TIMEOUT_S = 15.0
@@ -272,7 +274,16 @@ async def run(http: httpx.AsyncClient, opts: Options) -> int:
         stub = gnmi_pb2_grpc.gNMIStub(channel)
 
         heading(5, "gNMI Capabilities")
-        caps = await stub.Capabilities(gnmi_pb2.CapabilityRequest(), metadata=metadata)
+        try:
+            caps = await stub.Capabilities(gnmi_pb2.CapabilityRequest(), metadata=metadata)
+        except grpc.aio.AioRpcError as exc:
+            if exc.code() != grpc.StatusCode.UNAVAILABLE:
+                raise
+            # The first gNMI call: the address is wrong, not the connection lost.
+            advertised = None if opts.gnmi_target else endpoint.connection_address
+            print(unreachable_message(StreamUnreachableError(target, exc), advertised),
+                  file=sys.stderr, flush=True)
+            return 1
         print(f"   gNMI {caps.gNMI_version}; encodings "
               f"{[gnmi_pb2.Encoding.Name(e) for e in caps.supported_encodings]}")
         for m in caps.supported_models:
@@ -379,7 +390,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rest-url", default="http://localhost:8080",
                         help="the twin's REST base URL (default: %(default)s)")
     parser.add_argument("--gnmi-target", default=None, metavar="HOST:PORT",
-                        help="override the advertised connection-address (NAT, port maps)")
+                        help="override the advertised connection-address when it is not "
+                             "reachable from here (Compose from the host, NAT, port maps)")
     parser.add_argument("--service", default=None, metavar="UUID",
                         help="connectivity service to follow (default: the first)")
     parser.add_argument("--history", type=float, default=5.0, metavar="SECONDS",

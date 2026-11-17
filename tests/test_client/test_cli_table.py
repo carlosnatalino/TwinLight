@@ -1,4 +1,6 @@
-"""Tests for the twinlight-client OPM table rows."""
+"""Tests for the twinlight-client OPM table rows and its error messages."""
+
+import threading
 
 import pytest
 
@@ -56,3 +58,80 @@ def test_rejected_stream_prints_code_and_hint(monkeypatch, capsys):
         "Streaming error: UNAUTHENTICATED: missing token "
         "(set TWINLIGHT_API_TOKEN (environment or ./.env) or pass --token)"
     )
+
+
+# -- A stream that cannot be reached ------------------------------------------------
+# RESTCONF is faked; the gNMI connection is real, to a port that refuses it.
+
+
+def _fake_restconf(monkeypatch, advertised: str) -> None:
+    from twinlight_client import cli
+    from twinlight_client.streaming import StreamEndpoint
+
+    class FakeRest:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    async def fake_fetch(_url, _token=None):
+        return [{"uuid": "svc-1", "name": []}]
+
+    async def fake_discover(_rest):
+        return StreamEndpoint("stream-1", advertised, "tapi-streaming:STREAM_STATE_ACTIVE")
+
+    async def fake_job(_rest, _uuid):
+        return "job-1"
+
+    monkeypatch.setattr(cli, "_fetch_services", fake_fetch)
+    monkeypatch.setattr(cli, "TapiClient", FakeRest)
+    monkeypatch.setattr(cli, "discover_stream", fake_discover)
+    monkeypatch.setattr(cli, "oam_job_for_service", fake_job)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+
+
+def _main_within(argv: list[str], seconds: float = 10.0) -> int:
+    """cli.main(argv), failing the test instead of hanging if it never returns."""
+    from twinlight_client import cli
+
+    result: list[int] = []
+    worker = threading.Thread(target=lambda: result.append(cli.main(argv)), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"twinlight-client still running after {seconds} s"
+    return result[0]
+
+
+def test_unreachable_advertised_address_stops_with_both_remedies(
+    monkeypatch, capsys, caplog, dead_target
+):
+    _fake_restconf(monkeypatch, f"grpc://{dead_target}")
+    assert _main_within(["--rest-url", "http://twin"]) == 1
+    first, second = capsys.readouterr().err.strip().split("\n")
+    assert first.startswith(
+        f"Cannot reach the measurement stream at {dead_target}, the connection-address "
+        f"the twin advertises (grpc://{dead_target}): UNAVAILABLE: "
+    )
+    assert second == (
+        "Pass --gnmi-target HOST:PORT to connect elsewhere, or set "
+        "streaming.advertised_address on the twin to an address clients can reach."
+    )
+    assert "resubscribing" not in caplog.text
+
+
+def test_unreachable_gnmi_target_names_the_override(monkeypatch, capsys, caplog, dead_target):
+    # The advertised address is never tried: --gnmi-target replaces it.
+    _fake_restconf(monkeypatch, "grpc://twin.example.org:50051")
+    assert _main_within(["--rest-url", "http://twin", "--gnmi-target", dead_target]) == 1
+    err = capsys.readouterr().err.strip()
+    assert "\n" not in err
+    assert err.startswith(
+        f"Cannot reach the measurement stream at {dead_target} (from --gnmi-target): "
+        "UNAVAILABLE: "
+    )
+    assert "advertised" not in err
+    assert "resubscribing" not in caplog.text

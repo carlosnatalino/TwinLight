@@ -355,7 +355,7 @@ discovery, subscription and the record format.
 |-------|---------|---------|
 | `sample_interval_s` | `1.0` | Seconds between ticks. Each tick takes one OPM sample of every connectivity service — the same computation `GET /internal/opm` serves — and appends one record per OAM job to the log, whether or not a client is subscribed. Also reported as each record's `sample-interval`. |
 | `record_retention_min` | `5` | Minutes a record stays in the truncated log, published as the stream type's `record-retention`. A client that reconnects within this window and asks to resume from its last record's timestamp loses nothing (TR-548 ST-6.4). |
-| `advertised_address` | `""` | The `connection-address` published on the available-stream, as `grpc://<host>:<port>`. Empty derives it from the host's FQDN and `server.grpc_port`; set it when clients reach the twin through another name or a mapped port (Compose port mappings, NAT). |
+| `advertised_address` | `""` | The `connection-address` published on the available-stream, as `grpc://<host>:<port>`. Empty derives it from the host's FQDN and `server.grpc_port`, which a client cannot reach when that name does not resolve where the client runs (often on a laptop), from the host of a Compose stack (`grpc://twin:50051`), or through NAT or a port mapping. Set it to an address clients can reach, or have each client pass `--gnmi-target`; otherwise `twinlight-client` stops at the first connection with an error naming the address ([API.md](API.md#when-the-advertised-address-cannot-be-reached)). |
 
 All three are restart-only, and the effective values are logged at startup. The
 stream has no token of its own: gNMI accepts the twin-wide API tokens
