@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import SettingsPage from "@/pages/SettingsPage";
+import { useConnectionStore } from "@/store/connection";
+import { useTopologyStore } from "@/store/topology";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -11,7 +13,17 @@ const mockFetch = vi.fn();
 beforeEach(() => {
   localStorage.clear();
   mockFetch.mockReset();
+  useConnectionStore.setState({ apiToken: "", baseUrl: "http://localhost:8080" });
 });
+
+function respond(body: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
+  };
+}
 
 function renderSettings() {
   return render(
@@ -75,5 +87,97 @@ describe("SettingsPage", () => {
     fireEvent.click(screen.getByText("Save"));
     // Verify no error thrown (zustand store update is synchronous)
     expect(input).toHaveValue("http://192.168.1.100:8080");
+  });
+
+  it("renders the API token as a masked input", () => {
+    renderSettings();
+    expect(screen.getByLabelText("API Token")).toHaveAttribute("type", "password");
+    fireEvent.click(screen.getByLabelText("Show token"));
+    expect(screen.getByLabelText("API Token")).toHaveAttribute("type", "text");
+  });
+
+  it("saves the token, re-checks at once and refetches with it", async () => {
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/health")
+          ? respond({ status: "ok" })
+          : url.endsWith("/internal/whoami")
+            ? respond({ principal: "ui", authentication: "bearer-token" })
+            : respond({ "tapi-common:context": {} })
+      )
+    );
+    useConnectionStore.setState({ status: "unauthorized" });
+    renderSettings();
+    fireEvent.change(screen.getByLabelText("API Token"), {
+      target: { value: "  tok-abc  " },
+    });
+    fireEvent.click(screen.getByText("Save token"));
+    expect(useConnectionStore.getState().apiToken).toBe("tok-abc");
+    expect(screen.getByText("API token saved.")).toBeInTheDocument();
+
+    // No waiting for the next poll: the status follows the new token now.
+    await waitFor(() => expect(useConnectionStore.getState().status).toBe("connected"));
+    await waitFor(() => expect(useTopologyStore.getState().isLoading).toBe(false));
+    const contextCall = mockFetch.mock.calls.find(([url]) =>
+      String(url).endsWith("/data/tapi-common:context")
+    );
+    expect(contextCall?.[1].headers.Authorization).toBe("Bearer tok-abc");
+  });
+
+  it("clears a previous test result when saving", async () => {
+    mockFetch
+      .mockResolvedValueOnce(respond({ status: "ok" }))
+      .mockResolvedValueOnce(respond({ principal: null, authentication: "disabled" }));
+    renderSettings();
+    fireEvent.click(screen.getByText("Test Connection"));
+    await screen.findByText(/authentication is disabled/);
+    mockFetch.mockImplementation(() => Promise.reject(new TypeError("offline")));
+    fireEvent.click(screen.getByText("Save token"));
+    expect(screen.queryByText(/authentication is disabled/)).not.toBeInTheDocument();
+    await waitFor(() => expect(useTopologyStore.getState().isLoading).toBe(false));
+  });
+
+  it("tests the typed token before it is saved", async () => {
+    mockFetch
+      .mockResolvedValueOnce(respond({ status: "ok" }))
+      .mockResolvedValueOnce(respond({ principal: "ui", authentication: "bearer-token" }));
+    renderSettings();
+    fireEvent.change(screen.getByLabelText("API Token"), { target: { value: "tok-abc" } });
+    fireEvent.click(screen.getByText("Test Connection"));
+
+    expect(await screen.findByText(/authenticated as "ui"/)).toBeInTheDocument();
+    const whoamiCall = mockFetch.mock.calls[1];
+    expect(whoamiCall[0]).toBe("http://localhost:8080/internal/whoami");
+    expect(whoamiCall[1].headers.Authorization).toBe("Bearer tok-abc");
+    expect(useConnectionStore.getState().apiToken).toBe("");
+  });
+
+  it("reports a rejected token", async () => {
+    mockFetch
+      .mockResolvedValueOnce(respond({ status: "ok" }))
+      .mockResolvedValueOnce(respond({}, 401));
+    renderSettings();
+    fireEvent.change(screen.getByLabelText("API Token"), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByText("Test Connection"));
+    expect(await screen.findByText(/rejected this API token/)).toBeInTheDocument();
+  });
+
+  it("reports a missing token", async () => {
+    mockFetch
+      .mockResolvedValueOnce(respond({ status: "ok" }))
+      .mockResolvedValueOnce(respond({}, 401));
+    renderSettings();
+    fireEvent.click(screen.getByText("Test Connection"));
+    expect(await screen.findByText(/requires an API token/)).toBeInTheDocument();
+    expect(useConnectionStore.getState().status).toBe("unauthorized");
+  });
+
+  it("says when the DT has authentication disabled", async () => {
+    mockFetch
+      .mockResolvedValueOnce(respond({ status: "ok" }))
+      .mockResolvedValueOnce(respond({ principal: null, authentication: "disabled" }));
+    renderSettings();
+    fireEvent.click(screen.getByText("Test Connection"));
+    expect(await screen.findByText(/authentication is disabled/)).toBeInTheDocument();
   });
 });

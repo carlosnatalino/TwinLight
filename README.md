@@ -21,8 +21,9 @@ TwinLight is an optical network **digital twin**: it loads a GNPy network
 description, computes a physics-based quality-of-transmission (QoT) baseline for
 every lightpath, layers four literature-grounded models of *time-varying*
 impairments on top, and exposes the result through the interfaces a real optical
-domain controller would offer — [T-API v2.6.0][tapi] REST, gNMI streaming
-telemetry, and a Prometheus metrics endpoint.
+domain controller would offer — [T-API v2.6.0][tapi] REST, the T-API
+performance-measurement stream over gNMI (TR-548), and a Prometheus metrics
+endpoint.
 
 The result behaves like an optical domain controller you can experiment against:
 useful for validating SDN control logic, running what-if and failure scenarios,
@@ -38,7 +39,7 @@ model:
 | **Slow / static** | Per-lightpath QoT baseline (GSNR, OSNR, CD, PMD, latency) | GNPy split-step propagation, or a self-contained closed-form GN/EGN kernel |
 | **Fast / transient** | µs-to-diurnal fluctuations of those same metrics | Four analytical impairment models composed over the baseline (see [Physics](#physics)) |
 
-Every OPM read — REST response, gNMI sample, or Prometheus scrape — is evaluated
+Every OPM read — REST response, gNMI stream record, or Prometheus scrape — is evaluated
 at the current wall-clock time, so a subscriber sees a signal that *moves* the
 way a deployed coherent receiver's telemetry moves.
 
@@ -56,6 +57,7 @@ way a deployed coherent receiver's telemetry moves.
   - [Rehearse soft failures](#rehearse-soft-failures)
   - [Drive the transparent controller](#drive-the-transparent-controller)
   - [Checkpoint and restore](#checkpoint-and-restore)
+  - [Require API tokens](#require-api-tokens)
 - [Architecture](#architecture)
 - [Physics](#physics)
   - [QoT baseline](#qot-baseline)
@@ -88,8 +90,14 @@ way a deployed coherent receiver's telemetry moves.
   ranks it, first-fit spectrum assignment on a 6.25 GHz flexi-grid, and
   admission control against the required GSNR of the modulation format,
   choosing the densest format that closes the link when none is requested.
-- **Streaming telemetry** — gNMI `Subscribe` in ONCE / STREAM / POLL modes over
-  gRPC, served by a stateless adapter that calls the FastAPI app in-process.
+- **Streaming telemetry** — the T-API v2.6.0 performance-measurement stream of
+  TR-548 over gNMI: discovered through `tapi-streaming:stream-context`, one
+  protobuf `MeasurementDetails` record per service per tick under the service's
+  `tapi-oam` job, a truncated log that lets a client resume after a dropped
+  connection.
+- **Optional token authentication** — set `TWINLIGHT_API_TOKENS` in the
+  environment or a `.env` file and every REST request and gNMI call needs one
+  of those bearer tokens; leave it unset and both interfaces stay open.
 - **Observability out of the box** — Prometheus `/metrics` plus a provisioned
   Grafana dashboard in the Compose stack.
 - **Web UI** — a React SPA for topology, services, spectrum occupancy, path
@@ -136,7 +144,7 @@ Once the stack reports healthy:
 | <http://localhost:8080/metrics> | Prometheus exposition |
 | <http://localhost:9090> | Prometheus UI |
 | <http://localhost:3000> | Grafana (`admin` / `admin`); the dashboard is provisioned in the *TwinLight* folder and starred, so it appears under *Starred* on the home page |
-| `localhost:50051` | gNMI gRPC endpoint |
+| `localhost:50051` | gNMI: the T-API measurement stream (discover it at `/data/tapi-common:context/tapi-streaming:stream-context`); from the host, run `twinlight-client --gnmi-target localhost:50051`, since the advertised `grpc://twin:50051` resolves only inside the Compose network |
 
 The default scenario is **CORONET CONUS** — a 75-ROADM US continental backbone
 with 198 fiber spans. To run the small two-site scenario instead:
@@ -292,8 +300,8 @@ usually take more attempts than `DP-QPSK`, and on a long-haul topology it may no
 be admissible at all — so with a large `-n` you may see fewer services admitted
 than requested, which the script reports per format.
 
-Then open the **Monitoring** page in the web UI, or watch one over gNMI with
-`twinlight-client`. To clear them again, delete each service by UUID with
+Then open the **Monitoring** page in the web UI, or follow one on the T-API
+measurement stream with `twinlight-client`. To clear them again, delete each service by UUID with
 `DELETE /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}`.
 
 > **Why a printed GSNR differs from the admission figure.** Admission tests the
@@ -311,13 +319,32 @@ Then open the **Monitoring** page in the web UI, or watch one over gNMI with
 The companion client library and CLI ship in the same distribution:
 
 ```bash
-twinlight-client                                              # localhost defaults
-twinlight-client --rest-url http://host:8080 --gnmi-target host:50051
+twinlight-client                                   # REST on localhost:8080, stream address from discovery
+twinlight-client --gnmi-target localhost:50051     # Compose stack, or a host name that does not resolve
+twinlight-client --rest-url http://host:8080       # another twin
 ```
 
-It lists the active services, lets you pick one, and streams its transient-aware
-OPM (OSNR, GSNR, Q-factor, pre- and post-FEC BER, NGMI, chromatic dispersion,
-PMD) over gNMI.
+It lists the active services and lets you pick one, then discovers the T-API
+measurement stream and the service's oam-job over RESTCONF and prints that
+job's records: the transient-aware OPM (OSNR, GSNR, Q-factor, pre- and post-FEC
+BER, NGMI, chromatic dispersion, PMD), decoded from TAPI protobuf. After a
+dropped connection it resubscribes from its last record, so no sample is lost.
+
+The stream address is the one the twin advertises, `grpc://<its FQDN>:50051` by
+default. From the host, the Compose stack's `grpc://twin:50051` does not
+resolve, and neither does a laptop's bare host name; the client then stops at
+once, names the address it tried, and suggests the two remedies: pass
+`--gnmi-target localhost:50051`, or set `streaming.advertised_address` on the
+twin ([details](docs/API.md#when-the-advertised-address-cannot-be-reached)).
+[docs/API.md § gNMI streaming](docs/API.md#gnmi-streaming) has the rest, including
+migrating from the earlier, custom gNMI paths.
+
+To see every step of the protocol — discovery, Capabilities, history replay,
+decoding, resume after a dropped connection, value qualifiers on a fiber cut —
+run [`examples/tapi_stream_walkthrough.py`](examples/tapi_stream_walkthrough.py)
+(`--fail-link --follow` for the full tour; it takes `--gnmi-target` too). Any gNMI client can subscribe too;
+[docs/API.md § Testing with gnmic](docs/API.md#testing-with-gnmic) shows the
+commands for [gnmic](https://gnmic.openconfig.net).
 
 ### Rehearse soft failures
 
@@ -389,6 +416,46 @@ twinlight --config examples/twin_config.yaml --restore-latest
 Both kinds record the physical-layer backend that produced them; restoring one
 under a different backend is rejected rather than silently reinterpreted.
 
+### Require API tokens
+
+Authentication is off until you configure tokens. Once `TWINLIGHT_API_TOKENS`
+is set, every REST request and every gNMI RPC must carry one of them as a bearer
+token; only `GET /health` stays public, for liveness probes. The same token
+works on both interfaces. The twin reads the variable from the environment or
+from `./.env`:
+
+```bash
+cp .env.example .env
+python -c 'import secrets; print(secrets.token_urlsafe(32))'   # once per client
+```
+
+```dotenv
+# .env: the tokens the twin accepts, optionally named for the logs
+TWINLIGHT_API_TOKENS=ui:<token-1>,onos:<token-2>
+# the token twinlight-client, twinlight-soft-failure and demo_services.py present
+TWINLIGHT_API_TOKEN=<token-1>
+```
+
+```bash
+twinlight --config examples/twin_config.yaml       # logs "bearer token required on REST and gNMI"
+curl -H "Authorization: Bearer <token-1>" http://localhost:8080/internal/whoami
+# {"principal":"ui","authentication":"bearer-token"}
+twinlight-client                                   # REST and gNMI, token from ./.env (--gnmi-target: see Stream live OPM)
+```
+
+A request without a valid token gets `401` with a `WWW-Authenticate: Bearer`
+challenge; a gNMI call gets `UNAUTHENTICATED`. With no tokens configured the
+check is not installed at all, so an open twin pays nothing for it. In the web
+UI, enter the token under **Settings → API Token**. In the Compose stack, put
+`TWINLIGHT_API_TOKENS` in a `.env` next to `docker-compose.yml`; Compose passes
+it to the twin. To keep Prometheus scraping, follow the comment in
+[`docker/prometheus.yml`](docker/prometheus.yml).
+
+Tokens are sent in clear text: the twin does not terminate TLS, so terminate it
+in front of the twin for anything beyond a lab network. Details are in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md#authentication--api-tokens) and
+[docs/API.md](docs/API.md#authentication).
+
 ## Architecture
 
 ```
@@ -406,15 +473,16 @@ NetworkX DiGraph                    ← routing graph
       +
 Transient layer                     ← four analytical impairment models
 
-gNMI gRPC server                    ← stateless adapter, port 50051
+gNMI gRPC server                    ← T-API measurement stream (TR-548), port 50051
 ```
 
 Two design rules shape the codebase:
 
-1. **The FastAPI application owns all state.** The gNMI/gRPC server is a protocol
-   adapter with no state of its own — it calls the same FastAPI app in-process
-   through `httpx.ASGITransport`, so there is no TCP round-trip and no second
-   cache to keep coherent.
+1. **The FastAPI application owns all state.** The gNMI/gRPC server has no
+   state of its own — it streams the record log of the app's measurement
+   stream, whose sampler reads OPM through the same function as
+   `GET /internal/opm`, so there is no second computation and no second cache
+   to keep coherent.
 2. **T-API surfaces stay standard.** Anything non-standard — OPM readings, path
    metadata, admin utilities, runtime configuration, the transparent controller
    — lives under separate `/internal/`, `/admin/`, `/config/` and

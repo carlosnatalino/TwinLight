@@ -9,6 +9,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from twinlight.api.oam import oam_context_payload
+from twinlight.api.streaming import stream_context_payload
+
 router = APIRouter(prefix="/data", tags=["tapi-common"])
 
 # tapi-photonic-media augments /tapi-common:context/service-interface-point
@@ -45,6 +48,8 @@ async def get_context(request: Request) -> dict:
             "tapi-topology:topology-context": ctx.topology_context.model_dump(
                 by_alias=True
             ),
+            "tapi-oam:oam-context": oam_context_payload(ctx),
+            "tapi-streaming:stream-context": stream_context_payload(request),
         }
     }
 

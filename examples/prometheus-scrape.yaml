@@ -16,6 +16,12 @@ scrape_configs:
   - job_name: twinlight
     metrics_path: /metrics
     scrape_interval: 15s
+    # A twin with TWINLIGHT_API_TOKENS set answers /metrics with 401. Give
+    # Prometheus one of its tokens: put the bare token in a file, point
+    # credentials_file at it, and uncomment these three lines.
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /path/to/twinlight.token
     static_configs:
       - targets:
           - "localhost:8080"

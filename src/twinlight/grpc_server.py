@@ -1,4 +1,4 @@
-"""gRPC server setup for gNMI service."""
+"""gRPC server for the T-API measurement stream over gNMI (TR-548 §6.3)."""
 
 from __future__ import annotations
 
@@ -6,15 +6,32 @@ import asyncio
 import logging
 
 import grpc
-import httpx
 from fastapi import FastAPI
 
-from twinlight.streaming.gnmi_service import GnmiServicer
+from twinlight.auth import TokenAuthenticator
+from twinlight.streaming.gnmi_service import TapiGnmiServicer
+from twinlight.streaming.interceptors import TokenAuthInterceptor
 from twinlight.streaming.proto import gnmi_pb2_grpc
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_GRPC_GRACE_S: float = 5.0
+
+
+def build_grpc_server(app: FastAPI) -> grpc.aio.Server:
+    """A gRPC server serving gNMI for ``app``, not yet bound or started.
+
+    The token interceptor uses the authenticator ``create_app`` attached to
+    ``app.state``, so gNMI accepts exactly the tokens REST does. Without
+    tokens no interceptor is installed and calls go straight to the servicer.
+    """
+    authenticator: TokenAuthenticator = app.state.authenticator
+    interceptors = [TokenAuthInterceptor(authenticator)] if authenticator.enabled else []
+    server = grpc.aio.server(interceptors=interceptors)
+    gnmi_pb2_grpc.add_gNMIServicer_to_server(
+        TapiGnmiServicer(app.state.measurement_stream), server
+    )
+    return server
 
 
 async def start_grpc_server(
@@ -24,23 +41,16 @@ async def start_grpc_server(
     shutdown_event: asyncio.Event | None = None,
     grace_seconds: float = DEFAULT_GRPC_GRACE_S,
 ) -> None:
-    """Start the gNMI gRPC server.
+    """Start the gNMI gRPC server for ``app``'s measurement stream.
 
-    Uses httpx.ASGITransport to route gNMI requests to the FastAPI app
-    in-process (no TCP round-trip).
+    The servicer reads the stream's record log directly: values never pass
+    through REST. When API tokens are configured, every call must carry one
+    as a bearer token.
 
     If shutdown_event is set, the server will stop gracefully (stop with
     grace_seconds, then close). Otherwise it runs until wait_for_termination().
     """
-    transport = httpx.ASGITransport(app=app)
-    http_client = httpx.AsyncClient(
-        transport=transport, base_url="http://localhost"
-    )
-
-    server = grpc.aio.server()
-    servicer = GnmiServicer(http_client)
-    gnmi_pb2_grpc.add_gNMIServicer_to_server(servicer, server)
-
+    server = build_grpc_server(app)
     listen_addr = f"[::]:{port}"
     server.add_insecure_port(listen_addr)
 
@@ -84,5 +94,4 @@ async def start_grpc_server(
         logger.info("gNMI gRPC server cancelled — stopping immediately")
         await server.stop(None)
     finally:
-        await http_client.aclose()
         logger.info("gNMI gRPC server stopped")

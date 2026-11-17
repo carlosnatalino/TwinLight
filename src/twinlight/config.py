@@ -15,16 +15,26 @@ Hierarchy:
     │   ├── threshold: FecThresholdConfig
     │   └── hard_decision: HardDecisionFecConfig
     ├── spectrum: SpectrumConfig
+    ├── streaming: StreamingConfig
     └── logging: LoggingConfig
 """
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+
+from twinlight.auth import ApiToken
 
 
 class ClockMode(str, Enum):
@@ -350,6 +360,58 @@ class SpectrumConfig(BaseModel):
     center_frequency_thz: float = Field(default=193.1, gt=0)
 
 
+# -- Streaming section ------------------------------------------------------
+# The T-API v2.6.0 performance-measurement stream over gNMI (TR-548 §6).
+# Served on server.grpc_port; discovered at
+# /data/tapi-common:context/tapi-streaming:stream-context.
+
+_CONNECTION_ADDRESS = re.compile(r"^grpc://[^\s/:]+:[0-9]{1,5}$|^grpc://\[[0-9a-fA-F:.]+\]:[0-9]{1,5}$")
+
+
+class StreamingConfig(BaseModel):
+    """The measurement stream's log, cadence and address.
+
+    Authentication is twin-wide, not per interface: see ``api_tokens``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sample_interval_s: float = Field(
+        default=1.0, gt=0,
+        description=(
+            "Seconds between samples. Every tick takes one OPM sample of every "
+            "connectivity service and logs one record per OAM job, whether or "
+            "not a client is subscribed."
+        ),
+    )
+    record_retention_min: int = Field(
+        default=5, ge=1,
+        description=(
+            "Minutes a record stays in the truncated log, and so how long a "
+            "client may be disconnected and still resume without loss (TR-548 "
+            "ST-6.4). Published as the stream type's record-retention."
+        ),
+    )
+    advertised_address: str = Field(
+        default="",
+        description=(
+            "connection-address published on the available-stream, in the "
+            "grpc://<host>:<port> form TR-548 §6.3.1 asks for. Empty derives it "
+            "from this host's FQDN and server.grpc_port; set it when clients "
+            "reach the twin through another name or a mapped port."
+        ),
+    )
+
+    @field_validator("advertised_address")
+    @classmethod
+    def _check_address(cls, value: str) -> str:
+        if value and not _CONNECTION_ADDRESS.match(value):
+            raise ValueError(
+                f"advertised_address must be grpc://<host>:<port> (got {value!r})"
+            )
+        return value
+
+
 # -- Logging section --------------------------------------------------------
 
 class LoggingConfig(BaseModel):
@@ -394,12 +456,18 @@ class TwinConfig(BaseModel):
     fec: FecConfig = Field(default_factory=FecConfig)
     spectrum: SpectrumConfig = Field(default_factory=SpectrumConfig)
     physics: PhysicsConfig = Field(default_factory=PhysicsConfig)
+    streaming: StreamingConfig = Field(default_factory=StreamingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     restore_path: Path | None = Field(default=None, exclude=True)
     # Set by --reset. Startup state is decided entirely in cli.py, but the file
     # operation the flag implies (moving an existing checkpoint aside) belongs
     # with the other startup side effects in main.py, not in a config loader.
     reset: bool = Field(default=False, exclude=True)
+    # The accepted API tokens. Never from YAML: cli.load_config() reads them
+    # from TWINLIGHT_API_TOKENS or a .env file (see twinlight.auth). Empty
+    # means authentication is off. Excluded from dumps and repr so a config
+    # that is logged or serialised never carries a secret.
+    api_tokens: tuple[ApiToken, ...] = Field(default=(), exclude=True, repr=False)
 
     def checkpoint_path(self) -> Path:
         """Absolute-ish path of the shutdown checkpoint."""

@@ -41,6 +41,12 @@ from twinlight.loader.tapi_builder import TapiBuilder
 from twinlight.models.common import OperationalState, ServiceInterfacePoint
 from twinlight.models.connectivity import ConnectivityService
 from twinlight.models.equipment import PhysicalContext
+from twinlight.models.oam import (
+    ConnectivityServiceEndPointRef,
+    OamJob,
+    oam_job_uuid,
+    tapi_date_and_time,
+)
 from twinlight.models.path_computation import PathCompService
 from twinlight.models.topology import (
     Link,
@@ -186,6 +192,7 @@ class _DetachedService:
     indexed_uids: frozenset[str]
     fibers: frozenset[str] | None
     edfa_uids: list[str]
+    oam_job: OamJob | None
 
 
 class TapiContext:
@@ -223,6 +230,10 @@ class TapiContext:
                 }
 
         self._services: dict[str, ConnectivityService] = {}
+        # tapi-oam jobs, one per admitted service, keyed by job UUID. Owned by
+        # the twin (TR-548 §6.2.3 anchors measurement records on them): created
+        # in add_service, removed in delete_service, carried through snapshots.
+        self._oam_jobs: dict[str, OamJob] = {}
 
         # -- SIP → GNPy UID map -------------------------------------------
         # TapiBuilder stores the GNPy element UID in sip.name[0] with
@@ -484,6 +495,7 @@ class TapiContext:
             ),
             fibers=self._service_fibers.get(uuid),
             edfa_uids=self._service_edfa_uids.get(uuid, []),
+            oam_job=self._oam_jobs.get(oam_job_uuid(uuid)),
         )
         for other in self._sharing_services(uuid):
             self.invalidate_baseline(other)
@@ -496,6 +508,7 @@ class TapiContext:
         self._baseline_cache.pop(uuid, None)
         self._service_fibers.pop(uuid, None)
         self._service_edfa_uids.pop(uuid, None)
+        self._oam_jobs.pop(oam_job_uuid(uuid), None)
         for uid in detached.indexed_uids:
             self._element_to_services[uid].discard(uuid)
         return detached
@@ -519,6 +532,8 @@ class TapiContext:
         for uid in detached.indexed_uids:
             self._element_to_services.setdefault(uid, set()).add(uuid)
         self._services[uuid] = detached.service
+        if detached.oam_job is not None:
+            self._oam_jobs[detached.oam_job.uuid] = detached.oam_job
         # Its neighbours lost and regained it: their baselines were dropped
         # on detach and are recomputed on the next read.
         for other in self._sharing_services(uuid):
@@ -566,6 +581,7 @@ class TapiContext:
         self._service_launch_power[svc.uuid] = power_dbm
         svc.assign_channel(fmt, (lower + upper) // 2, power_dbm)
         self._services[svc.uuid] = svc
+        self._add_oam_job(svc)
         if baseline is not None:
             # The admission propagation is the service's baseline: same path,
             # channel and launch power. Seeding the cache saves a propagation.
@@ -907,6 +923,54 @@ class TapiContext:
     def get_services(self) -> list[ConnectivityService]:
         return list(self._services.values())
 
+    # -- OAM jobs (tapi-oam) ---------------------------------------------
+
+    @staticmethod
+    def receiving_end_point(svc: ConnectivityService) -> Any:
+        """The end-point at which the twin's OPM is measured.
+
+        Admission routes from end-point[0] to end-point[1] and the baseline
+        propagates along that recorded route (see :meth:`_add_service` and
+        :meth:`get_or_compute_baseline`), so the OPM describes the signal arriving at
+        end-point[1] whatever ``direction`` the request declared.
+        """
+        return svc.end_point[1]
+
+    def _oam_job_for(
+        self, svc: ConnectivityService, creation_time: str | None = None
+    ) -> OamJob:
+        return OamJob(
+            uuid=oam_job_uuid(svc.uuid),
+            creation_time=creation_time or tapi_date_and_time(datetime.now(UTC)),
+            connectivity_service_end_point=ConnectivityServiceEndPointRef(
+                connectivity_service_uuid=svc.uuid,
+                connectivity_service_end_point_local_id=(
+                    self.receiving_end_point(svc).local_id
+                ),
+            ),
+        )
+
+    def _add_oam_job(self, svc: ConnectivityService) -> None:
+        job = self._oam_job_for(svc)
+        self._oam_jobs[job.uuid] = job
+
+    def get_oam_jobs(self) -> list[OamJob]:
+        return list(self._oam_jobs.values())
+
+    def get_oam_job(self, uuid: str) -> OamJob | None:
+        return self._oam_jobs.get(uuid)
+
+    def oam_job_for_service(self, service_uuid: str) -> OamJob | None:
+        return self._oam_jobs.get(oam_job_uuid(service_uuid))
+
+    def receiver_gnpy_uid(self, svc: ConnectivityService) -> str | None:
+        """GNPy UID of the transceiver behind the receiving end-point's SIP."""
+        sip_uuid = (
+            self.receiving_end_point(svc)
+            .service_interface_point.service_interface_point_uuid
+        )
+        return self._sip_to_gnpy_uid.get(sip_uuid)
+
     def get_service(self, uuid: str) -> ConnectivityService | None:
         return self._services.get(uuid)
 
@@ -1117,6 +1181,7 @@ class TapiContext:
             )
 
         self.invalidate_baseline(uuid)
+        self._oam_jobs.pop(oam_job_uuid(uuid), None)
         # Strip this service from the /config reverse index.
         for svc_set in self._element_to_services.values():
             svc_set.discard(uuid)
@@ -2660,6 +2725,8 @@ class TapiContext:
             "backend": self._backend.name,
             "spectrum": self._spectrum_state.to_dict(),
             "services": [s.model_dump(by_alias=True) for s in self._services.values()],
+            # Additive key: snapshots without it restore with fresh jobs.
+            "oam_jobs": [j.model_dump(by_alias=True) for j in self._oam_jobs.values()],
             "service_allocation": allocation_ser,
             # /config plane state. Stored in *user units* — the same
             # values the user supplied — so restore replays via
@@ -2718,6 +2785,7 @@ class TapiContext:
         # un-fail every currently-failed link, drop overrides + caches,
         # then re-apply whatever the snapshot recorded.
         self._services.clear()
+        self._oam_jobs.clear()
         self._service_allocation.clear()
         self._service_launch_power.clear()
         self._baseline_cache.clear()
@@ -2736,6 +2804,22 @@ class TapiContext:
         for svc_dict in data.get("services", []):
             svc = ConnectivityService.model_validate(svc_dict)
             self._services[svc.uuid] = svc
+
+        # Restore each service's OAM job. A job recorded in the snapshot keeps
+        # its creation-time; a service without one (older snapshot) gets a new
+        # job. Jobs whose service is absent are dropped rather than orphaned.
+        saved_jobs = {
+            job.uuid: job
+            for job in (
+                OamJob.model_validate(raw) for raw in data.get("oam_jobs") or []
+            )
+        }
+        for svc in self._services.values():
+            saved = saved_jobs.get(oam_job_uuid(svc.uuid))
+            job = self._oam_job_for(
+                svc, saved.creation_time if saved is not None else None
+            )
+            self._oam_jobs[job.uuid] = job
 
         # Restore allocation (no need to re-allocate spectrum; already in state)
         for uuid, alloc in data.get("service_allocation", {}).items():

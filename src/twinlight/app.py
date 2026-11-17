@@ -6,6 +6,9 @@ and includes all API routers.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,13 +17,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from twinlight.api import (
     admin,
+    auth,
     common,
     connectivity,
     diagrams,
     equipment,
     internal,
+    oam,
     parameters,
     path_computation,
+    streaming,
     topology,
     transparent,
 )
@@ -34,9 +40,12 @@ from twinlight.api.middleware import (
     RESTCONF_MEDIA_TYPE,
     PathDecodeMiddleware,
     RestconfContentTypeMiddleware,
+    TokenAuthMiddleware,
 )
+from twinlight.auth import TokenAuthenticator
 from twinlight.config import TwinConfig
 from twinlight.state.context import TapiContext
+from twinlight.streaming.measurement_stream import MeasurementStream
 
 
 def _restconf_error_response(
@@ -44,6 +53,7 @@ def _restconf_error_response(
     error_tag: str,
     error_message: str,
     error_path: str | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     """Build a JSONResponse with ietf-restconf:errors format (RFC 8040)."""
     err: dict = {
@@ -58,11 +68,14 @@ def _restconf_error_response(
         status_code=status_code,
         content=body,
         media_type=RESTCONF_MEDIA_TYPE,
+        headers=headers,
     )
 
 
 def _http_status_to_error_tag(status_code: int) -> str:
     """Map HTTP status to RESTCONF error-tag (RFC 8040)."""
+    if status_code in (401, 403):
+        return "access-denied"
     if status_code == 404:
         return "data-missing"
     if status_code == 409:
@@ -118,6 +131,49 @@ def _add_restconf_root_resources(app: FastAPI, root: str) -> None:
         return {"ietf-restconf:yang-library-version": _YANG_LIBRARY_VERSION}
 
 
+_BEARER_SCHEME = "bearerAuth"
+
+
+#: Paths served without a token when authentication is enabled. Only the
+#: liveness probe: container healthchecks and load balancers call it without
+#: credentials, and it reveals nothing but that the process is up. Everything
+#: else — the RESTCONF root and host-meta, /metrics, the OpenAPI schema and
+#: its viewers — needs a token. Exact matches only: see TokenAuthMiddleware.
+PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
+
+
+def _document_bearer_auth(app: FastAPI, public_paths: frozenset[str]) -> None:
+    """Declare the bearer scheme in the OpenAPI schema.
+
+    Enforcement is the middleware's job; this only makes the schema say what
+    the middleware does, so generated clients and Swagger UI (loaded with a
+    token, since the schema itself is protected) know to send one. Public
+    paths are marked ``security: []`` so they are not shown locked.
+    """
+    generate = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            schema = generate()  # also caches itself in app.openapi_schema
+            components = schema.setdefault("components", {})
+            components.setdefault("securitySchemes", {})[_BEARER_SCHEME] = {
+                "type": "http",
+                "scheme": "bearer",
+                "description": (
+                    "A token from TWINLIGHT_API_TOKENS. The same token "
+                    "authenticates the gNMI interface."
+                ),
+            }
+            schema["security"] = [{_BEARER_SCHEME: []}]
+            for path in public_paths:
+                for operation in schema.get("paths", {}).get(path, {}).values():
+                    operation["security"] = []
+            app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
+
+
 def create_app(config: TwinConfig) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
@@ -126,14 +182,30 @@ def create_app(config: TwinConfig) -> FastAPI:
         description="Optical network digital twin with T-API interfaces",
     )
 
+    # One authenticator for every interface: the gRPC server reads it from
+    # app.state, so REST and gNMI accept exactly the same tokens. No tokens
+    # configured means authentication is off: neither the HTTP middleware
+    # nor the gRPC interceptor is installed, so no auth code runs per call.
+    authenticator = TokenAuthenticator(config.api_tokens)
+
     # Middleware (order matters: last added = first executed)
     # PathDecodeMiddleware is added first so it runs innermost (just before
     # the router), decoding %3A-encoded colons in RESTCONF paths.
+    # TokenAuthMiddleware, when installed, sits just inside CORS, so
+    # preflights are answered without credentials and a 401 still carries
+    # CORS headers. It is outside everything else, so a rejected request
+    # never reaches routing or the other middleware.
     app.add_middleware(PathDecodeMiddleware)
     app.add_middleware(
         RestconfContentTypeMiddleware,
         restconf_root=config.server.restconf_root,
     )
+    if authenticator.enabled:
+        app.add_middleware(
+            TokenAuthMiddleware,
+            authenticator=authenticator,
+            public_paths=PUBLIC_PATHS,
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.server.cors_origins,
@@ -144,6 +216,11 @@ def create_app(config: TwinConfig) -> FastAPI:
     # State — TapiContext loads topology and builds TAPI models
     app.state.context = TapiContext(config)
     app.state.config = config
+    app.state.authenticator = authenticator
+    # The T-API measurement stream (TR-548 §6). Built here so REST discovery
+    # can report its state; its sampler is started by main.py, beside the
+    # gRPC server that delivers it.
+    app.state.measurement_stream = MeasurementStream(app.state.context, config)
 
     # Routers
     # The T-API modules are mounted twice: under the RESTCONF root
@@ -165,6 +242,8 @@ def create_app(config: TwinConfig) -> FastAPI:
         connectivity.router,
         path_computation.router,
         equipment.router,
+        oam.router,
+        streaming.router,
     ):
         if root:
             app.include_router(tapi_router, prefix=root)
@@ -177,9 +256,13 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.include_router(parameters.router)
     app.include_router(transparent.router)
     app.include_router(metrics_api.router)
+    app.include_router(auth.router)
 
     if root:
         _add_restconf_root_resources(app, root)
+
+    if authenticator.enabled:
+        _document_bearer_auth(app, PUBLIC_PATHS)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict:
@@ -191,7 +274,11 @@ def create_app(config: TwinConfig) -> FastAPI:
     ) -> JSONResponse:
         msg = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
         tag = _http_status_to_error_tag(exc.status_code)
-        return _restconf_error_response(exc.status_code, tag, msg)
+        # Carry the exception's headers through: a 401 without its
+        # WWW-Authenticate challenge, or a 405 without Allow, is malformed.
+        return _restconf_error_response(
+            exc.status_code, tag, msg, headers=exc.headers
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(

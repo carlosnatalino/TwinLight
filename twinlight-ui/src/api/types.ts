@@ -135,6 +135,12 @@ export interface HealthResponse {
   status: string;
 }
 
+/** GET /internal/whoami — the token a request authenticated as. */
+export interface WhoamiResponse {
+  principal: string | null;
+  authentication: "disabled" | "bearer-token";
+}
+
 // Connectivity service types
 export interface ConnectivityServiceEndPoint {
   "local-id": string;

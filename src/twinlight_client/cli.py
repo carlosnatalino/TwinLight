@@ -1,20 +1,28 @@
-"""Interactive CLI: subscribe to a service's live OPM stream over gNMI.
+"""Interactive CLI: follow one service's measurements on the T-API stream.
 
-Flow:
-  1. Connect to the T-API REST service and list connectivity services.
-  2. Let the user pick one.
-  3. Subscribe to that service's OPM path over the gNMI streaming API
-     at a 5-second sample interval and print every update.
+Flow (TR-548 ST-0.2, ST-6.2, ST-6.4):
+  1. List the connectivity services over RESTCONF and let the user pick one.
+  2. Discover the measurement stream from tapi-streaming:stream-context and
+     find the oam-job that measures the chosen service.
+  3. Subscribe over gNMI, decode each tapi.MeasurementDetails record of that
+     job, and print it. After a dropped connection, resubscribe from the last
+     record's timestamp so no sample is lost. A stream that cannot be reached
+     at the first connection is an error: the CLI names the address it tried
+     and exits 1 (pass --gnmi-target when the advertised address is not
+     reachable from here).
 
-The OPM values streamed include the transient fluctuations of the signal
-quality (EDFA reservoir, polarization/PDL, phase noise, environmental),
-since the gNMI server resolves the `.../connectivity-service[uuid=X]/opm`
-path to the twin's transient-aware OPM endpoint.
+The values are the twin's live OPM, transient fluctuations included (EDFA
+reservoir, polarization/PDL, phase noise, environmental) — the same values
+GET /internal/opm reports at the same instant.
 
 Installed as the ``twinlight-client`` console command (see pyproject.toml):
 
     twinlight-client
-    twinlight-client --rest-url URL --gnmi-target HOST:PORT
+    twinlight-client --rest-url URL [--gnmi-target HOST:PORT] [--token TOKEN]
+
+Against a twin with authentication enabled, the one token is used for the
+REST lookups and the gNMI stream alike. It comes from ``--token``, else from
+``TWINLIGHT_API_TOKEN`` in the environment or in ``./.env``.
 
 Equivalently runnable as a module: ``python -m twinlight_client``.
 """
@@ -27,10 +35,21 @@ import datetime as _dt
 import sys
 from typing import Any
 
-from twinlight_client.client import TapiClient
-from twinlight_client.streaming import GnmiConsumer
+import grpc
+import httpx
 
-SAMPLE_INTERVAL_S = 5.0
+from twinlight.auth import CLIENT_TOKEN_ENV_VAR
+from twinlight_client.client import TapiClient
+from twinlight_client.credentials import add_token_argument, resolve_token
+from twinlight_client.streaming import (
+    StreamUnreachableError,
+    TapiStreamClient,
+    discover_stream,
+    oam_job_for_service,
+    unreachable_message,
+)
+
+_TOKEN_HINT = f"set {CLIENT_TOKEN_ENV_VAR} (environment or ./.env) or pass --token"
 
 # (measurement key, column header, formatter kind) — display order.
 # kind: "f" → fixed-point with 3 decimals, "e" → scientific with 2 decimals.
@@ -95,7 +114,8 @@ def _value_line(count: int, when: str, measurements: dict[str, Any]) -> str:
     cols = [f"{f'#{count:03d}':>{_NUM_W}}", f"{when:>{_TIME_W}}"]
     for key, _, kind in _METRICS:
         value = measurements.get(key)
-        # None is how a link-failed sample reports what it cannot measure.
+        # None is a MISSING measure (a service with no signal, link-failed
+        # or out-of-band, reports no values).
         if value is not None:
             cell = f"{value:.2e}" if kind == "e" else f"{value:.3f}"
         else:
@@ -104,9 +124,11 @@ def _value_line(count: int, when: str, measurements: dict[str, Any]) -> str:
     return "  ".join(cols)
 
 
-async def _fetch_services(rest_url: str) -> list[dict[str, Any]]:
+async def _fetch_services(
+    rest_url: str, token: str | None = None
+) -> list[dict[str, Any]]:
     """Connect to the T-API service and return its connectivity services."""
-    async with TapiClient(rest_url) as rest:
+    async with TapiClient(rest_url, token=token) as rest:
         return await rest.get_connectivity_services()
 
 
@@ -133,19 +155,26 @@ def _prompt_for_service(
 
 
 async def _stream_service(
-    gnmi_target: str, service: dict[str, Any]
-) -> None:
-    """Subscribe to the selected service's OPM stream and print each update."""
-    uuid = service["uuid"]
-    path = (
-        "tapi-connectivity:connectivity-context/"
-        f"connectivity-service[uuid={uuid}]/opm"
-    )
+    rest_url: str,
+    gnmi_target: str | None,
+    token: str | None,
+    service: dict[str, Any],
+) -> int:
+    """Follow the selected service's records on the measurement stream.
 
-    print(f"\nSubscribing to '{_service_name(service)}'  ({uuid})")
+    Returns the exit status: 1 when the stream cannot be reached at all.
+    """
+    uuid = service["uuid"]
+    async with TapiClient(rest_url, token=token) as rest:
+        endpoint = await discover_stream(rest)
+        job_uuid = await oam_job_for_service(rest, uuid)
+    target = gnmi_target or endpoint.target
+
+    print(f"\nFollowing '{_service_name(service)}'  ({uuid})")
+    print(f"oam-job {job_uuid}")
     print(
-        f"gNMI STREAM @ {gnmi_target}  ·  sample interval "
-        f"{SAMPLE_INTERVAL_S:.0f}s  ·  Ctrl-C to stop\n",
+        f"T-API stream {endpoint.connection_address} "
+        f"[{endpoint.stream_state.rsplit('_', 1)[-1]}] via {target}  ·  Ctrl-C to stop\n",
         flush=True,
     )
 
@@ -153,24 +182,26 @@ async def _stream_service(
     print(header, flush=True)
     print("-" * len(header), flush=True)
 
-    async with GnmiConsumer(gnmi_target) as gnmi:
+    async with TapiStreamClient(target, token) as stream:
         count = 0
-        async for update in gnmi.subscribe_stream(
-            [path], sample_interval_s=SAMPLE_INTERVAL_S
-        ):
-            count += 1
-            timestamp = update.get("timestamp")
-            when = (
-                # tz-aware, then rendered in the operator's local time.
-                _dt.datetime.fromtimestamp(timestamp, tz=_dt.UTC)
-                .astimezone()
-                .strftime("%H:%M:%S")
-                if isinstance(timestamp, (int, float))
-                else "--:--:--"
-            )
-            measurements = update.get("measurements", {})
-            # flush each line so the stream is visible when piped/redirected.
-            print(_value_line(count, when, measurements), flush=True)
+        try:
+            async for record in stream.follow(job_uuid=job_uuid):
+                count += 1
+                when = (
+                    # tz-aware, then rendered in the operator's local time.
+                    _dt.datetime.fromtimestamp(record.sampled_ms / 1000, tz=_dt.UTC)
+                    .astimezone()
+                    .strftime("%H:%M:%S")
+                )
+                # flush each line so the stream is visible when piped/redirected.
+                print(_value_line(count, when, record.measurements), flush=True)
+        except StreamUnreachableError as exc:
+            # Never reached: a wrong address, not a dropped connection, so
+            # stop and say which address and how to fix it.
+            advertised = None if gnmi_target else endpoint.connection_address
+            print(unreachable_message(exc, advertised), file=sys.stderr, flush=True)
+            return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -178,8 +209,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="twinlight-client",
         description=(
-            "Subscribe to a digital-twin connectivity service's live, "
-            "transient-aware OPM stream over the gNMI streaming API."
+            "Follow a connectivity service's live, transient-aware OPM on the "
+            "twin's T-API performance-measurement stream (TR-548, over gNMI)."
         ),
     )
     parser.add_argument(
@@ -189,13 +220,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--gnmi-target",
-        default="localhost:50051",
-        help="gNMI streaming target host:port (default: %(default)s)",
+        default=None,
+        help=(
+            "gNMI host:port, overriding the connection-address the twin "
+            "advertises (needed when that address is not reachable from "
+            "here: a Compose stack seen from the host, NAT, a port mapping)"
+        ),
     )
+    add_token_argument(parser)
     args = parser.parse_args(argv)
+    token = resolve_token(args.token)
 
     try:
-        services = asyncio.run(_fetch_services(args.rest_url))
+        services = asyncio.run(_fetch_services(args.rest_url, token))
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            problem = "rejected the API token" if token else "requires an API token"
+            print(f"{args.rest_url} {problem}: {_TOKEN_HINT}.", file=sys.stderr)
+        else:
+            print(f"Failed to fetch services from {args.rest_url}: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001 — surface any connection error
         print(
             f"Failed to fetch services from {args.rest_url}: {exc}",
@@ -212,9 +256,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        asyncio.run(_stream_service(args.gnmi_target, service))
+        return asyncio.run(_stream_service(args.rest_url, args.gnmi_target, token, service))
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
+    except grpc.aio.AioRpcError as exc:
+        hint = f" ({_TOKEN_HINT})" if (
+            exc.code() == grpc.StatusCode.UNAUTHENTICATED
+        ) else ""
+        print(f"Streaming error: {exc.code().name}: {exc.details()}{hint}", file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001 — surface any streaming error
         print(f"Streaming error: {exc}", file=sys.stderr)
         return 1

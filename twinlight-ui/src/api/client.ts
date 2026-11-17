@@ -7,6 +7,7 @@ import type {
   AllOpmResponse,
   ServiceOpm,
   HealthResponse,
+  WhoamiResponse,
   CreateConnectivityServiceRequest,
   CreateConnectivityServiceResponse,
   ConnectivityContextResponse,
@@ -42,23 +43,69 @@ export class NetworkError extends Error {
   }
 }
 
+/** True for the statuses a twin answers when it rejects the credentials. */
+export function isAuthError(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 401 || err.status === 403);
+}
+
+/**
+ * The ApiError for a failed response. A rejected token gets a sentence the
+ * user can act on rather than the RESTCONF error body; every other status
+ * keeps the raw body, which some pages parse for its error details.
+ */
+async function apiErrorFrom(resp: Response): Promise<ApiError> {
+  if (resp.status === 401 || resp.status === 403) {
+    return new ApiError(
+      resp.status,
+      "The DT requires a valid API token. Set one in Settings."
+    );
+  }
+  const text = await resp.text().catch(() => resp.statusText);
+  return new ApiError(resp.status, text);
+}
+
+/**
+ * Supplies the API token for clients built without one. The connection store
+ * registers itself here, so every client — however it was created — sends the
+ * token currently saved in Settings, and a changed token takes effect on the
+ * next request without rebuilding anything.
+ */
+let tokenProvider: () => string | undefined = () => undefined;
+
+export function setTokenProvider(provider: () => string | undefined): void {
+  tokenProvider = provider;
+}
+
 export class TapiApiClient {
   private baseUrl: string;
+  private token: string | undefined;
 
-  constructor(baseUrl: string) {
+  /**
+   * @param token API token for this client only (e.g. one being tested in
+   *   Settings before it is saved). Omit it to use the saved token.
+   */
+  constructor(baseUrl: string, token?: string) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.token = token;
+  }
+
+  /** Request headers, with `Authorization: Bearer` when a token is set. */
+  private headers(extra: Record<string, string> = {}): Record<string, string> {
+    const token = (this.token ?? tokenProvider())?.trim();
+    return {
+      Accept: "application/yang-data+json, application/json",
+      ...extra,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
   }
 
   private async get<T>(path: string): Promise<T> {
     try {
       const resp = await fetch(`${this.baseUrl}${path}`, {
-        headers: { Accept: "application/yang-data+json, application/json" },
+        headers: this.headers(),
         signal: AbortSignal.timeout(15_000),
       });
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => resp.statusText);
-        throw new ApiError(resp.status, text);
-      }
+      if (!resp.ok) throw await apiErrorFrom(resp);
       return resp.json() as Promise<T>;
     } catch (err) {
       if (err instanceof ApiError) throw err;
@@ -73,17 +120,11 @@ export class TapiApiClient {
     try {
       const resp = await fetch(`${this.baseUrl}${path}`, {
         method: "PATCH",
-        headers: {
-          Accept: "application/yang-data+json, application/json",
-          "Content-Type": "application/yang-data+json",
-        },
+        headers: this.headers({ "Content-Type": "application/yang-data+json" }),
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(15_000),
       });
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => resp.statusText);
-        throw new ApiError(resp.status, text);
-      }
+      if (!resp.ok) throw await apiErrorFrom(resp);
       return resp.json() as Promise<T>;
     } catch (err) {
       if (err instanceof ApiError) throw err;
@@ -98,13 +139,10 @@ export class TapiApiClient {
     try {
       const resp = await fetch(`${this.baseUrl}${path}`, {
         method: "DELETE",
-        headers: { Accept: "application/yang-data+json, application/json" },
+        headers: this.headers(),
         signal: AbortSignal.timeout(15_000),
       });
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => resp.statusText);
-        throw new ApiError(resp.status, text);
-      }
+      if (!resp.ok) throw await apiErrorFrom(resp);
     } catch (err) {
       if (err instanceof ApiError) throw err;
       if (err instanceof Error && err.name === "AbortError") {
@@ -118,17 +156,11 @@ export class TapiApiClient {
     try {
       const resp = await fetch(`${this.baseUrl}${path}`, {
         method: "POST",
-        headers: {
-          Accept: "application/yang-data+json, application/json",
-          "Content-Type": "application/yang-data+json",
-        },
+        headers: this.headers({ "Content-Type": "application/yang-data+json" }),
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(15_000),
       });
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => resp.statusText);
-        throw new ApiError(resp.status, text);
-      }
+      if (!resp.ok) throw await apiErrorFrom(resp);
       return resp.json() as Promise<T>;
     } catch (err) {
       if (err instanceof ApiError) throw err;
@@ -141,6 +173,15 @@ export class TapiApiClient {
 
   health(): Promise<HealthResponse> {
     return this.get<HealthResponse>("/health");
+  }
+
+  /**
+   * Which token the twin accepted the request as. Unlike /health, which is
+   * public, this needs a valid token when the twin has authentication on, so
+   * a 401 here means the token is missing or rejected.
+   */
+  whoami(): Promise<WhoamiResponse> {
+    return this.get<WhoamiResponse>("/internal/whoami");
   }
 
   getContext(): Promise<ContextResponse> {
@@ -290,6 +331,6 @@ export function getClient(baseUrl: string): TapiApiClient {
   return _client;
 }
 
-export function createClient(baseUrl: string): TapiApiClient {
-  return new TapiApiClient(baseUrl);
+export function createClient(baseUrl: string, token?: string): TapiApiClient {
+  return new TapiApiClient(baseUrl, token);
 }

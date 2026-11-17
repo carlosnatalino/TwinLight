@@ -1,7 +1,10 @@
-"""Internal OPM endpoints used by the gNMI adapter.
+"""Internal OPM endpoints and the OPM sampling function behind them.
 
-Not part of the TAPI specification. These are queried in-process
-by the gNMI server via httpx ASGITransport.
+Not part of the TAPI specification. ``sample_service_opm`` is the single
+place the twin turns a QoT baseline plus the transient models into one OPM
+reading. ``GET /internal/opm`` serves it, and the T-API measurement stream
+(``twinlight.streaming.measurement_stream``) samples it on every tick, so the
+REST view and the gNMI stream can never disagree about a value.
 """
 
 from __future__ import annotations
@@ -135,6 +138,51 @@ def _mock_measurements(
     return measurements
 
 
+def wall_clock() -> float:
+    """Seconds since the epoch at which an OPM sample is taken.
+
+    The transient models are functions of this instant, so it is the one
+    clock both ``GET /internal/opm`` and the measurement stream read. Tests
+    replace it to sample both at the same frozen instant.
+    """
+    return time.time()
+
+
+async def sample_service_opm(
+    ctx: Any, cfg: Any, svc: Any, t: float
+) -> dict[str, Any]:
+    """One OPM reading of ``svc`` at instant ``t``.
+
+    Physics-based when a baseline exists (the transient cascade applied on
+    top of it), the no-signal payload carrying the baseline's status when
+    there is nothing to measure (``link-failed``: the path crosses a failed
+    fiber; ``out-of-band``: the channel lies outside the amplifier band), and
+    the sinusoidal mock when no baseline can be computed.
+    """
+    baseline = await ctx.get_or_compute_baseline(svc)
+    entry: dict[str, Any] = {"service-uuid": svc.uuid, "timestamp": t}
+    if baseline is not None and baseline.status is not None:
+        entry["status"] = baseline.status
+        entry["measurements"] = _no_signal_measurements()
+    elif baseline is None:
+        entry["measurements"] = _mock_measurements(
+            svc.uuid, t, svc.modulation_format.value, cfg.fec
+        )
+    else:
+        from twinlight.physics.transients.cascade import apply_all_transients
+
+        entry["measurements"] = apply_all_transients(
+            baseline,
+            svc.uuid,
+            svc.modulation_format.value,
+            t,
+            cfg.transients,
+            edfa_tracker=ctx.edfa_tracker,
+            fec_cfg=cfg.fec,
+        )
+    return entry
+
+
 @router.get("/opm")
 async def get_all_opm(request: Request) -> dict:
     """Return physics-based OPM data for every known connectivity service.
@@ -144,33 +192,10 @@ async def get_all_opm(request: Request) -> dict:
     """
     ctx = request.app.state.context
     cfg = request.app.state.config
-    t = time.time()
-    results = []
-
-    for svc in ctx.get_services():
-        baseline = await ctx.get_or_compute_baseline(svc)
-        entry: dict[str, Any] = {"service-uuid": svc.uuid, "timestamp": t}
-        if baseline is not None and baseline.status is not None:
-            entry["status"] = baseline.status
-            entry["measurements"] = _no_signal_measurements()
-        elif baseline is None:
-            entry["measurements"] = _mock_measurements(
-                svc.uuid, t, svc.modulation_format.value, cfg.fec
-            )
-        else:
-            from twinlight.physics.transients.cascade import apply_all_transients
-
-            entry["measurements"] = apply_all_transients(
-                baseline,
-                svc.uuid,
-                svc.modulation_format.value,
-                t,
-                cfg.transients,
-                edfa_tracker=ctx.edfa_tracker,
-                fec_cfg=cfg.fec,
-            )
-        results.append(entry)
-
+    t = wall_clock()
+    results = [
+        await sample_service_opm(ctx, cfg, svc, t) for svc in ctx.get_services()
+    ]
     return {"services": results, "timestamp": t}
 
 
@@ -181,39 +206,12 @@ async def get_service_opm(service_uuid: str, request: Request) -> dict:
     Falls back to sinusoidal mock data if GNPy is unavailable.
     """
     ctx = request.app.state.context
-    cfg = request.app.state.config
-    t = time.time()
-
     svc = ctx.get_service(service_uuid)
     if svc is None:
         raise HTTPException(status_code=404, detail=f"Service {service_uuid} not found")
-
-    baseline = await ctx.get_or_compute_baseline(svc)
-    response: dict[str, Any] = {
-        "service-uuid": service_uuid,
-        "timestamp": t,
-    }
-    if baseline is not None and baseline.status is not None:
-        response["status"] = baseline.status
-        response["measurements"] = _no_signal_measurements()
-    elif baseline is None:
-        response["measurements"] = _mock_measurements(
-            service_uuid, t, svc.modulation_format.value, cfg.fec
-        )
-    else:
-        from twinlight.physics.transients.cascade import apply_all_transients
-
-        response["measurements"] = apply_all_transients(
-            baseline,
-            svc.uuid,
-            svc.modulation_format.value,
-            t,
-            cfg.transients,
-            edfa_tracker=ctx.edfa_tracker,
-            fec_cfg=cfg.fec,
-        )
-
-    return response
+    return await sample_service_opm(
+        ctx, request.app.state.config, svc, wall_clock()
+    )
 
 
 @router.get("/services/{service_uuid}")

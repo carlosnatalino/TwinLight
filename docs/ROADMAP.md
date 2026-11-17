@@ -30,8 +30,9 @@ mount is hidden from the OpenAPI documentation.
 paths.
 
 **What to do now:** point new clients at `/restconf/data/…`, or discover the
-root from `GET /.well-known/host-meta`. The bundled web UI, client library and
-gNMI adapter will be migrated in the same release that removes the bare mount.
+root from `GET /.well-known/host-meta`. The bundled web UI and client library
+(including the measurement-stream discovery in `twinlight_client.streaming`)
+will be migrated in the same release that removes the bare mount.
 
 ### A GET on a single list entry returns its parent container
 
@@ -92,8 +93,10 @@ spans. See [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir).
 | EGN correction on cross-channel NLI; actual line load under GNPy | Both backends compute the plain incoherent GN model (Poggiolini 2014), and agree within 0.05–0.25 dB at full load; neither applies the EGN correction. The GNPy backend evaluates every channel on the fully loaded SI comb; only the EGN backend follows the lightpaths actually lit |
 | Event-driven simulation clock | The transient layer is evaluated at wall-clock time |
 | Soft failures in the web UI | Driven by the `twinlight-soft-failure` client only |
-| T-API notification, OAM, fault and virtual-network modules | Not implemented; see [TAPI_COMPLIANCE.md](TAPI_COMPLIANCE.md) |
-| gNMI `Get` and `Set` | Return `UNIMPLEMENTED`; `Subscribe` is supported. The transparent controller's tree (`/transparent`) is the natural model for them to serve |
+| T-API notification, fault and virtual-network modules; OAM beyond read-only jobs | Not implemented; see [TAPI_COMPLIANCE.md](TAPI_COMPLIANCE.md) |
+| TR-548 entity and alarm streams | Only the performance-measurement stream is offered; entity streams need a compacted log, and the twin has no alarms yet |
+| Persistent, shared measurement log | The log is in-process and starts empty on restart (so the stream re-enters `ALIGNING`); it sits behind the `RecordLog` interface so a Valkey Streams backend can be added without touching the gNMI code |
+| gNMI `Get` and `Set` | Return `UNIMPLEMENTED`; `Subscribe` serves the TR-548 measurement stream. The transparent controller's tree (`/transparent`) is the natural model for them to serve |
 | Transparent controller: YANG module, locking, confirmed commit | The tree is described by a JSON schema (`/transparent/schema`), not YANG; the candidate is shared without a lock (use `If-Match`); there is no confirmed-commit rollback timer, since the twin keeps no clock for parameter changes |
 | Transparent controller in the web UI | Driven through REST, `twinlight-transparent` or `TransparentClient` only |
-| Authentication and TLS | None on any interface; see [SECURITY.md](../SECURITY.md) |
+| TLS and authorization | No TLS anywhere. Authentication is opt-in (`TWINLIGHT_API_TOKENS`) and all-or-nothing: any accepted token may use every REST path and gNMI; there are no per-token scopes. See [SECURITY.md](../SECURITY.md) |

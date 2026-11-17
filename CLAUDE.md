@@ -22,8 +22,8 @@ repository.
 TwinLight is an optical network digital twin: it loads a GNPy topology,
 computes a per-lightpath QoT baseline (GNPy split-step propagation or a
 closed-form GN/EGN kernel), layers four analytical models of time-varying
-impairments on top, and serves the result over T-API v2.6.0 REST, gNMI streaming
-and Prometheus — and, as a *fully transparent* optical domain controller, exposes
+impairments on top, and serves the result over T-API v2.6.0 REST, the T-API
+performance-measurement stream over gNMI (TR-548) and Prometheus — and, as a *fully transparent* optical domain controller, exposes
 every element and parameter under `/transparent` (ns-3-style paths, RESTCONF-shaped
 datastores), independently of T-API objects.
 
@@ -34,7 +34,7 @@ FastAPI app (src/twinlight)       port 8080  ← owns ALL state
       ▼
 PhysicalBackend Protocol → GnpyBackend | EgnBackend
       + NetworkX routing graph + transient layer
-gNMI gRPC server                  port 50051 ← stateless adapter
+gNMI gRPC server                  port 50051 ← T-API measurement stream (TR-548)
 ```
 
 Packages: `src/twinlight` (backend), `src/twinlight_client` (client library and
@@ -47,8 +47,8 @@ CLIs), `twinlight-ui/` (React SPA). Console scripts: `twinlight`,
 These are the ones that are expensive to discover by breaking them.
 
 1. **T-API files are T-API only.** `api/common.py`, `api/topology.py`,
-   `api/connectivity.py`, `api/path_computation.py` and `api/equipment.py`
-   must implement only T-API v2.6.0 — standard paths, standard hyphenated JSON
+   `api/connectivity.py`, `api/path_computation.py`, `api/equipment.py`,
+   `api/oam.py` and `api/streaming.py` must implement only T-API v2.6.0 — standard paths, standard hyphenated JSON
    keys. Anything proprietary (OPM, path metadata, admin, diagrams, runtime
    config, the transparent controller) goes in a separate module under
    `/internal/`, `/admin/`, `/config/` or `/transparent/`. Never add a non-standard field to a `/data/` response.
@@ -190,6 +190,48 @@ none. The twin keeps no clock for parameter changes: gradual drift (soft
 failures) belongs in the `twinlight-soft-failure` client, which only sends
 concrete values.
 
+## The T-API measurement stream
+
+gNMI carries one stream, TR-548 §6 (docs/API.md § gNMI streaming; deviations
+in docs/TAPI_COMPLIANCE.md § 2.5). Three rules keep it honest:
+
+- **One OPM computation.** `streaming/measurement_stream.py` samples through
+  `api/internal.py:sample_service_opm`, the function behind `GET /internal/opm`,
+  reading the instant from `internal.wall_clock()`. Never compute OPM for the
+  stream separately; a new OPM key needs a row in `streaming/records.py:MEASURES`
+  (a test fails otherwise).
+- **OAM jobs follow services.** `TapiContext._add_service` / `delete_service` /
+  `restore_from` create, remove and restore each service's `tapi-oam` job
+  (name-based UUID); `replace_service` detaches the job with the service and
+  puts both back if re-admission fails. A new path that admits or drops
+  services must go through them, or records lose their anchor.
+- **The log is behind `RecordLog`.** The gNMI servicer only appends, replays
+  and trims through that interface; keep it that way so a shared backend can
+  replace the in-process log.
+
+## Authentication
+
+Opt-in, switched on by `TWINLIGHT_API_TOKENS` (environment or `.env`, never
+YAML; see `twinlight/auth.py`). One `TokenAuthenticator` on `app.state` serves
+both interfaces: `TokenAuthMiddleware` for HTTP, `TokenAuthInterceptor` for
+gRPC.
+
+- **Installed only when tokens exist.** `create_app` and `build_grpc_server`
+  add the middleware and the interceptor only if the token set is non-empty,
+  so an open twin runs no authentication code. Do not add per-request
+  "is auth on?" checks; do not install either unconditionally.
+- **Deny by default.** A new route is protected automatically. `/health` is
+  the only public path (`app.py:PUBLIC_PATHS`); adding one needs a reason as
+  good as the Compose healthcheck's.
+- **No side doors.** Anything that serves the API on another interface or
+  port must check the same `app.state.authenticator`.
+- **Never log, echo or serialise a token.** `TwinConfig.api_tokens` is
+  `exclude=True, repr=False` (so `/transparent` never shows it), and parse
+  errors name entries by position.
+- **Tests stay hermetic.** `conftest.py` clears the token variables and
+  points `twinlight.auth.DEFAULT_ENV_FILE` away from the developer's own
+  `.env`. A test that wants tokens sets `api_tokens` explicitly.
+
 ## SIP ↔ GNPy UID mapping
 
 `TapiBuilder` stores each GNPy element's UID in the SIP's name list:
@@ -207,5 +249,6 @@ Soft-decision post-FEC BER (GMI/NGMI are reported, but not mapped through a
 per-code NGMI threshold); multi-band (C-band only); the EGN correction on cross-channel NLI
 (both backends are the plain GN model); the actual line load under the GNPy backend (it
 assumes a full SI comb; EGN uses the lit lightpaths); an event-driven simulation clock;
-T-API notification, OAM, fault and
-virtual-network modules; gNMI Get/Set; authentication on any interface.
+T-API notification, fault and virtual-network modules, and OAM beyond the stream's
+read-only jobs; T-API entity and alarm streams; gNMI Get/Set; TLS and per-token
+authorization scopes (authentication is opt-in and all-or-nothing).

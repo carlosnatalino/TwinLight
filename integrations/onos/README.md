@@ -504,7 +504,9 @@ What this integration does not do:
   a line system — the twin's topology stays inside the domain. The T-API
   topology context is served at `/data/tapi-common:context/tapi-topology:topology-context`
   but ONOS's `ols` driver does not consume it.
-- **No authentication anywhere.** The twin, the adapter and the ONOS northbound
-  are all unauthenticated. Run it on a local or lab network only.
+- **No authentication anywhere.** The demo assumes the twin runs with
+  authentication off (no `TWINLIGHT_API_TOKENS`): neither the adapter nor the
+  scripts send a token. The adapter and the ONOS northbound are
+  unauthenticated as well. Run it on a local or lab network only.
 - **Modulation format is adapter policy**, because T-API 2.1 connectivity
   requests cannot express one. A 2.6-native controller would not need that.

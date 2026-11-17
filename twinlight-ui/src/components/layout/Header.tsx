@@ -1,6 +1,6 @@
 import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
-import { RefreshCw, Wifi, WifiOff, AlertCircle, Clock } from "lucide-react";
+import { RefreshCw, Wifi, WifiOff, AlertCircle, Clock, Lock } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 function StatusIndicator() {
@@ -12,6 +12,7 @@ function StatusIndicator() {
     disconnected: { icon: WifiOff, color: "text-red-500", label: "Disconnected" },
     checking: { icon: RefreshCw, color: "text-blue-500", label: "Connecting...", spin: true },
     stale: { icon: AlertCircle, color: "text-amber-500", label: "Stale" },
+    unauthorized: { icon: Lock, color: "text-amber-600", label: "Token required" },
   }[status];
 
   const Icon = config.icon;

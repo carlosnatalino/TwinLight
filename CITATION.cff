@@ -25,8 +25,8 @@ abstract: >-
   transients, polarization-mode dispersion drift and polarization-dependent
   loss, equalization-enhanced phase noise, and environmental thermal drift.
   The resulting multi-timescale signal quality is exposed through
-  standards-compliant interfaces: Transport API (T-API) v2.6.0 REST, gNMI
-  streaming telemetry, and Prometheus metrics. It also implements
+  standards-compliant interfaces: Transport API (T-API) v2.6.0 REST, the T-API
+  performance-measurement stream over gNMI (TR-548), and Prometheus metrics. It also implements
   quality-of-transmission-aware routing, modulation and spectrum assignment
   on a flexible grid. TwinLight is intended as a realistic emulator of an
   optical domain controller, for validating software-defined networking

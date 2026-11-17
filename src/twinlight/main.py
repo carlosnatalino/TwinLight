@@ -11,9 +11,11 @@ from typing import Any
 import uvicorn
 
 from twinlight.app import create_app
+from twinlight.auth import TOKENS_ENV_VAR, TokenAuthenticator
 from twinlight.cli import load_config
 from twinlight.config import TwinConfig
 from twinlight.grpc_server import start_grpc_server
+from twinlight.streaming.measurement_stream import MeasurementStream
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,41 @@ def configure_logging(config: TwinConfig) -> None:
         format=config.logging.format,
         force=True,
     )
+
+
+def log_measurement_stream(config: TwinConfig, stream: MeasurementStream) -> None:
+    """Say at startup how the measurement stream samples and where it is.
+
+    The address is the stream's own, the value every discovery response
+    publishes, so the log and the T-API context cannot disagree.
+    """
+    logger.info(
+        "Measurement stream (T-API over gNMI): sample_interval_s=%g "
+        "record_retention_min=%d connection-address=%s",
+        config.streaming.sample_interval_s,
+        config.streaming.record_retention_min,
+        stream.connection_address,
+    )
+
+
+def log_auth_mode(authenticator: TokenAuthenticator) -> None:
+    """Say at startup whether the interfaces require a token.
+
+    A warning when they do not, whatever ``rest_host`` is: the gRPC server
+    always binds every interface, so an open twin is reachable from the
+    network on its gNMI port even when REST listens on loopback only.
+    """
+    if authenticator.enabled:
+        logger.info(
+            "Authentication: bearer token required on REST and gNMI "
+            "(%d token(s): %s)",
+            len(authenticator.principals), ", ".join(authenticator.principals),
+        )
+    else:
+        logger.warning(
+            "Authentication: disabled — REST and gNMI accept any client. "
+            "Set %s to require a token.", TOKENS_ENV_VAR,
+        )
 
 
 def archive_checkpoint(config: TwinConfig) -> None:
@@ -93,6 +130,8 @@ async def async_main() -> None:
 
     log.info("REST server: %s:%d", config.server.rest_host, config.server.rest_port)
     log.info("gRPC server port: %d", config.server.grpc_port)
+    log_measurement_stream(config, app.state.measurement_stream)
+    log_auth_mode(app.state.authenticator)
 
     uvicorn_config = uvicorn.Config(
         app,
@@ -118,6 +157,11 @@ async def async_main() -> None:
             shutdown_event=shutdown_event,
         )
     )
+    # The sampler fills the measurement stream's log from the first second,
+    # subscribers or not: the log is what lets a client resume (TR-548 ST-6.4).
+    task_sampler = asyncio.create_task(
+        app.state.measurement_stream.run(shutdown_event)
+    )
     # Let uvicorn enter serve() and install its signal handlers, then we overwrite with ours
     # so that both REST and gRPC shut down gracefully (uvicorn uses signal.signal() in serve()).
     await asyncio.sleep(0.05)
@@ -139,7 +183,9 @@ async def async_main() -> None:
         # cancels the lifespan receive mid-flight, which surfaces as a
         # CancelledError traceback on an otherwise clean stop.
         uvicorn_server.should_exit = True
-        await asyncio.gather(task_uvicorn, task_grpc, return_exceptions=True)
+        await asyncio.gather(
+            task_uvicorn, task_grpc, task_sampler, return_exceptions=True
+        )
         # After the servers have drained, so the state written is not being
         # mutated by an in-flight request.
         write_checkpoint(app, config)
@@ -151,7 +197,8 @@ async def async_main() -> None:
     # mid-shutdown; genuine failures are re-raised below, while the
     # CancelledErrors that accompany a normal stop are ignored.
     results = await asyncio.gather(
-        task_uvicorn, task_grpc, task_supervisor, return_exceptions=True
+        task_uvicorn, task_grpc, task_sampler, task_supervisor,
+        return_exceptions=True,
     )
     for result in results:
         if isinstance(result, BaseException) and not isinstance(

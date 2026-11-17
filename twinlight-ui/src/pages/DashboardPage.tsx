@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Network, Link2, Cpu, Radio, CheckCircle, XCircle, Clock } from "lucide-react";
+import { Network, Link2, Cpu, Radio, CheckCircle, XCircle, Clock, Lock } from "lucide-react";
 import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
 import { createClient } from "@/api/client";
@@ -83,6 +83,7 @@ export default function DashboardPage() {
     disconnected: { label: "Disconnected", color: "text-red-600", bg: "bg-red-50 border-red-200", icon: XCircle },
     checking: { label: "Connecting…", color: "text-blue-600", bg: "bg-blue-50 border-blue-200", icon: Clock },
     stale: { label: "Stale Data", color: "text-amber-600", bg: "bg-amber-50 border-amber-200", icon: Clock },
+    unauthorized: { label: "API Token Required", color: "text-amber-600", bg: "bg-amber-50 border-amber-200", icon: Lock },
   }[status];
 
   return (

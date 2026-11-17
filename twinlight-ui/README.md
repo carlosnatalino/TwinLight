@@ -31,7 +31,19 @@ Run these from `twinlight-ui/`, or from the repository root with
 2. Open <http://localhost:5173>
 3. Go to **Settings** and enter the twin's base URL (default
    `http://localhost:8080`)
-4. Click **Test Connection**, then **Refresh** on any page to load data
+4. If the twin has authentication on (`TWINLIGHT_API_TOKENS` is set), enter
+   one of its tokens under **API Token** and click **Save token**. The header
+   shows *Token required* until you do.
+5. Click **Test Connection**, then **Refresh** on any page to load data
+
+### API token
+
+The token is sent as `Authorization: Bearer <token>` on every request and is
+saved with the other settings in this browser's localStorage. It is never
+injected through `TWIN_URL`/`config.js` like the base URL is: anything there
+can be read by whoever can load the UI. **Test Connection** checks the token
+as typed, before it is saved, through `GET /internal/whoami`. `/health` is
+public, so it cannot tell whether a token is accepted.
 
 ### CORS
 
@@ -80,7 +92,7 @@ overrides the injected default. Make sure that origin is listed in the twin's
 - **Spectrum grid** — per-link slot allocation heat map with hover detail
 - **Path computation** — A/Z SIP selection, k-shortest paths, ROADMs to pass through or avoid, QoT estimate
 - **Equipment** — inventory list grouped and filterable by element type
-- **Settings** — twin URL, connection test, poll interval, cache management
+- **Settings** — twin URL, API token, connection test, poll interval, cache management
 
 Constellation and eye-diagram components exist as placeholders; the backend
 synthesises the data (`/internal/services/{uuid}/constellation` and
