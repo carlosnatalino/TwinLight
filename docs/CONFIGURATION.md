@@ -131,7 +131,10 @@ accepted token grants full access: there are no per-token scopes. See
 The clients read **`TWINLIGHT_API_TOKEN`** (singular): the one token they present,
 from the environment or `./.env`, overridden by `--token`. A single `.env` can
 hold both variables when the twin and its clients run in one directory, as in
-[`.env.example`](../.env.example).
+[`.env.example`](../.env.example). The ONOS integration's adapter reads the same
+variable and presents that token on ONOS's behalf, which makes the token's
+rights available to anyone who can reach the adapter; see
+[integrations/onos/README.md § Authentication](../integrations/onos/README.md#authentication).
 
 ## `simulation` — clock and checkpoints
 

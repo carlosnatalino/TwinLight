@@ -224,7 +224,12 @@ gRPC.
   the only public path (`app.py:PUBLIC_PATHS`); adding one needs a reason as
   good as the Compose healthcheck's.
 - **No side doors.** Anything that serves the API on another interface or
-  port must check the same `app.state.authenticator`.
+  port must check the same `app.state.authenticator`. The one deliberate
+  exception is the ONOS T-API adapter (`integrations/onos/adapter`): a
+  separate client that presents its own `TWINLIGHT_API_TOKEN` to the twin
+  and serves ONOS without credentials, by the owner's decision and documented
+  in `integrations/onos/README.md` § Authentication. Do not copy that pattern
+  into `src/twinlight`.
 - **Never log, echo or serialise a token.** `TwinConfig.api_tokens` is
   `exclude=True, repr=False` (so `/transparent` never shows it), and parse
   errors name entries by position.

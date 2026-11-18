@@ -15,6 +15,17 @@ On an open twin the `/admin/`, `/config/` and `/transparent/` planes let any
 client with network access mutate twin state and write snapshot files.
 `/transparent/` in particular can change every parameter the twin models.
 
+The ONOS integration's T-API adapter (`integrations/onos/adapter`) is a
+deliberate way around the token requirement. Given a token in
+`TWINLIGHT_API_TOKEN`, it accepts requests on its port without credentials and
+forwards them to the twin with that token, so anyone who can reach the port
+can read the T-API context and its SIPs, list connectivity services, and
+create and delete them. The Compose overlay publishes that port (8282) on the
+host. Give the adapter a dedicated named token (an `onos:` entry in
+`TWINLIGHT_API_TOKENS`) so it can be revoked alone, and limit who can reach the
+port, for example by binding it to `127.0.0.1`. See
+[integrations/onos/README.md § Authentication](integrations/onos/README.md#authentication).
+
 **Do not expose a TwinLight instance to an untrusted network.** Run it on
 localhost, inside a lab network, or behind an authenticating reverse proxy. The
 Docker Compose stack publishes its ports on the host and is likewise intended
@@ -28,6 +39,8 @@ Within that model, the following are *not* considered vulnerabilities:
   and to `GET /health` when they are.
 - State mutation through `/config/`, `/transparent/` or `/admin/` by any client
   that can reach the port (no tokens) or holds any accepted token.
+- Access to the twin through the ONOS adapter, with the adapter's token, by any
+  client that can reach the adapter's port.
 - Token disclosure through observation of the unencrypted network.
 - Denial of service caused by requesting propagation over a very large topology.
 

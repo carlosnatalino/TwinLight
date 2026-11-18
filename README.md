@@ -439,7 +439,8 @@ python -c 'import secrets; print(secrets.token_urlsafe(32))'   # once per client
 ```dotenv
 # .env: the tokens the twin accepts, optionally named for the logs
 TWINLIGHT_API_TOKENS=ui:<token-1>,onos:<token-2>
-# the token twinlight-client, twinlight-soft-failure and demo_services.py present
+# the token twinlight-client, twinlight-soft-failure, demo_services.py and the
+# ONOS adapter and scripts present
 TWINLIGHT_API_TOKEN=<token-1>
 ```
 
@@ -460,7 +461,11 @@ reads a token from a file or from its `config.js`, and never writes one to
 `localStorage`. **Settings → API Token** changes or clears it. In the Compose stack, put
 `TWINLIGHT_API_TOKENS` in a `.env` next to `docker-compose.yml`; Compose passes
 it to the twin. To keep Prometheus scraping, follow the comment in
-[`docker/prometheus.yml`](docker/prometheus.yml).
+[`docker/prometheus.yml`](docker/prometheus.yml). The ONOS integration's
+adapter presents `TWINLIGHT_API_TOKEN` on ONOS's behalf and accepts requests
+without credentials, so anyone who can reach its port uses the twin with that
+token. Give it a dedicated `onos:` entry, as described in
+[integrations/onos/README.md § Authentication](integrations/onos/README.md#authentication).
 
 Tokens are sent in clear text: the twin does not terminate TLS, so terminate it
 in front of the twin for anything beyond a lab network. Details are in
