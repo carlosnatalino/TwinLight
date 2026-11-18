@@ -134,7 +134,7 @@ check "ONOS port count matches the twin's SIP count" \
     echo \"\$ports ports\"
   "
 
-check "discovered ports are OCh ports carrying the twin's SIP UUID" \
+check "discovered ports are enabled OCh ports carrying the twin's SIP UUID" \
   bash -c "curl -sSf -u '${ONOS_AUTH}' '${ONOS_URL}/onos/v1/devices/${DEVICE_ID}/ports' | python3 -c '
 import json, sys
 ports = json.load(sys.stdin)[\"ports\"]
@@ -142,6 +142,9 @@ assert ports, \"no ports\"
 och = [p for p in ports if p.get(\"type\") == \"och\"]
 assert och, \"no port has type och; found %s\" % {p.get(\"type\") for p in ports}
 assert any(\"uuid\" in (p.get(\"annotations\") or {}) for p in och), \"SIP uuid annotation missing\"
+# A port list ONOS kept across a disconnect is disabled, not rediscovered.
+off = [p[\"port\"] for p in ports if not p.get(\"isEnabled\")]
+assert not off, \"%d of %d ports disabled\" % (len(off), len(ports))
 '"
 
 # --- Layer 4: end-to-end provisioning --------------------------------------

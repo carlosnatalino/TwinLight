@@ -3,8 +3,8 @@
 #
 #   integrations/onos/scripts/demo-up.sh
 #
-# Idempotent: safe to re-run. On Apple Silicon expect 3–6 minutes end to end,
-# almost all of it ONOS's Karaf boot under Rosetta.
+# Idempotent: safe to re-run. On Apple Silicon expect 2–3 minutes end to end
+# once the images are built, almost all of it ONOS's Karaf boot under Rosetta.
 
 . "$(dirname "$0")/lib.sh"
 
@@ -19,7 +19,6 @@ ok "twin is up: $(curl -sS "${TWIN_URL}/health")"
 say "Waiting for the T-API adapter"
 wait_for "adapter /health" 120 curl -sSf "${ADAPTER_URL}/health" \
   || die "adapter never became healthy — check: docker logs ${ADAPTER_CONTAINER}"
-sip_count="$(curl -sS "${ADAPTER_URL}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sips"])')"
 ok "adapter is up"
 
 say "Waiting for ONOS (Karaf boot — slow under Rosetta on Apple Silicon)"
@@ -99,6 +98,9 @@ import json, sys
 sys.exit(0 if len(json.load(sys.stdin).get('ports', [])) > 0 else 1)
 \"" || die "ONOS discovered the device but zero ports — see integrations/onos/README.md § Troubleshooting"
 
+# Read now, not when the adapter came up: its SIP catalogue fills on ONOS's
+# first request, so until discovery it reports 0.
+sip_count="$(curl -sS "${ADAPTER_URL}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sips"])')"
 discovered="$(onos_api GET "/onos/v1/devices/${DEVICE_ID}/ports" \
   | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["ports"]))')"
 ok "ONOS discovered ${discovered} optical ports (twin has ${sip_count} SIPs)"

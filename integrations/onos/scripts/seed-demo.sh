@@ -97,6 +97,11 @@ while IFS=':' read -r a_city z_city modulation label; do
 
   a_port="$(port_for_node "${a_city}" 2>/dev/null)" || { warn "skipping ${a_city}: not found"; continue; }
   z_port="$(port_for_node "${z_city}" 2>/dev/null)" || { warn "skipping ${z_city}: not found"; continue; }
+  # find_pairs.py gives each pair its own A-end; a flow left from before (no
+  # --reset) may still hold one, and ONOS would replace that flow.
+  if [ -n "$(onos_flow_on_port "${a_port}")" ]; then
+    warn "skipping ${a_city} -> ${z_city}: port ${a_port} already carries a flow"; continue
+  fi
 
   # Tell the adapter which format to request for the next lightpath. ONOS has
   # no way to carry this, so the adapter holds it as policy.

@@ -285,6 +285,27 @@ print(hits[0]['onos-port'])
 " "${needle}"
 }
 
+# The id of the REST-app flow rule whose in-port is <port>, if there is one.
+# ONOS derives a flow rule's id from its device, priority, selector and app, not
+# its treatment, so on the OLS device two lightpaths from one in-port collide:
+# the second flow replaces the first in ONOS, and the twin is left holding a
+# lightpath ONOS no longer knows about until reconciliation removes it.
+onos_flow_on_port() {
+  onos_api GET "/onos/v1/flows/${DEVICE_ID}" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    flows = json.load(sys.stdin).get('flows', [])
+except Exception:
+    sys.exit(0)
+for f in flows:
+    if f.get('appId') != 'org.onosproject.rest' or f.get('state') == 'PENDING_REMOVE':
+        continue
+    if any(c.get('type') == 'IN_PORT' and str(c.get('port')) == sys.argv[1]
+           for c in f['selector']['criteria']):
+        print(f['id']); break
+" "$1"
+}
+
 wait_for() {
   # wait_for <label> <timeout-seconds> <command...>
   local label="$1" timeout="$2"; shift 2

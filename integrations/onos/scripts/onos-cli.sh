@@ -5,30 +5,25 @@
 #   onos-cli.sh devices         run a single command and exit
 #   onos-cli.sh ports rest:172.28.0.10:8282
 #
-# Password is "rocks" — you will be prompted unless sshpass is installed
-# (brew install hudochenkov/sshpass/sshpass). Note that `docker exec` into the
-# container is not an alternative: the ONOS image ships the onos client script
-# but no ssh binary for it to call.
+# Runs Karaf's own client inside the ONOS container (docker exec), so the host
+# needs neither ssh nor sshpass, and the client is the one Karaf ships, which
+# speaks its older SSHD's algorithms. The ONOS image has no ssh binary, which is
+# why the `onos` wrapper script in it cannot be used; bin/client is Java.
 #
-# ONOS regenerates its host key whenever the container is recreated, so this
-# deliberately keeps the demo out of the caller's known_hosts.
+# Without a TTY Karaf's client prints nothing and says only "Closed", so a
+# one-shot command is given a TTY too (-t); its carriage returns and the
+# "Logging in as" banner are stripped so the output can be piped.
 
 . "$(dirname "$0")/lib.sh"
 
-SSH_OPTS=(-p "${TWINLIGHT_ONOS_CLI_PORT:-8101}"
-          -o StrictHostKeyChecking=no
-          -o UserKnownHostsFile=/dev/null
-          -o LogLevel=ERROR
-          # ONOS 2.7 ships an older Karaf SSHD. Modern OpenSSH clients
-          # (macOS 14+) disable these by default and the handshake fails
-          # without re-enabling them.
-          -o HostKeyAlgorithms=+ssh-rsa
-          -o PubkeyAcceptedAlgorithms=+ssh-rsa
-          -o KexAlgorithms=+diffie-hellman-group14-sha1)
+docker inspect "${ONOS_CONTAINER}" >/dev/null 2>&1 \
+  || die "no container ${ONOS_CONTAINER} — run integrations/onos/scripts/demo-up.sh first"
 
-if command -v sshpass >/dev/null 2>&1; then
-  exec sshpass -p rocks ssh "${SSH_OPTS[@]}" onos@localhost "$@"
+CLIENT=(sh -c 'exec "$(ls -d /root/onos/apache-karaf-*/bin/client | head -1)" "$@"' client
+        -h localhost -u "${ONOS_AUTH%%:*}" -p "${ONOS_AUTH#*:}")
+
+if [ $# -eq 0 ]; then
+  exec docker exec -it "${ONOS_CONTAINER}" "${CLIENT[@]}"
 fi
 
-printf '%sPassword is:%s rocks\n\n' "${C_BOLD}" "${C_RESET}"
-exec ssh "${SSH_OPTS[@]}" onos@localhost "$@"
+docker exec -t "${ONOS_CONTAINER}" "${CLIENT[@]}" "$*" | tr -d '\r' | sed '1{/^Logging in as /d;}'
