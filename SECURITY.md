@@ -20,10 +20,12 @@ deliberate way around the token requirement. Given a token in
 `TWINLIGHT_API_TOKEN`, it accepts requests on its port without credentials and
 forwards them to the twin with that token, so anyone who can reach the port
 can read the T-API context and its SIPs, list connectivity services, and
-create and delete them. The Compose overlay publishes that port (8282) on the
-host. Give the adapter a dedicated named token (an `onos:` entry in
-`TWINLIGHT_API_TOKENS`) so it can be revoked alone, and limit who can reach the
-port, for example by binding it to `127.0.0.1`. See
+create and delete them. The Compose overlay publishes that port (8282) on all
+of the host's interfaces. The adapter presents the same `TWINLIGHT_API_TOKEN`
+as the CLIs and the scripts, so revoking that token cuts off all of them at
+once, and the twin's log cannot tell the adapter's requests from theirs. An
+operator can limit who reaches the port with the host firewall or by binding
+it to `127.0.0.1` in a Compose override. See
 [integrations/onos/README.md § Authentication](integrations/onos/README.md#authentication).
 
 **Do not expose a TwinLight instance to an untrusted network.** Run it on

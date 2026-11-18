@@ -464,7 +464,7 @@ it to the twin. To keep Prometheus scraping, follow the comment in
 [`docker/prometheus.yml`](docker/prometheus.yml). The ONOS integration's
 adapter presents `TWINLIGHT_API_TOKEN` on ONOS's behalf and accepts requests
 without credentials, so anyone who can reach its port uses the twin with that
-token. Give it a dedicated `onos:` entry, as described in
+token. See
 [integrations/onos/README.md § Authentication](integrations/onos/README.md#authentication).
 
 Tokens are sent in clear text: the twin does not terminate TLS, so terminate it

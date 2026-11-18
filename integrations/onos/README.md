@@ -464,14 +464,15 @@ The integration works against a twin with or without API tokens. ONOS is
 configured the same way in both cases (`netcfg/twinlight-ols.json` carries no
 credentials), and the adapter accepts its requests without any.
 
-When the twin has `TWINLIGHT_API_TOKENS` set, give the adapter one of those
-tokens in `TWINLIGHT_API_TOKEN`, the variable the TwinLight CLIs read. The
-overlay passes it from the `.env` next to the root `docker-compose.yml`, so one
-file configures the twin, the adapter and the scripts:
+When the twin has `TWINLIGHT_API_TOKENS` set, the adapter presents
+`TWINLIGHT_API_TOKEN`, the same token the TwinLight CLIs and the scripts
+present. Set it once, in the `.env` next to the root `docker-compose.yml`. The
+twin reads its accepted token from there, the overlay passes the token to the
+adapter, and the CLIs and the scripts read it too:
 
 ```dotenv
-TWINLIGHT_API_TOKENS=ui:<token-1>,onos:<token-2>
-TWINLIGHT_API_TOKEN=<token-2>
+TWINLIGHT_API_TOKENS=<token>
+TWINLIGHT_API_TOKEN=<token>
 ```
 
 The adapter reads the token once at start-up and sends it as a bearer token on
@@ -484,13 +485,13 @@ the twin only (never to ONOS or the adapter) and never print it. Neither the
 adapter nor the scripts check the token beyond its being non-empty, because the
 twin decides.
 
-Give the adapter its own named entry, such as `onos:` above. The twin's log
-then names the adapter as the principal of its requests, and removing that one
-entry from `TWINLIGHT_API_TOKENS` (and restarting the twin) revokes the adapter
-alone. The overlay reads the same `TWINLIGHT_API_TOKEN` as the CLIs and the
-scripts, so with the `.env` above they also present the `onos` token. A CLI
-that should appear under its own name takes another token from its environment
-or from `--token`.
+Because every client presents the same token, revoking it (removing it from
+`TWINLIGHT_API_TOKENS` and restarting the twin) cuts off the adapter, the CLIs,
+the scripts and any UI session that entered it, all at once. The twin's log
+and `GET /internal/whoami` name the same principal for all of them, so they
+cannot tell the adapter's requests from a CLI's. An operator who wants a separate token for the adapter can set
+`TWINLIGHT_API_TOKEN` on the `tapi-adapter` service in their own Compose
+override file, as an option outside the default setup.
 
 ### What the adapter exposes
 
@@ -502,10 +503,12 @@ whose UUID they know (including one created in the UI). The adapter forwards
 nothing else (no `/config/`, `/transparent/`, `/admin/` or `/internal/`), but
 it does accept `POST /adapter/modulation` from anyone.
 
-The overlay publishes the adapter's port on the host (`8282:8282`), so every
-machine that can reach the host on 8282 has that access. ONOS reaches the
-adapter over the Compose network at `172.28.0.10:8282` and does not use the
-published port. To narrow access, bind the mapping to the loopback interface
+The overlay publishes the adapter's port on all of the host's interfaces
+(`8282:8282`), which is the easiest to use from the host and from other
+machines, so every machine that can reach the host on 8282 has that access.
+ONOS reaches the adapter over the Compose network at `172.28.0.10:8282` and
+does not use the published port. An operator who wants to narrow access can
+bind the mapping to the loopback interface
 (`"127.0.0.1:8282:8282"`), which keeps the scripts working because they call
 `localhost:8282`, or drop the mapping and the scripts that use `ADAPTER_URL`
 with it, or close the port in the host firewall. The token also sits in the
@@ -594,8 +597,8 @@ What this integration does not do:
   but ONOS's `ols` driver does not consume it.
 - **ONOS and the adapter do not authenticate their clients.** ONOS talks to
   the adapter without credentials, and the adapter accepts every request.
-  Against a twin with tokens, the adapter presents its own token on ONOS's
-  behalf, so anyone who can reach port 8282 can read the twin's SIPs and
+  Against a twin with tokens, the adapter presents `TWINLIGHT_API_TOKEN` on
+  ONOS's behalf, so anyone who can reach port 8282 can read the twin's SIPs and
   create and delete connectivity services (see
   [Authentication](#authentication)). No link uses TLS. Run the demo on a
   local or lab network only.
