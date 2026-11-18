@@ -549,6 +549,19 @@ service name will not work there: ONOS parses that field as an `IpAddress`.
 see Part 3; it is not a fault. Confirm the reason at
 `localhost:8282/adapter/status` under `recent-rejections`.
 
+**`demo-up.sh` sits at "waiting for app health 'ready'" for a minute or two
+on a cold boot.** Expected. ONOS reports its apps `ACTIVE` well before they
+run: activating `odtn-service`'s dependencies triggers a Karaf bundle refresh
+that restarts ONOS's core components, typically 30–60 s after the REST API
+first answers, and a device configuration pushed before that is lost (the
+device never appears, or the push is answered `207 "subjectClassKey 'devices'
+not found"`). The script therefore waits for each app's
+`/onos/v1/applications/<app>/health` to report `ready`, then pushes, retrying
+a transient answer with a bounded back-off.
+[COMPATIBILITY.md § C](COMPATIBILITY.md#c-integration-pitfalls) has the
+detail. Before this, the first `demo-up.sh` on a cold boot usually failed and a
+second run recovered.
+
 **ONOS OOMs or boots very slowly.** Give Docker Desktop ≥ 6 GB. Under Rosetta,
 2–4 minutes to a usable CLI is normal.
 

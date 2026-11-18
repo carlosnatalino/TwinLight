@@ -109,12 +109,7 @@ sys.exit(0 if d.get('available') else 1)
 \" 2>/dev/null" || warn "device did not drop cleanly; continuing"
 
 say "Re-adding the device"
-code="$(netcfg_body | curl -sS -u "${ONOS_AUTH}" -X POST \
-  -H 'Content-Type: application/json' \
-  --data-binary @- \
-  -o /dev/null -w '%{http_code}' \
-  "${ONOS_URL}/onos/v1/network/configuration")"
-[ "${code}" = "200" ] || die "netcfg POST returned HTTP ${code}"
+onos_push_netcfg || die "ONOS refused the network configuration"
 
 wait_for "port re-discovery" 180 bash -c "
   curl -sS -u '${ONOS_AUTH}' '${ONOS_URL}/onos/v1/devices/${DEVICE_ID}/ports' 2>/dev/null \
