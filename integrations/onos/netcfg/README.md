@@ -25,7 +25,12 @@ this file instead.
 **`"rest:172.28.0.10:8282"`** — the device key. ONOS parses the `DeviceId`
 straight out of it, so it must be `rest:<ip>:<port>` and must agree with the
 `rest` block below. The address is the static IP the adapter is assigned in
-`../docker-compose.onos.yml`; change one and you must change the other. It has
+`../docker-compose.onos.yml`. Both are derived from
+`TWINLIGHT_ONOS_SUBNET_PREFIX` (default `172.28`): for any other prefix the
+scripts push this file with the device key and the `rest` address rewritten,
+so the file itself stays written for the default (see
+[../README.md § Running a second stack side by side](../README.md#running-a-second-stack-side-by-side)).
+Pushing it by hand to a stack on another subnet needs the same two edits. It has
 to be a literal IP, not the `tapi-adapter` compose service name, because
 `RestDeviceConfig.ip()` parses the value as an `IpAddress`.
 

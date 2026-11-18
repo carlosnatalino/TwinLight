@@ -15,7 +15,9 @@
 #   tapi-adapter — T-API v2.6.0 → v2.1 version adapter (see adapter/tapi_adapter.py)
 #   onos         — ONOS 2.7 with the ODTN "ols" driver over the REST southbound
 #
-# Ports published on the host:
+# Ports published on the host (defaults; every name, tag, port and the subnet
+# below can be moved from the environment to run a second stack beside this
+# one, see integrations/onos/README.md § Running a second stack side by side):
 #   8181  ONOS REST API + GUI   (onos / rocks)
 #   8101  ONOS CLI over SSH     (onos / rocks)
 #   8282  T-API adapter         (/restconf/... for ONOS, /adapter/... for humans)
@@ -33,8 +35,8 @@ services:
       # -f file — i.e. the repo root. Hence ./integrations/onos/adapter, not ./adapter.
       context: ./integrations/onos/adapter
       dockerfile: Dockerfile
-    image: twinlight-tapi-adapter:latest
-    container_name: twinlight-tapi-adapter
+    image: twinlight-tapi-adapter:${TWINLIGHT_IMAGE_TAG:-latest}
+    container_name: ${TWINLIGHT_CONTAINER_PREFIX:-twinlight}-tapi-adapter
     # Same reason as the base stack: Compose drops service-name DNS aliases
     # when this overlay's subnet pin recreates the default network. The
     # hostname is registered again on reconnect.
@@ -55,10 +57,10 @@ services:
       ADAPTER_EXPOSE_TWIN_SERVICES: "false"
       ADAPTER_LOG_LEVEL: "INFO"
     ports:
-      - "8282:8282"
+      - "${TWINLIGHT_ADAPTER_PORT:-8282}:8282"
     networks:
       default:
-        ipv4_address: 172.28.0.10
+        ipv4_address: ${TWINLIGHT_ONOS_SUBNET_PREFIX:-172.28}.0.10
     depends_on:
       twin:
         condition: service_healthy
@@ -70,7 +72,7 @@ services:
     # the Karaf boot time (expect 2–4 min to a usable CLI, not 40 s).
     image: onosproject/onos:2.7-latest
     platform: linux/amd64
-    container_name: twinlight-onos
+    container_name: ${TWINLIGHT_CONTAINER_PREFIX:-twinlight}-onos
     hostname: onos
     environment:
       # Apps activated at boot. ONOS resolves each to org.onosproject.<name>.
@@ -82,11 +84,11 @@ services:
       #   gui2           — web UI at :8181/onos/ui
       ONOS_APPS: "drivers,restsb,odtn-service,optical-model,gui2"
     ports:
-      - "8181:8181"   # REST API + GUI
-      - "8101:8101"   # Karaf CLI over SSH
+      - "${TWINLIGHT_ONOS_REST_PORT:-8181}:8181"   # REST API + GUI
+      - "${TWINLIGHT_ONOS_CLI_PORT:-8101}:8101"   # Karaf CLI over SSH
     networks:
       default:
-        ipv4_address: 172.28.0.20
+        ipv4_address: ${TWINLIGHT_ONOS_SUBNET_PREFIX:-172.28}.0.20
     depends_on:
       tapi-adapter:
         condition: service_healthy
@@ -108,4 +110,4 @@ networks:
   default:
     ipam:
       config:
-        - subnet: 172.28.0.0/16
+        - subnet: ${TWINLIGHT_ONOS_SUBNET_PREFIX:-172.28}.0.0/16

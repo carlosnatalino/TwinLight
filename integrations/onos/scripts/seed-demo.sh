@@ -170,10 +170,10 @@ cat <<EOF
 
 ${C_BOLD}Where to look now${C_RESET}
 
-  ONOS GUI      http://localhost:8181/onos/ui   (onos / rocks)
+  ONOS GUI      ${ONOS_URL}/onos/ui   (onos / rocks)
                 Devices  -> click the OLS row -> the ports icon in the panel
                 Flows    -> one ADDED flow per admitted lightpath
-  TwinLight UI  http://localhost:5173           lightpaths on the map, spectrum heat map
-  Grafana       http://localhost:3000           OPM series, one per lightpath
+  TwinLight UI  ${UI_URL}           lightpaths on the map, spectrum heat map
+  Grafana       ${GRAFANA_URL}           OPM series, one per lightpath
 
 EOF

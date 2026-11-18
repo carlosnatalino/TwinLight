@@ -94,7 +94,7 @@ elif new_rej:
         print('    %s' % r['detail'])
     sys.exit(2)
 else:
-    print('  no adapter activity seen — check: docker logs twinlight-tapi-adapter')
+    print('  no adapter activity seen — check: docker logs ${ADAPTER_CONTAINER}')
     sys.exit(1)
 " "${before}" || {
     rc=$?

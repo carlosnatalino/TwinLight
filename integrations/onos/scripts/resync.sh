@@ -109,9 +109,9 @@ sys.exit(0 if d.get('available') else 1)
 \" 2>/dev/null" || warn "device did not drop cleanly; continuing"
 
 say "Re-adding the device"
-code="$(curl -sS -u "${ONOS_AUTH}" -X POST \
+code="$(netcfg_body | curl -sS -u "${ONOS_AUTH}" -X POST \
   -H 'Content-Type: application/json' \
-  -d @"${ONOS_DIR}/netcfg/twinlight-ols.json" \
+  --data-binary @- \
   -o /dev/null -w '%{http_code}' \
   "${ONOS_URL}/onos/v1/network/configuration")"
 [ "${code}" = "200" ] || die "netcfg POST returned HTTP ${code}"
@@ -121,7 +121,7 @@ wait_for "port re-discovery" 180 bash -c "
     | python3 -c \"
 import json, sys
 sys.exit(0 if len(json.load(sys.stdin).get('ports', [])) > 0 else 1)
-\"" || die "ports did not come back — check: docker logs twinlight-onos"
+\"" || die "ports did not come back — check: docker logs ${ONOS_CONTAINER}"
 
 say "State after resync"
 report

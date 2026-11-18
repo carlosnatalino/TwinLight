@@ -13,12 +13,12 @@ compose up -d --build
 
 say "Waiting for the digital twin"
 wait_for "twin /health" 300 curl -sSf "${TWIN_URL}/health" \
-  || die "twin never became healthy — check: docker logs twinlight"
+  || die "twin never became healthy — check: docker logs ${TWIN_CONTAINER}"
 ok "twin is up: $(curl -sS "${TWIN_URL}/health")"
 
 say "Waiting for the T-API adapter"
 wait_for "adapter /health" 120 curl -sSf "${ADAPTER_URL}/health" \
-  || die "adapter never became healthy — check: docker logs twinlight-tapi-adapter"
+  || die "adapter never became healthy — check: docker logs ${ADAPTER_CONTAINER}"
 sip_count="$(curl -sS "${ADAPTER_URL}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sips"])')"
 ok "adapter is up"
 
@@ -27,7 +27,7 @@ say "Waiting for ONOS (Karaf boot — slow under Rosetta on Apple Silicon)"
 # answers on :8181 well before its core services register, returning 503 bodies
 # for a minute or more. See onos_ready() in lib.sh.
 wait_for "ONOS core services" 900 onos_ready \
-  || die "ONOS never came up — check: docker logs twinlight-onos"
+  || die "ONOS never came up — check: docker logs ${ONOS_CONTAINER}"
 ok "ONOS REST API is up at ${ONOS_URL}/onos/ui (onos / rocks)"
 
 say "Verifying the ODTN apps are active"
@@ -49,9 +49,9 @@ done
 
 push_netcfg() {
   local response code
-  response="$(curl -sS -u "${ONOS_AUTH}" -X POST \
+  response="$(netcfg_body | curl -sS -u "${ONOS_AUTH}" -X POST \
     -H 'Content-Type: application/json' \
-    -d @"${ONOS_DIR}/netcfg/twinlight-ols.json" \
+    --data-binary @- \
     -w '\n%{http_code}' \
     "${ONOS_URL}/onos/v1/network/configuration")"
   code="$(printf '%s' "${response}" | tail -1)"
@@ -88,7 +88,7 @@ wait_for "device ${DEVICE_ID} available" 180 bash -c "
 import json, sys
 devs = json.load(sys.stdin)['devices']
 sys.exit(0 if any(d['id'] == '${DEVICE_ID}' and d['available'] for d in devs) else 1)
-\"" || die "ONOS never marked ${DEVICE_ID} available — check: docker logs twinlight-onos"
+\"" || die "ONOS never marked ${DEVICE_ID} available — check: docker logs ${ONOS_CONTAINER}"
 
 wait_for "port discovery" 180 bash -c "
   curl -sS -u '${ONOS_AUTH}' '${ONOS_URL}/onos/v1/devices/${DEVICE_ID}/ports' | python3 -c \"
@@ -106,8 +106,8 @@ ${C_BOLD}Stack is up.${C_RESET}
 
   ONOS GUI        ${ONOS_URL}/onos/ui          (onos / rocks)
   ONOS CLI        integrations/onos/scripts/onos-cli.sh
-  TwinLight UI    http://localhost:5173
-  Grafana         http://localhost:3000        (admin / admin)
+  TwinLight UI    ${UI_URL}
+  Grafana         ${GRAFANA_URL}        (admin / admin)
   Adapter status  ${ADAPTER_URL}/adapter/status
 
 Next:

@@ -15,7 +15,7 @@
 
 . "$(dirname "$0")/lib.sh"
 
-SSH_OPTS=(-p 8101
+SSH_OPTS=(-p "${TWINLIGHT_ONOS_CLI_PORT:-8101}"
           -o StrictHostKeyChecking=no
           -o UserKnownHostsFile=/dev/null
           -o LogLevel=ERROR

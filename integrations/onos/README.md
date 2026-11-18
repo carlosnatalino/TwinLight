@@ -413,7 +413,9 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 
 Overridable environment variables: `ONOS_URL`, `ONOS_AUTH`, `ADAPTER_URL`,
 `TWIN_URL`, `DEVICE_ID`, and `VALIDATE_A` / `VALIDATE_Z` for the validation A–Z
-pair.
+pair. The first four default to what the stack variables in
+[Running a second stack side by side](#running-a-second-stack-side-by-side)
+publish, so set those rather than these.
 
 ## Adapter endpoints
 
@@ -445,6 +447,71 @@ Introspection, safe to call any time:
 | `ADAPTER_EXPOSE_TWIN_SERVICES` | `false` | See below |
 | `ADAPTER_SIP_REFRESH_SECONDS` | `30` | SIP catalogue cache lifetime |
 
+### Running a second stack side by side
+
+Everything a stack claims on the Docker host has a variable whose default is
+the value above: the Compose project, the container names, the image tags, the
+published ports, the twin's snapshot directory and, with this overlay, the
+subnet. Leave them all unset and nothing changes. Set them, and a second stack
+runs next to the first, with no override file and no edited script: both
+compose files and every script in `scripts/` read the same names, from the
+environment first and then from the repo-root `.env`.
+
+| Variable | Default | Moves |
+|----------|---------|-------|
+| `COMPOSE_PROJECT_NAME` | the checkout directory's name | project, network and volume names (Compose's own variable) |
+| `TWINLIGHT_CONTAINER_PREFIX` | `twinlight` | `twinlight`, `twinlight-ui`, `-prometheus`, `-grafana`, `-grafana-init`, `-tapi-adapter`, `-onos` |
+| `TWINLIGHT_IMAGE_TAG` | `latest` | `twinlight`, `twinlight-ui` and `twinlight-tapi-adapter` images |
+| `TWINLIGHT_SNAPSHOT_DIR` | `./snapshots` | the twin's snapshots and shutdown checkpoint |
+| `TWINLIGHT_REST_PORT` / `_GNMI_PORT` / `_UI_PORT` | `8080` / `50051` / `5173` | |
+| `TWINLIGHT_PROMETHEUS_PORT` / `_GRAFANA_PORT` | `9090` / `3000` | |
+| `TWINLIGHT_ADAPTER_PORT` | `8282` | |
+| `TWINLIGHT_ONOS_REST_PORT` / `_CLI_PORT` | `8181` / `8101` | |
+| `TWINLIGHT_ONOS_SUBNET_PREFIX` | `172.28` | the overlay's `/16`, the adapter's and ONOS's addresses, and `DEVICE_ID` |
+| `TWINLIGHT_COMPOSE_FILES` | *(none)* | extra `-f` files for the scripts' Compose calls, colon-separated |
+
+For example, beside a default stack that is already running:
+
+```bash
+export COMPOSE_PROJECT_NAME=tl2 TWINLIGHT_CONTAINER_PREFIX=tl2 TWINLIGHT_IMAGE_TAG=tl2 \
+       TWINLIGHT_REST_PORT=38080 TWINLIGHT_GNMI_PORT=35051 TWINLIGHT_UI_PORT=35173 \
+       TWINLIGHT_PROMETHEUS_PORT=39090 TWINLIGHT_GRAFANA_PORT=33000 \
+       TWINLIGHT_ADAPTER_PORT=38282 TWINLIGHT_ONOS_REST_PORT=38181 TWINLIGHT_ONOS_CLI_PORT=38101 \
+       TWINLIGHT_ONOS_SUBNET_PREFIX=172.29 TWINLIGHT_SNAPSHOT_DIR="$PWD/snapshots-tl2"
+./integrations/onos/scripts/demo-up.sh      # and every other script, in the same shell
+./integrations/onos/scripts/demo-down.sh --purge
+```
+
+Use the environment, not `.env`, for a second stack from the **same**
+checkout: `.env` is shared by everything run from that directory. In a separate
+checkout or worktree, `.env` works just as well. Without ONOS the same
+variables apply to a plain `docker compose up`.
+
+**Why a subnet prefix, and only that.** The overlay pins its network's subnet
+because ONOS's netcfg parses the device's `rest.ip` as an `IpAddress`, so the
+adapter needs a literal, predictable address. Docker refuses to create two
+networks whose subnets overlap, so a second ONOS stack needs another `/16`;
+nothing else about the addressing has to change. One variable carries the
+first two octets: the subnet is `<prefix>.0.0/16`, the adapter `<prefix>.0.10`
+and ONOS `<prefix>.0.20`, and the scripts derive
+`DEVICE_ID=rest:<prefix>.0.10:8282`. `netcfg/twinlight-ols.json` stays written
+for the default; when `DEVICE_ID` differs, the scripts rewrite its device key
+and `rest` address as they push it. Pick a prefix no existing network uses:
+
+```bash
+docker network inspect $(docker network ls -q) \
+  --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}'
+```
+
+If you pick a taken one, `up` fails with `Pool overlaps with other one on this
+address space`.
+
+**What does not follow.** The second stack's **web UI** loads, but its API
+calls are refused by the browser: the twin's `server.cors_origins` (in the
+scenario YAML, not an environment variable) allows `http://localhost:5173`
+and not the moved port. Nothing in the ONOS integration uses the UI, and the
+twin's REST API, Grafana and Prometheus are unaffected.
+
 ### Why twin-native lightpaths are hidden from ONOS
 
 `TapiDeviceHelper.removeInitalConnectivityServices()` deletes **every**
@@ -469,10 +536,10 @@ docker logs twinlight-onos 2>&1 | grep -i "tapi\|ols\|NumberFormat"
 ```
 
 **Device never becomes `available`.** ONOS cannot reach the adapter. The netcfg
-IP must match the adapter's static address — both are `172.28.0.10` and must
-stay in sync between `docker-compose.onos.yml` and `netcfg/twinlight-ols.json`.
-A compose service name will not work there: ONOS parses that field as an
-`IpAddress`.
+IP must match the adapter's static address, `172.28.0.10` by default. The
+overlay and the scripts both derive it from `TWINLIGHT_ONOS_SUBNET_PREFIX`, so
+they agree unless `DEVICE_ID` is set by hand to something else. A compose
+service name will not work there: ONOS parses that field as an `IpAddress`.
 
 **`ols` driver missing.** `org.onosproject.odtn-service` did not activate.
 `./integrations/onos/scripts/onos-cli.sh apps -a -s` to check, then
