@@ -54,6 +54,13 @@ services:
       # which would wipe anything the UI or examples/demo_services.py created.
       ADAPTER_EXPOSE_TWIN_SERVICES: "false"
       ADAPTER_LOG_LEVEL: "INFO"
+      # The adapter's token for a twin with TWINLIGHT_API_TOKENS set. Compose
+      # fills it in from ./.env; unset there, it arrives empty and the adapter
+      # sends no credentials. ONOS needs none: it talks to the adapter, which
+      # presents this on its behalf -- so anyone who can reach port 8282 can
+      # do what this token allows. See integrations/onos/README.md
+      # § Authentication. Only this variable is passed, not the whole .env.
+      TWINLIGHT_API_TOKEN: ${TWINLIGHT_API_TOKEN:-}
     ports:
       - "8282:8282"
     networks:
