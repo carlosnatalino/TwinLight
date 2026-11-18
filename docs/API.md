@@ -35,12 +35,17 @@ Endpoints fall into two groups, kept strictly apart (see
 
 ## Migrating from earlier releases
 
-Each T-API resource has exactly one path, the one the v2.6.0 YANG gives it.
-Paths earlier releases served anywhere else are removed, not redirected, and
-answer `404` (`401` without a token when authentication is on):
+Each T-API resource has exactly one path, the one the v2.6.0 YANG gives it,
+and each operation one way to do it. Paths earlier releases served anywhere
+else are removed, not redirected, and answer `404` (`401` without a token when
+authentication is on). Creation moved from the list path to its parent, as
+RFC 8040 §4.4.1 specifies; a `POST` on the list path answers `405`, since the
+path still serves `GET`:
 
 | Removed path | Standard path |
 |--------------|---------------|
+| `POST /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service` | `POST /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context` |
+| `POST /restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/path-comp-service` | `POST /restconf/data/tapi-common:context/tapi-path-computation:path-computation-context` |
 | `/data/tapi-connectivity:connectivity-context/…` | `/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/…` |
 | `/data/tapi-path-computation:path-computation-context/…` | `/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/…` |
 | `/data/tapi-equipment:physical-context/…` | `/restconf/data/tapi-common:context/tapi-equipment:physical-context/…` |
@@ -51,9 +56,12 @@ answer `404` (`401` without a token when authentication is on):
 
 The standard paths are given for the default root, `/restconf`; on a twin
 configured with another, substitute it. Everything after the container is
-unchanged, and so are request and response bodies. A twin configured with
+unchanged, and so are request and response bodies (a create sends the same
+body to the container that it sent to the list path, and gets the same
+answer, now with a `Location` header). A twin configured with
 `server.restconf_root: ""` serves the data resource at `/data/…` by
-definition, so on such a twin only the short context paths change.
+definition, so on such a twin only the short context paths and the create
+target change.
 
 ## Finding the RESTCONF root
 
@@ -194,8 +202,8 @@ e.g. `"392.110"` for 80 km.
 | Method | Path |
 |--------|------|
 | GET | `/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context` |
+| POST | `/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context` |
 | GET | `…/connectivity-service` |
-| POST | `…/connectivity-service` |
 | GET | `…/connectivity-service={uuid}` |
 | PUT | `…/connectivity-service={uuid}` |
 | PATCH | `…/connectivity-service={uuid}` |
@@ -206,6 +214,25 @@ The container GET returns `{"tapi-connectivity:connectivity-context":
 list GET `…/connectivity-service` answers with that same container envelope
 rather than a `tapi-connectivity:connectivity-service` array, as it always
 has; the UI and the ONOS adapter read it that way.
+
+**Create.** A service is created by `POST` on the container, the
+`connectivity-context`, with the new `connectivity-service` entry as the body:
+RFC 8040 §4.4.1 makes the parent the target of a creating `POST`. The list
+path `…/connectivity-service` serves `GET` only, and a `POST` there is a
+`405`. A created service answers `201` with a `Location` header naming it,
+`{restconf_root}/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}`
+(the key percent-encoded), and with the created entry as the body, which
+carries the UUID, the format and the spectrum admission chose; RFC 8040 sends
+no body there (a deliberate deviation, see
+[TAPI_COMPLIANCE.md § 2.2](TAPI_COMPLIANCE.md#22-restconf-protocol-gaps)).
+
+```bash
+curl -i -X POST \
+  http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context \
+  -H 'Content-Type: application/yang-data+json' -d @service.json
+# HTTP/1.1 201 Created
+# location: /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=<uuid>
+```
 
 **Create (POST) body:**
 
@@ -401,14 +428,19 @@ pushes a co-propagating one below threshold; that one then reads `DISABLED`.
 | Method | Path |
 |--------|------|
 | GET | `/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context` |
+| POST | `/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context` |
 | GET | `…/path-comp-service` |
-| POST | `…/path-comp-service` |
 | GET | `…/path-comp-service={uuid}` |
 | DELETE | `…/path-comp-service={uuid}` |
 | GET | `…/path` |
 | GET | `…/path={uuid}` |
 
-T-API v2.6.0 has no path-computation RPC: computation is a resource. Creating
+T-API v2.6.0 has no path-computation RPC: computation is a resource. A
+`path-comp-service` is created by `POST` on the container, the
+`path-computation-context`, with the entry below as the body (RFC 8040
+§4.4.1; a `POST` on `…/path-comp-service` is a `405`). The `201` carries a
+`Location` naming the new entry, `…/path-comp-service={uuid}`, and the entry
+itself, with its `path` references. Creating
 a `path-comp-service` computes up to `rmsa.k_shortest_paths` routes, shortest
 fiber length first (GNPy's ranking, see
 [ARCHITECTURE.md](ARCHITECTURE.md#creating-a-connectivity-service)), stores each as a `path` in the context and lists them in the service's

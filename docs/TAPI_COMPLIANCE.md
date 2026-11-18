@@ -36,7 +36,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 | Aspect | Status | Notes |
 |--------|--------|------|
 | **Connectivity context** | ✓ | `GET /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context`, the augment's RESTCONF path; the same section as in the full-context GET |
-| **Create service** | ✓ | `POST .../tapi-connectivity:connectivity-context/connectivity-service` with end-points (SIP refs) and the photonic modulation augment |
+| **Create service** | ✓ | `POST .../tapi-connectivity:connectivity-context`, the list's parent (RFC 8040 §4.4.1), with the new `connectivity-service` (end-points with SIP refs and the photonic modulation augment) as the body; `201` with a `Location` naming the entry. The list path takes no `POST` (`405`) |
 | **List / get service** | ✓ | `GET .../connectivity-service`, `GET .../connectivity-service={uuid}` |
 | **Replace service** | ✓ | `PUT .../connectivity-service={uuid}` (full replacement; body UUID must match path) |
 | **Update service** | ✓ | `PATCH .../connectivity-service={uuid}` (name, administrative-state, lifecycle-state) |
@@ -51,6 +51,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 - **URL path encoding**: Colons in paths handled (PathDecodeMiddleware for `%3A` → `:`).
 - **RESTCONF-style paths**: Resource paths follow the `.../connectivity-service={uuid}` pattern.
 - **Augment paths**: Every context augment is served under the context, at its RFC 8040 §3.5.3 path, with a module prefix only where the module changes: `/restconf/data/tapi-common:context/tapi-topology:topology-context`, `…/tapi-connectivity:connectivity-context`, `…/tapi-path-computation:path-computation-context`, `…/tapi-equipment:physical-context`, `…/tapi-oam:oam-context`, `…/tapi-streaming:stream-context`. Each is served there only; the short `/data/<module>:<container>/…` earlier releases also served for the connectivity, path-computation and physical contexts is gone.
+- **Create by POST on the parent**: RFC 8040 §4.4.1 — a `connectivity-service` is created on `…/tapi-connectivity:connectivity-context` and a `path-comp-service` on `…/tapi-path-computation:path-computation-context`, never on the list path, which answers `405` to a `POST`. The `201` carries a `Location` with the entry's data-resource path under the configured root, key percent-encoded (§3.5.3), as a path-absolute reference. It also carries a body; see §2.2.
 - **List encoding**: POST accepts a list entry as a single-element JSON array (RFC 7951 §5.4, RFC 8040 App. B.2.1) as well as a bare object.
 - **gNMI**: the T-API v2.6.0 performance-measurement stream of TR-548 §6 — see §1.6 and the deviations in §2.5.
 
@@ -59,7 +60,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 | Aspect | Status | Notes |
 |--------|--------|------|
 | **Path computation context** | ✓ | `GET /restconf/data/tapi-common:context/tapi-path-computation:path-computation-context` lists `path-comp-service` and `path`, the v2.6.0 names |
-| **path-comp-service** | ✓ | `POST`/`GET`/`DELETE .../path-comp-service[={uuid}]`; creating one computes up to `rmsa.k_shortest_paths` ranked routes. v2.6.0 has no RPC, so the earlier `compute-path` RPC (and its non-standard `max-candidates`) is gone; the ranked view with a count is `POST /internal/compute-path` |
+| **path-comp-service** | ✓ | Created by `POST .../tapi-path-computation:path-computation-context`, the list's parent (RFC 8040 §4.4.1), answering `201` with a `Location`; `GET`/`DELETE .../path-comp-service[={uuid}]`. Creating one computes up to `rmsa.k_shortest_paths` ranked routes. v2.6.0 has no RPC, so the earlier `compute-path` RPC (and its non-standard `max-candidates`) is gone; the ranked view with a count is `POST /internal/compute-path` |
 | **path** | ✓ | `GET .../path[={uuid}]` with `link` and `node-edge-point` references and the fiber length as a `cost-characteristic` |
 | **Route constraints** | ◐ | `topology-constraint` include/exclude node and link and `explicit-route`; `routing-constraint` `route-objective-function: MIN_WORK_ROUTE_LATENCY` and `is-exclusive: true`. Every other constraint leaf is refused with a 422 naming it, on path-comp-service and connectivity-service alike |
 | **Physical context** | ✓ | `GET /restconf/data/tapi-common:context/tapi-equipment:physical-context`, `.../device[={uuid}]`, `.../device={uuid}/equipment={uuid}`, `.../physical-span[={uuid}]`. v2.6.0 has no `equipment-context`; the earlier non-standard `equipment-context` endpoints and their `equipment-type`/`length-km` fields are gone |
@@ -119,6 +120,7 @@ So: **Common, Topology, Connectivity, Path Computation and Equipment** are imple
 | **Error format** | RESTCONF errors (e.g. `application/yang-data+json` with `ietf-restconf:errors`) | ✓ Implemented: HTTP and validation errors return `ietf-restconf:errors` with `error-type`, `error-tag`, `error-message`. |
 | **PATCH semantics** | RFC 7396 (Merge Patch) / YANG patch rules | PATCH is implemented as a few allowed fields (name, states); not a full merge or YANG-aware PATCH. |
 | **PUT** | Create/replace resource at exact path | ✓ Implemented for connectivity-service: `PUT .../connectivity-service={uuid}` replaces by UUID. |
+| **Body of a creating POST** | RFC 8040 §4.4.1: a `201 Created` with a `Location` header and no message body | ◐ Deliberate deviation: the `201` on the connectivity-context and the path-computation-context carries the `Location` **and** the created entry, as `{"tapi-connectivity:connectivity-service": {…}}` or `{"tapi-path-computation:path-comp-service": {…}}`. The entry holds what the server decided (the UUID when the client sent none; the modulation format and spectrum admission chose; a path-comp-service's computed `path` references), and every client in the repository reads it from there. A strictly conforming client ignores the body and dereferences `Location`, which returns the same entry. |
 | **OPTIONS** | Discovery of allowed methods on a resource | Not explicitly documented; relies on default FastAPI behavior. |
 
 ### 2.3 Data model gaps (within implemented modules)

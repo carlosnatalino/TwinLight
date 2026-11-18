@@ -58,10 +58,10 @@ def test_spectrum_grid_returns_context_links_occupancy(app) -> None:
 def test_spectrum_grid_includes_all_connectivity_services(app) -> None:
     """service-allocation has one entry per connectivity service (all shown in UI)."""
     sip_a, sip_z = _get_two_sips(app)
-    r1 = app.post(f"{_BASE_CONN}/connectivity-service", json=_create_payload(sip_a, sip_z))
+    r1 = app.post(_BASE_CONN, json=_create_payload(sip_a, sip_z))
     assert r1.status_code == 201
     uuid1 = r1.json()["tapi-connectivity:connectivity-service"]["uuid"]
-    r2 = app.post(f"{_BASE_CONN}/connectivity-service", json=_create_payload(sip_a, sip_z))
+    r2 = app.post(_BASE_CONN, json=_create_payload(sip_a, sip_z))
     assert r2.status_code == 201
     uuid2 = r2.json()["tapi-connectivity:connectivity-service"]["uuid"]
     grid = app.get("/internal/spectrum-grid")
@@ -81,7 +81,7 @@ def test_spectrum_grid_occupancy_includes_every_allocated_service(app) -> None:
     with only TRX–ROADM links the grid may have zero rows; then we only check structure.
     """
     sip_a, sip_z = _get_two_sips(app)
-    r = app.post(f"{_BASE_CONN}/connectivity-service", json=_create_payload(sip_a, sip_z))
+    r = app.post(_BASE_CONN, json=_create_payload(sip_a, sip_z))
     assert r.status_code == 201
     svc_uuid = r.json()["tapi-connectivity:connectivity-service"]["uuid"]
     grid = app.get("/internal/spectrum-grid")

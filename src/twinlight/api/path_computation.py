@@ -1,15 +1,16 @@
 """T-API v2.6.0 path computation (``tapi-path-computation``).
 
 GET    {root}/data/tapi-common:context/tapi-path-computation:path-computation-context
+POST   {root}/data/tapi-common:context/tapi-path-computation:path-computation-context
 GET    …/path-comp-service
-POST   …/path-comp-service
 GET    …/path-comp-service={uuid}
 DELETE …/path-comp-service={uuid}
 GET    …/path
 GET    …/path={uuid}
 
-v2.6.0 defines no RPCs: a client creates a ``path-comp-service`` and reads the
-computed ``path`` objects it references. The ranked-candidates view with a
+v2.6.0 defines no RPCs: a client creates a ``path-comp-service`` by POST on
+the container, its parent (RFC 8040 §4.4.1), and reads the computed ``path``
+objects it references. The ranked-candidates view with a
 candidate count, which T-API has no leaf for, is ``POST /internal/compute-path``.
 
 ``tapi-path-computation`` augments ``/tapi-common:context``, so RFC 8040
@@ -20,10 +21,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import ValidationError
 
 from twinlight.algorithms.path_constraints import ConstraintError
+from twinlight.api.restconf import created_location
 from twinlight.models.path_computation import PathCompService
 from twinlight.state.context import NoPathError
 
@@ -95,12 +97,19 @@ async def get_path_comp_services(request: Request) -> dict:
     return {_SERVICE_KEY: [_dump(s) for s in ctx.get_path_comp_services()]}
 
 
-@router.post("/path-comp-service", status_code=status.HTTP_201_CREATED)
-async def create_path_comp_service(body: dict, request: Request) -> dict:
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_path_comp_service(
+    body: dict, request: Request, response: Response
+) -> dict:
     """Create a path-comp-service; its ``path`` list holds the computed routes.
 
     Up to ``rmsa.k_shortest_paths`` routes, best first, each a ``path`` in the
     context. Commits no network resources.
+
+    RFC 8040 §4.4.1: the POST targets the parent, the
+    path-computation-context, with the new entry in the body; the 201
+    carries a ``Location`` naming it, and the entry itself (see
+    docs/TAPI_COMPLIANCE.md for that deviation).
     """
     ctx = request.app.state.context
     service = _parse(body)
@@ -123,6 +132,9 @@ async def create_path_comp_service(body: dict, request: Request) -> dict:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc),
         ) from exc
+    response.headers["Location"] = created_location(
+        request, PREFIX, "path-comp-service", service.uuid
+    )
     return {_SERVICE_KEY: _dump(service)}
 
 

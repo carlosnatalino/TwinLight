@@ -132,8 +132,9 @@ def _create_service(data: str, base: str, sips: list, modulation: str, attempts:
                 ],
             }
         }
+        # RFC 8040 §4.4.1: a list entry is created by POST on its parent.
         req = urllib.request.Request(
-            f"{data}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{data}/tapi-common:context/tapi-connectivity:connectivity-context",
             data=json.dumps(body).encode(),
             method="POST",
             headers={"Content-Type": "application/json"},

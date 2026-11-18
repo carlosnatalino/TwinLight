@@ -28,7 +28,8 @@ from twinlight.physics.egn_kernel import Neighbour, cross_channel_nli_power, dbm
 from twinlight.physics.modulation import ModulationFormat, get_params
 from twinlight.state.context import TapiContext
 
-_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_CONTAINER = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_SVC = f"{_CONTAINER}/connectivity-service"
 _REQUIRED_64QAM = get_params(ModulationFormat.DP_64QAM).req_gsnr_db
 
 
@@ -230,7 +231,7 @@ class TestOperationalState:
         ctx = client.app.state.context
         _zero_margin(ctx)
         refs = MeshRefs(ctx)
-        created = client.post(_SVC, json={"tapi-connectivity:connectivity-service": [{
+        created = client.post(_CONTAINER, json={"tapi-connectivity:connectivity-service": [{
             "end-point": [tapi_end_point("a", refs.sip("trx A"), "DP-64QAM"),
                           tapi_end_point("z", refs.sip("trx C"), "DP-64QAM")],
         }]})
