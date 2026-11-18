@@ -39,8 +39,15 @@ any specification:
 | 3 | `TapiDeviceLambdaQuery` reads `mc-pool` from the **top level** of the per-SIP response | The twin answers that resource as RFC 8040 §4.3 and RFC 7951 §5.4 specify, `{"tapi-common:service-interface-point": [ {…} ]}`. The adapter serves ONOS the bare object. |
 | 4 | POSTs a connectivity-service with `service-layer`/`service-type` and no modulation format, which T-API 2.1 has nowhere to carry | The adapter adds a modulation as policy, in the T-API 2.6 location (a `tapi-photonic-media` augment on the end-point), and reuses ONOS's UUID as the twin's service UUID so the later DELETE lines up. |
 
-Everything else — paths, hyphenated keys, list-encoded POST bodies, RESTCONF
-error bodies — passes through unchanged.
+Those four, plus showing ONOS only the services it created
+([COMPATIBILITY.md § A3](COMPATIBILITY.md#a3-onos-deletes-pre-existing-connectivity-services))
+and the 50 GHz granularity it can parse (§ A6), are all that is left: each is
+an ONOS T-API 2.1 behaviour, not a twin deviation. Everything else — paths,
+hyphenated keys, the create on the connectivity-context, the array-of-one
+create body (forwarded as ONOS sent it), RESTCONF error bodies — passes
+through unchanged. Earlier releases also reshaped the create body into a bare
+object and re-targeted the create to the list path; the twin's now standard
+behaviour made both unnecessary, and they are gone.
 
 [COMPATIBILITY.md](COMPATIBILITY.md) works through each incompatibility and
 records, with the specification clause it rests on, whether the fix belongs in
@@ -532,7 +539,7 @@ connected, as ONOS's port cache depends on them being consistent:
 Introspection, safe to call any time:
 
 - `GET /health` — liveness, twin reachability, and whether the twin accepts the adapter's token
-- `GET /adapter/status` — modulation policy, ONOS-created services, recent refusals, the twin's verdict on the adapter's token
+- `GET /adapter/status` — modulation policy, ONOS-created services, recent refusals, the twin's verdict on the adapter's token. Always `200`: a twin that is down sets `"twin-reachable": false` with the reason in `twin-error`, as a refused token sets `twin-authorized` and `twin-auth-error`
 - `GET /adapter/ports` — the SIP ↔ ONOS-port map
 - `POST /adapter/modulation` — switch modulation format at runtime
 
@@ -699,7 +706,10 @@ scripts get to read the reason. Its body says `"status": "unauthorized"`,
 A twin that is down still reads `"status": "degraded"` with
 `"twin-reachable": false`, because the twin's `/health` is public and says
 nothing about the token. `/adapter/status` carries the same `twin-authorized`
-and `twin-auth-error` fields next to the adapter's own state. `demo-up.sh`,
+and `twin-auth-error` fields next to the adapter's own state, and answers
+`200` in both cases, with `twin-reachable` and `twin-error` for a twin that is
+down. Either trouble is logged when it starts and when it ends, not on every
+ONOS poll. `demo-up.sh`,
 `validate.sh` and the scripts that need ONOS stop with that sentence instead of
 waiting for ports that never appear. A script whose own token the twin refuses
 says so in the same words, naming the twin.

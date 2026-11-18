@@ -47,10 +47,10 @@ what the T-API specification says it should do. The four behaviours that matter:
 
 4. ``TapiFlowRuleProgrammable`` POSTs a connectivity-service whose body is a
    **JSON list** under ``tapi-connectivity:connectivity-service`` and carries
-   ``service-layer`` / ``service-type`` but no modulation format. The twin
-   accepts either spelling of the body now (RFC 7951 §5.4 makes the array of
-   one correct, so that is no longer an incompatibility), but it still needs
-   a modulation, which T-API 2.1 has nowhere to carry. The adapter supplies
+   ``service-layer`` / ``service-type`` but no modulation format. The array
+   of one is RFC 7951 §5.4's encoding, which the twin takes, so it is
+   forwarded as it is; but the twin still needs a modulation, which T-API
+   2.1 has nowhere to carry. The adapter supplies
    one as policy, in the T-API 2.6 place: a ``tapi-photonic-media`` augment
    on the end-point. Translated in :func:`create_connectivity_service`.
 
@@ -286,6 +286,44 @@ class TwinAuthorization:
             log.info("the twin accepts the adapter's requests again")
 
 
+class TwinReachability:
+    """Whether the twin answers the adapter usably, as last observed.
+
+    ONOS polls the adapter every few seconds, so a twin that is down would
+    otherwise log "twin unreachable" at ERROR on every poll. This logs each
+    transition instead, the way :class:`TwinAuthorization` reports a refused
+    token: once when the twin stops answering, once when it answers again.
+    Two kinds of trouble are told apart, since they end differently:
+
+    - ``unreachable``: no answer, or an error status. Over at the next
+      response of any kind (:meth:`observe`, an httpx response hook).
+    - ``unreadable``: an answer whose body the adapter does not understand
+      (:class:`TwinProtocolError`). Over when a body is read again
+      (:meth:`recovered`), not merely when the twin answers.
+    """
+
+    def __init__(self) -> None:
+        self.kind: str | None = None
+        self.problem: str | None = None
+
+    def failed(self, exc: Exception) -> None:
+        kind = "unreadable" if isinstance(exc, TwinProtocolError) else "unreachable"
+        if self.kind != kind:
+            if kind == "unreadable":
+                log.error("the twin answers with a body the adapter cannot read: %s", exc)
+            else:
+                log.error("twin unreachable: %s", exc)
+        self.kind, self.problem = kind, str(exc)
+
+    def recovered(self, kind: str) -> None:
+        if self.kind == kind:
+            log.info("the twin %s again", "answers" if kind == "unreachable" else "is readable")
+            self.kind = self.problem = None
+
+    async def observe(self, response: httpx.Response) -> None:
+        self.recovered("unreachable")
+
+
 class SipCatalogue:
     """Bidirectional map between TwinLight SIP UUIDs and ONOS-visible ones.
 
@@ -414,9 +452,10 @@ def connect_twin(app: FastAPI, token: str | None, **client_options: Any) -> None
     base_path = httpx.URL(str(client_options["base_url"])).path.rstrip("/")
     auth = TwinAuthorization(token is not None, health_path=f"{base_path}/health")
     app.state.twin_auth = auth
+    app.state.twin_reach = reach = TwinReachability()
     app.state.client = httpx.AsyncClient(
         headers={"Authorization": f"Bearer {token}"} if token else None,
-        event_hooks={"response": [auth.observe]},
+        event_hooks={"response": [reach.observe, auth.observe]},
         **client_options,
     )
 
@@ -467,6 +506,13 @@ async def _twin_refused_the_adapter(request: Request, exc: TwinAuthError) -> JSO
 # ---------------------------------------------------------------------------
 # Twin access helpers
 # ---------------------------------------------------------------------------
+
+
+def _bad_gateway(request: Request, exc: Exception) -> HTTPException:
+    """The 502 ONOS gets while the twin is unavailable; recorded, and logged
+    once per outage rather than on every poll (see TwinReachability)."""
+    request.app.state.twin_reach.failed(exc)
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
 def _parse_host_meta(xrd: str) -> str:
@@ -528,6 +574,7 @@ async def _list_sips(request: Request) -> list[dict[str, Any]]:
     sips = payload.get(SIP_LIST_KEY) if isinstance(payload, dict) else None
     if not isinstance(sips, list):
         raise TwinProtocolError(f"GET {path}: the body carries no {SIP_LIST_KEY} list")
+    request.app.state.twin_reach.recovered("unreadable")
     return sips
 
 
@@ -662,10 +709,7 @@ async def get_context(request: Request) -> JSONResponse:
         await _ensure_catalogue(request)
         live = await _fresh_sips(request)
     except TwinUnavailableError as exc:
-        log.error("twin unreachable: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        raise _bad_gateway(request, exc) from exc
 
     sips = [
         _decorate_sip(
@@ -698,9 +742,7 @@ async def get_sip(onos_uuid: str, request: Request) -> JSONResponse:
         live = await _fresh_sips(request)
         sip = live.get(_to_twin_sip(onos_uuid), sip)
     except TwinUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        raise _bad_gateway(request, exc) from exc
     return JSONResponse(_decorate_sip(sip, onos_uuid))
 
 
@@ -719,9 +761,7 @@ async def get_connectivity_context(request: Request) -> JSONResponse:
             "/tapi-connectivity:connectivity-context/connectivity-service",
         )
     except TwinUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        raise _bad_gateway(request, exc) from exc
 
     # The twin's list GET answers with the list as its one top-level member
     # (RFC 8040 §4.3). A body without it is a twin this adapter does not
@@ -748,9 +788,13 @@ async def get_connectivity_context(request: Request) -> JSONResponse:
 async def create_connectivity_service(body: dict, request: Request) -> Response:
     """Translate ONOS's T-API 2.1 connectivity request and forward it to the twin.
 
-    ONOS sends a *list* under ``tapi-connectivity:connectivity-service``; the
-    twin wants a single object plus a ``modulation-format``. ONOS's UUID is
-    reused as the twin's service UUID so the later DELETE lines up.
+    ONOS sends the entry as a list of one under
+    ``tapi-connectivity:connectivity-service``, which is the standard
+    encoding the twin takes as it is. What is translated: the SIPs (ONOS's
+    port-indexed UUIDs back to the twin's), the T-API 2.1 end-point leaves
+    ONOS adds (dropped), and the modulation format, which 2.1 cannot carry
+    (added as the 2.6 augment). ONOS's UUID is reused as the twin's service
+    UUID so the later DELETE lines up.
 
     A 409 from the twin is not a failure of the adapter: it means the RMSA/QoT
     admission path refused the lightpath. It is relayed unchanged so ONOS marks
@@ -774,7 +818,13 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
             detail=f"Expected 2 end-points, got {len(endpoints)}",
         )
 
-    await _ensure_catalogue(request)
+    # The catalogue maps ONOS's port-indexed SIPs back to the twin's; with the
+    # twin down it cannot be built, which is a 502 like any other upstream
+    # failure, not the 500 an uncaught error would be.
+    try:
+        await _ensure_catalogue(request)
+    except TwinUnavailableError as exc:
+        raise _bad_gateway(request, exc) from exc
 
     twin_endpoints = []
     onos_ports: list[int | None] = []
@@ -809,8 +859,10 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
     port_pair = f"{onos_ports[0]}->{onos_ports[1]}"
     endpoint_pair = " -> ".join(n or "?" for n in node_names)
 
+    # The entry as an array of one, RFC 7951 §5.4's encoding of a list entry
+    # and the spelling ONOS itself sends: nothing to translate there.
     twin_body = {
-        "tapi-connectivity:connectivity-service": {
+        "tapi-connectivity:connectivity-service": [{
             "uuid": onos_uuid,
             "name": [
                 {
@@ -821,7 +873,7 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
                 {"value-name": "provisioned-by", "value": "onos-odtn"},
             ],
             "end-point": twin_endpoints,
-        }
+        }]
     }
 
     log.info(
@@ -841,9 +893,7 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
             json=twin_body,
         )
     except (httpx.HTTPError, TwinUnavailableError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        raise _bad_gateway(request, exc) from exc
 
     if response.status_code in (200, 201):
         payload = response.json()
@@ -907,9 +957,7 @@ async def delete_connectivity_service(uuid: str, request: Request) -> Response:
             f"/tapi-connectivity:connectivity-context/connectivity-service={uuid}"
         )
     except (httpx.HTTPError, TwinUnavailableError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        raise _bad_gateway(request, exc) from exc
 
     # 404 counts as success: the caller wants the lightpath gone, and it is.
     # This is not pedantry about REST idempotence — ONOS only retires a flow
@@ -993,20 +1041,23 @@ async def health(request: Request) -> dict[str, Any]:
 async def adapter_status(request: Request) -> dict[str, Any]:
     """What the adapter is doing -- the demo's explain-yourself endpoint.
 
-    A twin that refuses the adapter's token does not make this fail: the
-    adapter's own state is still worth showing, next to the reason.
+    Always a 200: a twin that is down, answers unreadably or refuses the
+    adapter's token does not make it fail, since the adapter's own state is
+    still worth showing; the reason is in ``twin-error`` or
+    ``twin-auth-error``.
     """
     auth: TwinAuthorization = request.app.state.twin_auth
+    reach: TwinReachability = request.app.state.twin_reach
     try:
         await _ensure_catalogue(request)
     except TwinUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        reach.failed(exc)  # reported below, like a refused token
     except TwinAuthError:
         pass  # reported below
     return {
         "twin": TWIN_BASE_URL,
+        "twin-reachable": reach.kind != "unreachable",
+        "twin-error": reach.problem,
         "token-configured": auth.token_configured,
         "twin-authorized": auth.problem is None,
         "twin-auth-error": auth.problem,
@@ -1049,9 +1100,7 @@ async def adapter_ports(request: Request) -> dict[str, Any]:
     try:
         await _ensure_catalogue(request)
     except TwinUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        raise _bad_gateway(request, exc) from exc
 
     ports = []
     for onos_uuid in catalogue.onos_uuids():

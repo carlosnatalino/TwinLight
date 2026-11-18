@@ -19,18 +19,23 @@ A_CITY="${VALIDATE_A:-Abilene}"
 Z_CITY="${VALIDATE_Z:-Atlanta}"
 
 PASS=0; FAIL=0
+# Each check's output, in a file of our own: mktemp names it unpredictably
+# (a fixed /tmp name can be pre-created or symlinked by another user) and
+# the trap removes it however the script ends.
+CHECK_OUT="$(mktemp "${TMPDIR:-/tmp}/twinlight-validate.XXXXXX")" || die "cannot create a temporary file"
+trap 'rm -f "${CHECK_OUT}"' EXIT
 check() {
   # check <description> <command...>
   local desc="$1"; shift
-  if "$@" >/tmp/twinlight-validate.$$ 2>&1; then
+  if "$@" >"${CHECK_OUT}" 2>&1; then
     printf '%s  PASS%s  %s\n' "${C_GREEN}" "${C_RESET}" "${desc}"
     PASS=$((PASS + 1))
   else
     printf '%s  FAIL%s  %s\n' "${C_RED}${C_BOLD}" "${C_RESET}" "${desc}"
-    sed 's/^/          /' /tmp/twinlight-validate.$$ | head -6
+    sed 's/^/          /' "${CHECK_OUT}" | head -6
     FAIL=$((FAIL + 1))
   fi
-  rm -f /tmp/twinlight-validate.$$
+  : > "${CHECK_OUT}"
 }
 note() { printf '        %s\n' "$*"; }
 

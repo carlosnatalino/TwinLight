@@ -198,7 +198,8 @@ and RFC 7951 §5.4 is categorical: *"A list instance is encoded as a name/array
 pair"* — no exception for a single entry. `connectivity-service` is a YANG
 `list`, so the array-of-one ONOS sends is the correct encoding.
 
-POST and PUT accept both the array and the bare-object spelling. A multi-entry
+POST and PUT accept both the array and the bare-object spelling, and the
+adapter forwards ONOS's array as it is. A multi-entry
 array is a `400`, since the handler admits one service, and so is a body that
 does not validate, with the RFC 8040 §7 `error-tag` that names the problem
 (`malformed-message`, `missing-element`, `bad-element`, `invalid-value`).
