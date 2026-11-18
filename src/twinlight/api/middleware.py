@@ -1,4 +1,5 @@
-"""HTTP middleware: RESTCONF content type, path decoding, token authentication, Allow.
+"""HTTP middleware: RESTCONF content type, path decoding, token authentication,
+Allow, HEAD and OPTIONS.
 
 TAPI uses RESTCONF convention: ``application/yang-data+json``.
 ``RestconfContentTypeMiddleware`` sets the correct Content-Type on /data/
@@ -20,6 +21,7 @@ from starlette.responses import Response
 from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from twinlight.api.restconf import is_restconf_path
 from twinlight.auth import TokenAuthenticator, bearer_token
 
 RESTCONF_MEDIA_TYPE = "application/yang-data+json"
@@ -180,13 +182,17 @@ MethodRefusal = Callable[[str], Iterable[str]]
 
 
 def routed_methods(app: Any, path: str, root_path: str = "") -> list[str]:
-    """The methods some route of ``app`` fully matches at ``path``.
+    """The methods ``app`` serves at ``path``: routed ones, plus HEAD and OPTIONS.
 
     Asks each top-level route, the way the router does, whether it would
     take a request with that method. Top-level routes include the routers
     this FastAPI version includes lazily (``app.routes`` does not list
     their routes), which answer for everything below them, so the result
     covers every route, whatever the prefix, without walking the table.
+
+    HEAD and OPTIONS are served by ``HeadMiddleware`` and
+    ``OptionsMiddleware`` for every resource a route serves: HEAD wherever
+    GET is, OPTIONS wherever any method is.
     """
     methods = []
     for method in ALLOW_CANDIDATES:
@@ -196,7 +202,33 @@ def routed_methods(app: Any, path: str, root_path: str = "") -> list[str]:
         }
         if any(route.matches(dict(probe))[0] is Match.FULL for route in app.router.routes):
             methods.append(method)
-    return methods
+    if not methods:
+        return []
+    served = set(methods) | {"OPTIONS"}
+    if "GET" in served:
+        served.add("HEAD")
+    return [m for m in ALLOW_CANDIDATES if m in served]
+
+
+def allowed_methods(
+    app: Any, path: str, root_path: str,
+    refusals: Iterable[MethodRefusal] = (), exclude: str | None = None,
+) -> list[str]:
+    """The methods the resource at ``path`` supports: what ``Allow`` lists.
+
+    ``routed_methods`` less those a ``refusals`` function reports for the
+    path (a route serves them only to refuse them for that resource, which
+    routing cannot see) and less ``exclude``, the method of a request that
+    got a 405 (whatever answered it does not support it). HEAD goes with
+    GET: a resource that does not serve GET does not serve HEAD either.
+    """
+    route_path = path[len(root_path):] if root_path and path.startswith(root_path) else path
+    refused = {exclude} if exclude else set()
+    for refusal in refusals:
+        refused.update(refusal(route_path))
+    if "GET" in refused:
+        refused.add("HEAD")
+    return [m for m in routed_methods(app, path, root_path) if m not in refused]
 
 
 class AllowHeaderMiddleware:
@@ -215,9 +247,9 @@ class AllowHeaderMiddleware:
     whatever answered it does not support it), and those a ``refusals``
     function reports for the path — methods a route serves only to refuse
     for that resource, which routing cannot see (a write to a read-only
-    datastore). HEAD and OPTIONS are listed only where a route serves them;
-    CORS preflights are answered by ``CORSMiddleware`` before routing and do
-    not make OPTIONS a method of the resource.
+    datastore). HEAD is listed wherever GET is and OPTIONS wherever any
+    method is, since ``HeadMiddleware`` and ``OptionsMiddleware`` serve them
+    for every route.
 
     Pure ASGI and innermost, so it sees the decoded path and the response
     of the exception handler, and costs nothing on any other status.
@@ -228,11 +260,7 @@ class AllowHeaderMiddleware:
         self._refusals = tuple(refusals)
 
     def allowed(self, app: Any, path: str, root_path: str, method: str) -> list[str]:
-        route_path = path[len(root_path):] if root_path and path.startswith(root_path) else path
-        refused = {method}
-        for refusal in self._refusals:
-            refused.update(refusal(route_path))
-        return [m for m in routed_methods(app, path, root_path) if m not in refused]
+        return allowed_methods(app, path, root_path, self._refusals, exclude=method)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -252,3 +280,91 @@ class AllowHeaderMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_allow)
+
+
+#: The patch media type a PATCH-capable RESTCONF resource accepts: the plain
+#: patch of RFC 8040 §4.6.1, in the one encoding the twin speaks.
+ACCEPT_PATCH = RESTCONF_MEDIA_TYPE
+
+
+class HeadMiddleware:
+    """Answer HEAD on every route that serves GET, without the body.
+
+    RFC 8040 §4.2: "The RESTCONF server MUST support the HEAD method ... The
+    server MUST respond the same as if the method was GET instead of HEAD,
+    except that no response message-body is included", and RFC 9110 §9.3.2
+    asks the same of any HTTP server. FastAPI registers GET routes without
+    HEAD, so the request runs as the GET it mirrors and the body is dropped:
+    a route added later answers HEAD without anyone declaring it. Header
+    fields, ``Content-Length`` included, are the GET's (RFC 9110 §9.3.2).
+
+    It sits just inside ``CORSMiddleware`` and outside token authentication,
+    so a HEAD is authenticated exactly as its GET (§4.2: "The access control
+    behavior is enforced as if the method was GET instead of HEAD") and a
+    401 to a HEAD loses its body too. Where GET is not served, the GET the
+    request became is refused with 405, and ``AllowHeaderMiddleware`` leaves
+    HEAD out of ``Allow`` with it.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] != "HEAD":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_without_body(message: Message) -> None:
+            if message["type"] == "http.response.body":
+                if message.get("more_body", False):
+                    return
+                message = {"type": "http.response.body", "body": b"", "more_body": False}
+            await send(message)
+
+        await self.app({**scope, "method": "GET"}, receive, send_without_body)
+
+
+class OptionsMiddleware:
+    """Answer OPTIONS with the methods the target resource supports.
+
+    RFC 8040 §4.1: "The OPTIONS method is sent by the client to discover
+    which methods are supported by the server for a specific resource ...
+    The server MUST implement this method", and "The 'Accept-Patch' header
+    field MUST be supported and returned in the response to the OPTIONS
+    request". The answer is 200 with ``Allow`` computed as a 405's is
+    (``allowed_methods``), so the two cannot disagree, and no content
+    (``Content-Length: 0``, RFC 9110 §9.3.7). On a RESTCONF resource that
+    takes PATCH it also carries ``Accept-Patch`` naming the plain patch:
+    RFC 5789 §3.1 makes that field say PATCH is allowed, so it is not sent
+    where ``Allow`` has no PATCH. A path no route matches is passed on, and
+    the router answers 404.
+
+    Every route gets it, the proprietary ones too: HTTP gives OPTIONS the
+    same meaning everywhere, and one rule is simpler than a list of paths.
+    CORS preflights (OPTIONS with ``Access-Control-Request-Method``) never
+    get here: ``CORSMiddleware`` answers them first. Inside token
+    authentication, so an OPTIONS needs a token like any other request, and
+    inside ``PathDecodeMiddleware``, so it sees the decoded path.
+    """
+
+    def __init__(
+        self, app: ASGIApp, restconf_root: str = "",
+        refusals: Iterable[MethodRefusal] = (),
+    ) -> None:
+        self.app = app
+        self._root = restconf_root
+        self._refusals = tuple(refusals)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] != "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+        path, root_path = scope["path"], scope.get("root_path", "")
+        methods = allowed_methods(scope["app"], path, root_path, self._refusals)
+        if not methods:
+            await self.app(scope, receive, send)
+            return
+        headers = {"Allow": ", ".join(methods)}
+        if "PATCH" in methods and is_restconf_path(path, self._root):
+            headers["Accept-Patch"] = ACCEPT_PATCH
+        await Response(status_code=200, headers=headers)(scope, receive, send)

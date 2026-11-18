@@ -392,10 +392,12 @@ then authentication, then the rest):
 | Middleware | Purpose |
 |------------|---------|
 | `CORSMiddleware` | Answers preflights and adds CORS headers, including to a 401, so a browser client can read it. |
+| `HeadMiddleware` | Runs a `HEAD` as the `GET` it mirrors and drops the body (RFC 8040 §4.2), on every route. Outside authentication, so a `HEAD` is authenticated as its `GET` would be and a 401 to it has no body either. |
 | `TokenAuthMiddleware` | Only when API tokens are configured. A pure ASGI middleware that rejects every request without a valid bearer token (401, RFC 6750 challenge, RFC 8040 `access-denied` body) before routing; `/health` is the one exemption. Without tokens it is not installed. Its gRPC counterpart, `streaming/interceptors.py:TokenAuthInterceptor`, checks the same `app.state.authenticator` and is likewise installed only with tokens. |
 | `PathDecodeMiddleware` | URL-decodes `%3A` → `:` before routing. Browsers percent-encode colons in paths per the WHATWG URL spec, but T-API RESTCONF paths contain literal colons. |
 | `RestconfContentTypeMiddleware` | Sets `Content-Type: application/yang-data+json` on all `{restconf_root}/data/` responses, as RESTCONF requires. |
-| `AllowHeaderMiddleware` | Innermost. Rewrites the `Allow` header of every 405 to name all the methods the resource serves (RFC 9110 §15.5.6), from the router's own matching: Starlette names only the first route that matches the path, and FastAPI registers one route per method. A route added later is covered automatically; only a handler that refuses a method its route serves (`api/transparent.py:refused_methods`) has to say so. |
+| `OptionsMiddleware` | Answers `OPTIONS` on every route with `200` and the `Allow` set a 405 there would name, plus `Accept-Patch` on a RESTCONF resource that takes `PATCH` (RFC 8040 §4.1). Inside authentication and path decoding. |
+| `AllowHeaderMiddleware` | Innermost. Rewrites the `Allow` header of every 405 to name all the methods the resource serves (RFC 9110 §15.5.6), from the router's own matching, plus `HEAD` where `GET` is and `OPTIONS`: Starlette names only the first route that matches the path, and FastAPI registers one route per method. A route added later is covered automatically; only a handler that refuses a method its route serves (`api/transparent.py:refused_methods`) has to say so. |
 
 ## Extension points
 

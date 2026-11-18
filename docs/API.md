@@ -58,6 +58,7 @@ in the rows after the paths:
 | `404` with `error-tag: data-missing`, on any T-API resource | `404` with `invalid-value` (RFC 8040 §4.3; `data-missing` is a `409` tag) |
 | `422` (`invalid-value`) for a T-API request that does not validate | `400`, with the tag that names the problem: `malformed-message`, `missing-element`, `bad-element` or `invalid-value` (see [Error format](#error-format)) |
 | `422` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required` (RFC 7950 §15.5) |
+| `HEAD` and `OPTIONS` answering `405` on every resource | `HEAD` answers as `GET` without the body, `OPTIONS` answers `200` with `Allow` (and `Accept-Patch` where `PATCH` is allowed); a `405` lists both in `Allow` (see [HEAD and OPTIONS](#head-and-options)) |
 
 The standard paths are given for the default root, `/restconf`; on a twin
 configured with another, substitute it. Everything after the container is
@@ -713,16 +714,41 @@ request that does not validate, and `data-missing` on a `404`.
 A 405 also carries an `Allow` header (RFC 9110 §15.5.6) naming every method
 the resource serves at that path, on every path of the twin: T-API resources
 under any `server.restconf_root` and the proprietary ones (`/internal`,
-`/admin`, `/config`, `/transparent`, …) alike. `PATCH …/connectivity-service`,
-for example, answers `Allow: GET, POST`. The header is computed from the
-router's own matching (`AllowHeaderMiddleware`), so it is complete however
-many routes share the path. `HEAD` and `OPTIONS` are listed only where a
-route serves them, which today is nowhere: the T-API routes answer neither,
-and CORS preflights are answered by the CORS middleware before routing. A
+`/admin`, `/config`, `/transparent`, …) alike. `PATCH …/tapi-connectivity:connectivity-context`,
+for example, answers `Allow: GET, HEAD, POST, OPTIONS`. The header is computed
+from the router's own matching (`AllowHeaderMiddleware`), so it is complete
+however many routes share the path. `HEAD` is listed wherever `GET` is and
+`OPTIONS` everywhere, since both are served on every route (see
+[HEAD and OPTIONS](#head-and-options)). A
 method a route accepts only to refuse it for that resource is left out —
 `POST /transparent/data…`, and writes to the read-only `startup` and
 `operational` datastores, whose `Allow` is `GET`. With authentication on, an
 unauthenticated request gets 401 before routing, so it never sees a 405.
+
+### HEAD and OPTIONS
+
+Every resource that serves `GET` serves `HEAD` (RFC 8040 §4.2): the same
+status and header fields as the `GET`, `Content-Length` included, and no
+body. Every resource serves `OPTIONS` (RFC 8040 §4.1): `200` with an `Allow`
+header naming the methods it supports — the same set a `405` there names —
+and no content. On a RESTCONF resource that takes `PATCH` (a
+connectivity-service entry) the answer also carries
+`Accept-Patch: application/yang-data+json`, the plain patch of §4.6.1:
+
+```
+$ curl -i -X OPTIONS http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=<uuid>
+HTTP/1.1 200 OK
+allow: GET, HEAD, PUT, PATCH, DELETE, OPTIONS
+accept-patch: application/yang-data+json
+content-length: 0
+```
+
+Both apply to every route, the proprietary ones too, and to any route added
+later, without declaring them: two middlewares serve them from the router's
+own matching. With authentication on, both need a token like `GET` (RFC 8040
+§4.2 enforces access control on a `HEAD` "as if the method was GET"). A CORS
+preflight — an `OPTIONS` with `Access-Control-Request-Method` — is not an
+`OPTIONS` of the resource: the CORS middleware answers it, without a token.
 
 ### A note on percent-encoded colons
 

@@ -39,6 +39,8 @@ from twinlight.api import (
 from twinlight.api.middleware import (
     RESTCONF_MEDIA_TYPE,
     AllowHeaderMiddleware,
+    HeadMiddleware,
+    OptionsMiddleware,
     PathDecodeMiddleware,
     RestconfContentTypeMiddleware,
     TokenAuthMiddleware,
@@ -226,8 +228,17 @@ def create_app(config: TwinConfig) -> FastAPI:
     # AllowHeaderMiddleware is innermost of all: it rewrites the Allow header
     # of every 405 from the router's matching (RFC 9110 §15.5.6), so it must
     # see the decoded path and the exception handler's response.
+    # OptionsMiddleware, just outside it and inside PathDecodeMiddleware and
+    # the token check, answers OPTIONS on every route from the same method
+    # set (RFC 8040 §4.1). HeadMiddleware, just inside CORS and outside the
+    # token check, runs a HEAD as its GET and drops the body (RFC 8040
+    # §4.2), so it is authenticated as the GET would be.
+    refusals = (transparent.refused_methods,)
+    app.add_middleware(AllowHeaderMiddleware, refusals=refusals)
     app.add_middleware(
-        AllowHeaderMiddleware, refusals=(transparent.refused_methods,)
+        OptionsMiddleware,
+        restconf_root=config.server.restconf_root,
+        refusals=refusals,
     )
     app.add_middleware(PathDecodeMiddleware)
     app.add_middleware(
@@ -240,6 +251,7 @@ def create_app(config: TwinConfig) -> FastAPI:
             authenticator=authenticator,
             public_paths=PUBLIC_PATHS,
         )
+    app.add_middleware(HeadMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.server.cors_origins,
