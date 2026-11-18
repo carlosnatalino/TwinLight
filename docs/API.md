@@ -649,9 +649,24 @@ Errors under `/restconf/data/` use the RESTCONF format of
 |-------------|-------------|----------|
 | 400 | `bad-element` | A malformed envelope (e.g. a list of more than one entry) |
 | 404 | `data-missing` | An unknown resource |
+| 405 | `operation-not-supported` | A method the resource does not serve |
 | 409 | `resource-denied` | Admission refused: no route, spectrum or QoT |
 | 422 | `invalid-value` | A body that does not validate, or a constraint or value the twin cannot honour |
 | 501 | `operation-not-supported` | A standard leaf the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
+
+A 405 also carries an `Allow` header (RFC 9110 §15.5.6) naming every method
+the resource serves at that path, on every path of the twin: T-API resources
+under any `server.restconf_root` and the proprietary ones (`/internal`,
+`/admin`, `/config`, `/transparent`, …) alike. `PATCH …/connectivity-service`,
+for example, answers `Allow: GET, POST`. The header is computed from the
+router's own matching (`AllowHeaderMiddleware`), so it is complete however
+many routes share the path. `HEAD` and `OPTIONS` are listed only where a
+route serves them, which today is nowhere: the T-API routes answer neither,
+and CORS preflights are answered by the CORS middleware before routing. A
+method a route accepts only to refuse it for that resource is left out —
+`POST /transparent/data…`, and writes to the read-only `startup` and
+`operational` datastores, whose `Allow` is `GET`. With authentication on, an
+unauthenticated request gets 401 before routing, so it never sees a 405.
 
 ### A note on percent-encoded colons
 

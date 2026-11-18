@@ -393,6 +393,7 @@ then authentication, then the rest):
 | `TokenAuthMiddleware` | Only when API tokens are configured. A pure ASGI middleware that rejects every request without a valid bearer token (401, RFC 6750 challenge, RFC 8040 `access-denied` body) before routing; `/health` is the one exemption. Without tokens it is not installed. Its gRPC counterpart, `streaming/interceptors.py:TokenAuthInterceptor`, checks the same `app.state.authenticator` and is likewise installed only with tokens. |
 | `PathDecodeMiddleware` | URL-decodes `%3A` → `:` before routing. Browsers percent-encode colons in paths per the WHATWG URL spec, but T-API RESTCONF paths contain literal colons. |
 | `RestconfContentTypeMiddleware` | Sets `Content-Type: application/yang-data+json` on all `{restconf_root}/data/` responses, as RESTCONF requires. |
+| `AllowHeaderMiddleware` | Innermost. Rewrites the `Allow` header of every 405 to name all the methods the resource serves (RFC 9110 §15.5.6), from the router's own matching: Starlette names only the first route that matches the path, and FastAPI registers one route per method. A route added later is covered automatically; only a handler that refuses a method its route serves (`api/transparent.py:refused_methods`) has to say so. |
 
 ## Extension points
 
