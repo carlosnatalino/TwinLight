@@ -86,6 +86,7 @@ async def test_reads_the_sips_of_a_twin(twin_config: TwinConfig) -> None:
     ("get_sip", {"tapi-common:service-interface-point": {"uuid": "s"}}, ValueError),
     ("get_sip", {"tapi-common:service-interface-point": []}, ValueError),
     ("get_oam_jobs", {}, KeyError),
+    ("get_topologies", {"tapi-topology:topology": []}, KeyError),
 ])
 async def test_an_unexpected_body_is_an_error_not_empty(
     method: str, body: dict, error: type[Exception],

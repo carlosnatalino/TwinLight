@@ -73,7 +73,7 @@ EOF
   printf '%s' "${after}" | python3 -c "
 import json, sys
 sys.path.insert(0, '${SCRIPT_DIR}')
-from tapi_fields import modulation_of, spectrum_of
+from tapi_fields import created_service, modulation_of, spectrum_of
 after = json.load(sys.stdin)
 
 before = json.loads(sys.argv[1])
@@ -83,7 +83,7 @@ new_rej = [r for r in after['recent-rejections'] if (r['uuid'], r['at']) not in 
 
 if new:
     for uuid in new:
-        svc = after['onos-created-services'][uuid]['tapi-connectivity:connectivity-service']
+        svc = created_service(after['onos-created-services'][uuid])
         band = spectrum_of(svc)
         print('  ADMITTED by the twin')
         print('    service uuid  : %s' % svc['uuid'])
@@ -149,12 +149,12 @@ for f in mine:
   curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c "
 import json, sys
 sys.path.insert(0, '${SCRIPT_DIR}')
-from tapi_fields import modulation_of, spectrum_of
+from tapi_fields import created_service, modulation_of, spectrum_of
 svcs = json.load(sys.stdin)['onos-created-services']
 if not svcs:
     print('    (none)')
 for u, payload in svcs.items():
-    s = payload['tapi-connectivity:connectivity-service']
+    s = created_service(payload)
     band = spectrum_of(s)
     print('    %s  %-9s  %s' % (u[:8], modulation_of(s),
                                 '%.4f THz' % band[0] if band else '--'))

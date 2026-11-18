@@ -53,6 +53,24 @@ export function isAuthError(err: unknown): boolean {
  * user can act on rather than the RESTCONF error body; every other status
  * keeps the raw body, which some pages parse for its error details.
  */
+/**
+ * The message to show for an ApiError: the RFC 8040 `error-message` of a
+ * RESTCONF error body (`ietf-restconf:errors`), which is what every T-API
+ * error carries, else FastAPI's `detail`, else the raw text.
+ */
+export function errorDetail(err: ApiError): string {
+  const raw = err.message.replace(/^HTTP \d+: /, "");
+  try {
+    const parsed = JSON.parse(raw);
+    const message = parsed?.["ietf-restconf:errors"]?.error?.[0]?.["error-message"];
+    if (typeof message === "string") return message;
+    if (typeof parsed?.detail === "string") return parsed.detail;
+  } catch {
+    // not JSON: keep the raw message
+  }
+  return err.message;
+}
+
 async function apiErrorFrom(resp: Response): Promise<ApiError> {
   if (resp.status === 401 || resp.status === 403) {
     return new ApiError(

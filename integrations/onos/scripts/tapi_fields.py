@@ -35,6 +35,22 @@ MT_TO_MODULATION = {
 }
 
 
+SERVICE_KEY = "tapi-connectivity:connectivity-service"
+
+
+def created_service(payload: dict) -> dict:
+    """The connectivity-service of a twin 201, as the adapter records it.
+
+    The twin answers a create with the entry's GET body, an array of one
+    (RFC 8040 §4.3, RFC 7951 §5.4). Anything else raises ``ValueError``
+    rather than being read as a service without spectrum.
+    """
+    entries = payload.get(SERVICE_KEY) if isinstance(payload, dict) else None
+    if not isinstance(entries, list) or len(entries) != 1:
+        raise ValueError(f"expected {SERVICE_KEY} as an array of one, got {entries!r:.120}")
+    return entries[0]
+
+
 def _constraints(service: dict):
     """Every layer-protocol-constraint on every end-point of a service."""
     for end_point in service.get("end-point") or []:

@@ -240,7 +240,7 @@ async def run(http: httpx.AsyncClient, opts: Options) -> int:
     heading(4, "OAM jobs: what each record measures")
     resp = await http.get(f"{context}/tapi-oam:oam-context/oam-job")
     resp.raise_for_status()
-    jobs = resp.json().get("tapi-oam:oam-job", [])
+    jobs = resp.json()["tapi-oam:oam-job"]  # the list (RFC 8040 §4.3); [] when none
     resp = await http.get(f"{context}/tapi-connectivity:connectivity-context/connectivity-service")
     resp.raise_for_status()
     services = {

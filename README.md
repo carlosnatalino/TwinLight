@@ -79,8 +79,11 @@ way a deployed coherent receiver's telemetry moves.
 ## Feature overview
 
 - **T-API v2.6.0 northbound** — context, topology, connectivity-service CRUD,
-  path computation, physical inventory and photonic-media spectrum, with
-  RESTCONF-style errors and `application/yang-data+json` responses.
+  path computation, physical inventory and photonic-media spectrum, over
+  RESTCONF (RFC 8040): standard response bodies, the RFC 8040 §7 error tags,
+  `HEAD` and `OPTIONS` everywhere, the datastore and YANG library, and
+  `application/yang-data+json`. What does and does not conform is in
+  [docs/TAPI_COMPLIANCE.md](docs/TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix).
 - **Two interchangeable physical-layer backends** — GNPy split-step propagation
   (default) or a dependency-free closed-form GN/EGN kernel, selected at startup.
 - **Four time-varying impairment models** — EDFA gain-reservoir transients,
@@ -150,8 +153,8 @@ T-API is served under the RESTCONF root only, `/restconf/data/…` by default.
 The root is configurable (`server.restconf_root`) and advertised at
 `/.well-known/host-meta`, which the bundled clients read instead of assuming
 `/restconf`; releases before this one also answered at a bare `/data/…`, and
-[docs/API.md](docs/API.md#migrating-from-earlier-releases) maps the old paths to
-the new ones.
+[docs/API.md](docs/API.md#migrating-from-earlier-releases) maps the old paths,
+bodies and status codes to the new ones.
 
 The default scenario is **CORONET CONUS** — a 75-ROADM US continental backbone
 with 198 fiber spans. To run the small two-site scenario instead:
@@ -252,7 +255,8 @@ arguments always win over the configuration file.
 Services are created through the standard T-API connectivity endpoint: a
 `POST` on the `connectivity-context`, the parent of the new service, as RFC 8040
 §4.4.1 specifies. Pick two service-interface-point (SIP) UUIDs from
-`GET /restconf/data/tapi-common:context/service-interface-point`, then:
+`GET /restconf/data/tapi-common:context/service-interface-point` (the list is
+the body's one member, `{"tapi-common:service-interface-point": [ … ]}`), then:
 
 ```bash
 curl -X POST http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context \
@@ -288,7 +292,11 @@ first-fit inside the amplifier band, and admits the request only if the
 propagated GSNR clears the format's required GSNR plus the configured system
 margin. An admitted service answers `201` with a `Location` header naming it
 (`…/connectivity-context/connectivity-service=<uuid>`) and the service itself,
-with its UUID, format and assigned spectrum.
+with its UUID, format and assigned spectrum, in the body a `GET` of it returns:
+`{"tapi-connectivity:connectivity-service": [ { … } ]}`, an array of one
+(RFC 7951 §5.4). A request the twin cannot accept as sent is a `400` whose
+`error-tag` names the problem, an end-point SIP that does not exist a `409`
+`data-missing`, and an admission refusal a `409` `resource-denied`.
 
 ### Populate the twin with demo services
 

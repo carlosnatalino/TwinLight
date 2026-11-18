@@ -9,6 +9,7 @@ import {
   createClient,
   parseRestconfRoot,
   resetRestconfRoots,
+  errorDetail,
 } from "@/api/client";
 
 const mockFetch = vi.fn();
@@ -375,3 +376,21 @@ describe("parseRestconfRoot", () => {
     expect(parseRestconfRoot("<XRD><Link rel='lrdd' href='/x'/></XRD>")).toBe("");
   });
 });
+
+describe("errorDetail", () => {
+  it("shows the RESTCONF error-message of a T-API refusal (RFC 8040 §7)", () => {
+    const body = {
+      "ietf-restconf:errors": {
+        error: [{ "error-type": "application", "error-tag": "resource-denied",
+                  "error-message": "No path with sufficient GSNR" }],
+      },
+    };
+    expect(errorDetail(new ApiError(409, JSON.stringify(body)))).toBe("No path with sufficient GSNR");
+  });
+
+  it("falls back to FastAPI's detail, then to the raw message", () => {
+    expect(errorDetail(new ApiError(422, JSON.stringify({ detail: "bad" })))).toBe("bad");
+    expect(errorDetail(new ApiError(502, "Bad Gateway"))).toBe("HTTP 502: Bad Gateway");
+  });
+});
+

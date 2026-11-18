@@ -117,7 +117,12 @@ class TapiClient:
 
     async def get_topologies(self) -> list[dict[str, Any]]:
         ctx = await self.get_topology_context()
-        return ctx.get("tapi-topology:topology-context", {}).get("topology", [])
+        # The envelope must be there; inside a container, RFC 7951 encodes an
+        # empty list by leaving it out, so a missing "topology" is no topology.
+        topologies: list[dict[str, Any]] = ctx["tapi-topology:topology-context"].get(
+            "topology", []
+        )
+        return topologies
 
     async def get_topology(self, uuid: str) -> dict[str, Any]:
         resp = await self._client.get(await self._tapi(f"{self._TOPO}/topology={uuid}"))

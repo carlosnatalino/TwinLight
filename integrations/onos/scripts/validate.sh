@@ -210,11 +210,11 @@ check "the lightpath carries the T-API spectrum augment and live OPM" \
   bash -c "curl -sSf '${ADAPTER_URL}/adapter/status' | python3 -c '
 import json, sys
 sys.path.insert(0, \"${SCRIPT_DIR}\")
-from tapi_fields import spectrum_of, twin_urlopen
+from tapi_fields import created_service, spectrum_of, twin_urlopen
 svcs = json.load(sys.stdin)[\"onos-created-services\"]
 assert svcs, \"no ONOS-created services\"
 uuid, payload = next(iter(svcs.items()))
-svc = payload[\"tapi-connectivity:connectivity-service\"]
+svc = created_service(payload)
 # T-API 2.6 has no frequency-slot leaf; spectrum is an end-point augment.
 assert \"frequency-slot\" not in svc, \"non-standard frequency-slot key is back\"
 band = spectrum_of(svc)
