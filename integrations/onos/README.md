@@ -414,6 +414,7 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 Overridable environment variables: `ONOS_URL`, `ONOS_AUTH`, `ADAPTER_URL`,
 `TWIN_URL`, `DEVICE_ID`, and `VALIDATE_A` / `VALIDATE_Z` for the validation A–Z
 pair. The first four default to what the stack variables in
+| `scripts/test-integration.sh` | `unit` / `e2e` / `all` / `preflight` — test the integration on this machine; see [Testing the integration locally](#testing-the-integration-locally) |
 [Running a second stack side by side](#running-a-second-stack-side-by-side)
 publish, so set those rather than these.
 
@@ -421,6 +422,74 @@ publish, so set those rather than these.
 
 RESTCONF surface, polled by ONOS — avoid calling these by hand while ONOS is
 connected, as ONOS's port cache depends on them being consistent:
+## Testing the integration locally
+
+Nothing in CI boots ONOS; `scripts/test-integration.sh` is how a change to the
+integration is tested, on your machine:
+
+```bash
+./integrations/onos/scripts/test-integration.sh unit         # adapter unit tests, seconds, no Docker
+./integrations/onos/scripts/test-integration.sh e2e          # boot, validate, every script, tear down
+./integrations/onos/scripts/test-integration.sh all          # both
+./integrations/onos/scripts/test-integration.sh preflight    # will the test stack fit? changes nothing
+```
+
+**`unit`** runs `adapter/tests` in the repo's Python environment (`.venv`, or
+`$PYTHON`): the one [CONTRIBUTING.md](../../CONTRIBUTING.md) sets up, which
+has FastAPI, httpx, uvicorn and pytest, so it needs no Docker and takes a few
+seconds. That FastAPI is the twin's, not the adapter image's pin, and the run
+prints both versions; `unit --pinned` runs the same tests in
+`python:3.12-slim` with exactly `adapter/requirements.txt` instead. If the
+environment lacks a package, the step says what to install rather than failing
+on an import.
+
+**`e2e`** boots a stack of its own from cold (`down -v` of its own project,
+a fresh snapshot directory, `demo-up.sh`), runs `validate.sh`, then drives
+every other script and checks what it did:
+
+| Step | Checked |
+|------|---------|
+| `lightpath.sh create Boston New_York`, `list` | admitted, OPM read back, the flow listed |
+| `correlate.sh`, `--json` | every ONOS flow joins a twin service |
+| `fault.sh cut-path`, `heal-all`, `list` | OPM reports `link-failed`, then recovers |
+| `lightpath.sh delete` | the twin releases the service |
+| `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number |
+| `resync.sh --check`, `resync.sh` | ONOS-created lightpaths survive, every port enabled |
+| `onos-cli.sh devices` | the CLI answers and lists the device |
+| `lightpath.sh clear`, `validate.sh` again | the twin is emptied; still 16/16 |
+| `demo-down.sh --purge` | nothing of the project is left |
+
+Options: `--keep` leaves the stack up for inspection, `--reuse` tests a stack
+that is already running instead of booting one (and never tears it down),
+`--boots N` cold-boots N times in a row before the checks, `--rmi` also
+removes the images it built, `--out DIR` chooses where the logs go.
+
+It never touches a stack it did not start. The test stack has its own project,
+container prefix and image tag (`twinlight-onos-test`), ports (28080 REST,
+28282 adapter, 28181 ONOS, 25173 UI, 23000 Grafana, 29090, 25051, 28101) and
+subnet (`172.30.0.0/16`); each can be moved with the variables of
+[Running a second stack side by side](#running-a-second-stack-side-by-side),
+from the environment only. Everything it creates carries the label
+`org.twinlight.onos-test`, and before booting it refuses to go on if the
+project, a container name, an image tag, a port or the subnet is held by
+anything without that label. `preflight` runs only that check.
+
+Each step's output goes to `<run dir>/steps/`, and the containers' logs to
+`<run dir>/logs/` before teardown, so a failure can be read after the stack is
+gone; the run directory is printed first and last. The exit status is non-zero
+if any step failed, and the summary names them.
+
+How long it takes:
+
+| Host | `unit` | `e2e`, images already built | each extra `--boots` |
+|------|--------|-----------------------------|----------------------|
+| Apple Silicon, ONOS under emulation, 8 GB Docker VM (measured) | 3 s | about 4½ min: a cold boot ≈ 2¼ min, the checks ≈ 2 min | ≈ 2¼ min |
+| amd64 Linux (estimated, not measured) | 3 s | about 3 min: ONOS and the twin run natively | ≈ 1 min |
+
+The first run on a machine also pulls ONOS (≈ 900 MB) and builds the three
+images, the twin's for `linux/amd64`, which under emulation adds several
+minutes.
+
 
 - `GET /restconf/data/tapi-common:context`
 - `GET /restconf/data/tapi-common:context/service-interface-point={uuid}`
