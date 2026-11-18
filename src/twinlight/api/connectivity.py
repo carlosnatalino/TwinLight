@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from twinlight.algorithms.path_constraints import ConstraintError, UnresolvedReferenceError
@@ -343,11 +344,21 @@ async def create_service(body: dict, request: Request, response: Response) -> di
     response.headers["Location"] = created_location(
         request, PREFIX, "connectivity-service", svc.uuid
     )
-    return {
-        "tapi-connectivity:connectivity-service": _connectivity_service_payload(
-            ctx, svc
-        )
-    }
+    return _entry_body(ctx, svc)
+
+
+_SERVICE_KEY = "tapi-connectivity:connectivity-service"
+
+
+def _entry_body(ctx, svc) -> dict:
+    """One connectivity-service as its GET returns it: an array of one.
+
+    RFC 7951 §5.4: "A list instance is encoded as a name/array pair", with
+    no exception for a single entry, and RFC 8040 §4.3 returns the target
+    resource as the body's one member. The 201 of a creating POST or PUT and
+    the 200 of a PATCH carry the same body, so a client reads one shape.
+    """
+    return {_SERVICE_KEY: [_connectivity_service_payload(ctx, svc)]}
 
 
 def _connectivity_service_payload(ctx, svc) -> dict:
@@ -420,19 +431,28 @@ async def get_service(uuid: str, request: Request) -> dict:
             status_code=404, detail=f"Service {uuid} not found"
         )
     await ctx.get_or_compute_baseline(svc)  # current operational-state
-    return {
-        "tapi-connectivity:connectivity-service": _connectivity_service_payload(ctx, svc)
-    }
+    return _entry_body(ctx, svc)
 
 
-@router.put("/connectivity-service={uuid}")
-async def replace_service(uuid: str, body: dict, request: Request) -> dict:
-    """Replace a connectivity service by UUID (full replacement).
+@router.put(
+    "/connectivity-service={uuid}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={status.HTTP_201_CREATED: {"description": "Created"}},
+)
+async def replace_service(uuid: str, body: dict, request: Request) -> Response:
+    """Replace a connectivity service by UUID (full replacement), or create it.
 
     The replacement goes through admission with the old service's resources
     released. If it is refused, the old service is put back exactly as it
     was (``TapiContext.replace_service``): a failed replace never moves or
     tears down the service that was there.
+
+    RFC 8040 §4.5: "if the PUT request creates a new resource, a '201
+    Created' status-line is returned. If an existing resource is modified, a
+    '204 No Content' status-line is returned." A replacement is therefore a
+    204 with no body; a client reads what admission chose with a GET. A
+    creation is a 201 carrying a ``Location`` and, like the creating POST,
+    the entry (the deviation docs/TAPI_COMPLIANCE.md records).
     """
     ctx = request.app.state.context
     svc = _parse_service(body)
@@ -446,8 +466,9 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     _check_sips(ctx, svc)
     # A refused replacement leaves the old service exactly as it was (same
     # route and block); with no old service, a PUT creates one.
+    created = ctx.get_service(uuid) is None
     try:
-        if ctx.get_service(uuid) is None:
+        if created:
             await ctx.add_service(svc)
         else:
             await ctx.replace_service(svc)
@@ -455,34 +476,75 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
         raise constraint_error(e) from e
     except RmsaError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
-    return {
-        "tapi-connectivity:connectivity-service": _connectivity_service_payload(ctx, svc)
-    }
+    if not created:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return JSONResponse(
+        _entry_body(ctx, svc),
+        status_code=status.HTTP_201_CREATED,
+        headers={"Location": created_location(request, PREFIX, "connectivity-service", uuid)},
+    )
+
+
+#: What a plain patch may change on a connectivity-service. Every other
+#: config leaf decides the admission (end-points, constraints, format,
+#: spectrum), so it is changed by replacing the service with PUT.
+_PATCHABLE = frozenset({"name", "administrative-state", "lifecycle-state"})
+#: Config-false leaves: the server's, ignored on input as on PUT.
+_STATE = frozenset({"operational-state", "connection", "connection-end-point", "csep-role"})
 
 
 @router.patch("/connectivity-service={uuid}")
-async def update_service(
-    uuid: str, body: UpdateConnectivityServiceRequest, request: Request
-) -> dict:
-    """Partially update (name, admin-state, lifecycle-state)."""
+async def update_service(uuid: str, body: dict, request: Request) -> dict:
+    """Merge name, administrative-state and lifecycle-state into a service.
+
+    RFC 8040 §4.6.1 plain patch: the body is the target resource's
+    representation, ``{"tapi-connectivity:connectivity-service": [{…}]}``
+    (the array of one, a bare object, or the bare entry, as POST and PUT
+    accept), merged into the entry. Its key, if present, "MUST be the same
+    as the key leaf values in the request URI". A leaf the twin cannot
+    merge is refused by name rather than ignored. §4.6: 200 with the entry,
+    as its GET returns it ("a '200 OK' status-line is returned if there is
+    a message-body").
+    """
     ctx = request.app.state.context
     svc = ctx.get_service(uuid)
     if svc is None:
         raise HTTPException(
             status_code=404, detail=f"Service {uuid} not found"
         )
-    if body.name is not None:
-        svc.name = body.name
-    if body.administrative_state is not None:
-        svc.administrative_state = body.administrative_state
-    if body.lifecycle_state is not None:
-        svc.lifecycle_state = body.lifecycle_state
-    await ctx.get_or_compute_baseline(svc)  # current operational-state
-    return {
-        "tapi-connectivity:connectivity-service": _connectivity_service_payload(
-            ctx, svc
+    raw = _single_service(body)
+    if "uuid" in raw and raw["uuid"] != uuid:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value", "Body UUID must match path UUID",
         )
-    }
+    fixed = sorted(set(raw) - _PATCHABLE - _STATE - {"uuid"})
+    if fixed:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value",
+            f"PATCH cannot change {', '.join(fixed)}; it merges only "
+            f"{', '.join(sorted(_PATCHABLE))}. Replace the service with PUT",
+        )
+    try:
+        patch = UpdateConnectivityServiceRequest.model_validate(
+            {k: v for k, v in raw.items() if k in _PATCHABLE}
+        )
+    except ValidationError as exc:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST,
+            validation_error_tag(exc.errors()),
+            "; ".join(
+                f"{'/'.join(str(p) for p in e['loc']) or 'body'}: {e['msg']}"
+                for e in exc.errors()
+            ),
+        ) from exc
+    if patch.name is not None:
+        svc.name = patch.name
+    if patch.administrative_state is not None:
+        svc.administrative_state = patch.administrative_state
+    if patch.lifecycle_state is not None:
+        svc.lifecycle_state = patch.lifecycle_state
+    await ctx.get_or_compute_baseline(svc)  # current operational-state
+    return _entry_body(ctx, svc)
 
 
 @router.delete(

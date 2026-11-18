@@ -345,7 +345,7 @@ class TestDeprecatedSnapshot:
         assert opm["measurements"]["gsnr-db"] is None
         service = client.get(
             f"/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}",
-        ).json()["tapi-connectivity:connectivity-service"]
+        ).json()["tapi-connectivity:connectivity-service"][0]
         assert service["operational-state"] == "DISABLED"
         assert f'twinlight_service_enabled{{service_name="{uuid[:8]}",service_uuid="{uuid}"}} 0.0' in (
             client.get("/metrics").text)

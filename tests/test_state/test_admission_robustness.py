@@ -104,7 +104,7 @@ class TestRefusedPutKeepsTheService:
                           tapi_end_point("z", refs.sip("trx C"))],
         }]})
         assert resp.status_code == 201, resp.text
-        return resp.json()["tapi-connectivity:connectivity-service"]
+        return resp.json()["tapi-connectivity:connectivity-service"][0]
 
     @staticmethod
     def _bad_spectrum(service: dict) -> dict:
@@ -160,7 +160,7 @@ class TestRefusedPutKeepsTheService:
             tapi_end_point("a", refs.sip("trx A"), "DP-QPSK"),
             tapi_end_point("z", refs.sip("trx B"), "DP-QPSK"),
         ]}}
-        assert client.put(f"{_SVC}={uuid}", json=body).status_code == 200
+        assert client.put(f"{_SVC}={uuid}", json=body).status_code == 204
         assert "roadm C" not in ctx._allocated_path_uids(uuid)
         assert client.delete(f"{_SVC}={uuid}").status_code == 204
         # Neither the old block nor the new one is left behind.

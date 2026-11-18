@@ -125,10 +125,10 @@ export interface LinkResponse {
   "tapi-topology:link": TapiLink[];
 }
 
+/** GET …/service-interface-point and …/service-interface-point={uuid}
+ * (RFC 8040 §4.3): the list, or the one entry as an array of one. */
 export interface SipResponse {
-  "tapi-common:context": {
-    "service-interface-point": ServiceInterfacePoint[];
-  };
+  "tapi-common:service-interface-point": ServiceInterfacePoint[];
 }
 
 export interface HealthResponse {
@@ -303,8 +303,13 @@ export interface CreateConnectivityServiceRequest {
   };
 }
 
-export interface CreateConnectivityServiceResponse {
-  "tapi-connectivity:connectivity-service": ConnectivityService;
+/**
+ * The body of a creating POST (201) and of a PATCH (200): the entry as
+ * `GET …/connectivity-service={uuid}` returns it, an array of one
+ * (RFC 7951 §5.4).
+ */
+export interface ConnectivityServiceEntryResponse {
+  "tapi-connectivity:connectivity-service": ConnectivityService[];
 }
 
 /** GET …/connectivity-context/connectivity-service (RFC 8040 §4.3). */
@@ -320,7 +325,6 @@ export interface UpdateConnectivityServiceRequest {
   };
 }
 
-export type UpdateConnectivityServiceResponse = CreateConnectivityServiceResponse;
 
 /** T-API photonic media spectrum context (grid parameters). */
 /**

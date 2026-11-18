@@ -21,7 +21,7 @@ def _end_points(sip_a: str, sip_z: str) -> list[dict]:
 
 def _two_sips(app: TestClient) -> tuple[str, str]:
     data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
-    sips = data["tapi-common:context"]["service-interface-point"]
+    sips = data["tapi-common:service-interface-point"]
     return sips[0]["uuid"], sips[1]["uuid"]
 
 
@@ -40,12 +40,12 @@ class TestPathCompService:
         sip_a, sip_z = _two_sips(app)
         resp = app.post(_BASE, json={_SVC_KEY: [{"end-point": _end_points(sip_a, sip_z)}]})
         assert resp.status_code == 201, resp.text
-        service = resp.json()[_SVC_KEY]
+        (service,) = resp.json()[_SVC_KEY]
         assert service["direction"] == "UNIDIRECTIONAL"
         assert "routing-constraint" not in service  # absent, not null
         (ref,) = service["path"][:1]
 
-        path = app.get(f"{_BASE}/path={ref['path-uuid']}").json()["tapi-path-computation:path"]
+        path = app.get(f"{_BASE}/path={ref['path-uuid']}").json()["tapi-path-computation:path"][0]
         assert path["link"] and path["node-edge-point"]
         cost = path["routing-constraint"]["cost-characteristic"][0]
         assert cost["cost-name"] == "fiber-length-km" and float(cost["cost-value"]) > 0
@@ -106,13 +106,14 @@ class TestOnTheMesh:
             "routing-constraint": {"route-objective-function": "MIN_WORK_ROUTE_LATENCY"},
             "topology-constraint": [{"local-id": "1", "exclude-node": [refs.node("roadm B")]}],
         }
-        service = mesh_app.post(_BASE, json=body).json()[_SVC_KEY]
+        (service,) = mesh_app.post(_BASE, json=body).json()[_SVC_KEY]
         assert service["topology-constraint"] == body["topology-constraint"]
         assert len(service["path"]) >= 2
         b_node = refs.node("roadm B")["node-uuid"]
         for ref in service["path"]:
             path = mesh_app.get(f"{_BASE}/path={ref['path-uuid']}").json()
-            neps = path["tapi-path-computation:path"]["node-edge-point"]
+            (entry,) = path["tapi-path-computation:path"]
+            neps = entry["node-edge-point"]
             assert all(n["node-uuid"] != b_node for n in neps)
 
     def test_no_route_is_a_conflict(self, mesh_app: TestClient) -> None:

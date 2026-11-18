@@ -39,9 +39,11 @@ what the T-API specification says it should do. The four behaviours that matter:
 
 3. ``TapiDeviceLambdaQuery`` GETs
    ``/restconf/data/tapi-common:context/service-interface-point=<uuid>`` and
-   reads ``mc-pool`` off the **top level** of the response. TwinLight wraps that
-   resource in ``{"tapi-common:context": {"service-interface-point": [...]}}``,
-   so this adapter serves it unwrapped.
+   reads ``mc-pool`` off the **top level** of the response: the bare SIP
+   object, which is T-API 2.1's (ONOS's) encoding. The twin answers that
+   resource the RFC 8040 §4.3 / RFC 7951 §5.4 way, as
+   ``{"tapi-common:service-interface-point": [{...}]}``, so this adapter
+   serves the SIP unwrapped.
 
 4. ``TapiFlowRuleProgrammable`` POSTs a connectivity-service whose body is a
    **JSON list** under ``tapi-connectivity:connectivity-service`` and carries
@@ -134,6 +136,10 @@ _INDEXED_SIP_RE = re.compile(r"^(?P<real>.+)-(?P<index>\d+)$")
 OTSIA_CSEP_SPEC = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
 MCG_CSEP_SPEC = "tapi-photonic-media:mcg-connectivity-service-end-point-spec"
 
+# The members the twin's list and entry GETs answer with (RFC 8040 §4.3).
+SIP_LIST_KEY = "tapi-common:service-interface-point"
+SERVICE_KEY = "tapi-connectivity:connectivity-service"
+
 # The twin's T-API 2.6 SIP augment, which this adapter translates into the
 # 2.1 mc-pool that ONOS reads. See _mc_pool().
 PHOTONIC_SIP_SPEC = (
@@ -205,6 +211,14 @@ def _modulation_of(service: dict[str, Any]) -> str | None:
 
 class TwinUnavailableError(RuntimeError):
     """The twin could not be reached or answered with a non-2xx status."""
+
+
+class TwinProtocolError(TwinUnavailableError):
+    """The twin answered with a body this adapter does not understand.
+
+    A kind of unavailability: ONOS gets a 502 as for a twin that is down,
+    rather than an answer built from a body read wrongly.
+    """
 
 
 class TwinAuthError(RuntimeError):
@@ -501,10 +515,20 @@ async def _twin_get(request: Request, path: str) -> Any:
 
 
 async def _list_sips(request: Request) -> list[dict[str, Any]]:
-    payload = await _twin_get(
-        request, f"{await _twin_data(request)}/tapi-common:context/service-interface-point"
-    )
-    return payload.get("tapi-common:context", {}).get("service-interface-point", [])
+    """The twin's SIPs, from its SIP list.
+
+    The list GET answers with the list as its one top-level member,
+    ``tapi-common:service-interface-point`` (RFC 8040 §4.3). A body without
+    it is a twin this adapter does not understand, not one without SIPs:
+    read as "no SIPs", it would leave ONOS with no ports and every flow rule
+    refused, with nothing in the log to say why.
+    """
+    path = f"{await _twin_data(request)}/tapi-common:context/service-interface-point"
+    payload = await _twin_get(request, path)
+    sips = payload.get(SIP_LIST_KEY) if isinstance(payload, dict) else None
+    if not isinstance(sips, list):
+        raise TwinProtocolError(f"GET {path}: the body carries no {SIP_LIST_KEY} list")
+    return sips
 
 
 async def _ensure_catalogue(request: Request) -> None:
@@ -834,8 +858,18 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
                 "z-end": node_names[1],
             },
         )
-        service = payload.get("tapi-connectivity:connectivity-service", {})
-        spectrum = _spectrum_of(service)
+        # The 201 carries the entry as its GET returns it, an array of one
+        # (RFC 7951 §5.4). The service exists whatever the body says, so an
+        # unexpected one is logged, not turned into a failure ONOS would
+        # retry against a lightpath that is already up.
+        entries = payload.get(SERVICE_KEY) if isinstance(payload, dict) else None
+        if not (isinstance(entries, list) and len(entries) == 1):
+            log.error(
+                "twin admitted %s but its 201 carries no %s entry (an array of one)",
+                onos_uuid[:8], SERVICE_KEY,
+            )
+            return JSONResponse(payload, status_code=status.HTTP_201_CREATED)
+        spectrum = _spectrum_of(entries[0])
         if spectrum is None:
             log.info("twin admitted %s (no spectrum reported)", onos_uuid[:8])
         else:

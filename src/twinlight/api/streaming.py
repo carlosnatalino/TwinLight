@@ -92,9 +92,12 @@ async def get_supported_stream_types(request: Request) -> dict:
 
 @router.get("/supported-stream-type={uuid}")
 async def get_supported_stream_type(uuid: str, request: Request) -> dict:
-    if uuid != SUPPORTED_STREAM_TYPE_UUID:
+    """The one entry, an array of one (RFC 8040 §4.3, RFC 7951 §5.4)."""
+    entries = stream_context_payload(request)["supported-stream-type"]
+    found = [e for e in entries if e["uuid"] == uuid]
+    if not found:
         raise HTTPException(status_code=404, detail=f"Supported stream type {uuid} not found")
-    return await get_supported_stream_types(request)
+    return {"tapi-streaming:supported-stream-type": found}
 
 
 @router.get("/available-stream")
@@ -107,6 +110,9 @@ async def get_available_streams(request: Request) -> dict:
 
 @router.get("/available-stream={uuid}")
 async def get_available_stream(uuid: str, request: Request) -> dict:
-    if uuid != AVAILABLE_STREAM_UUID:
+    """The one entry, an array of one (RFC 8040 §4.3, RFC 7951 §5.4)."""
+    entries = stream_context_payload(request)["available-stream"]
+    found = [e for e in entries if e["uuid"] == uuid]
+    if not found:
         raise HTTPException(status_code=404, detail=f"Available stream {uuid} not found")
-    return await get_available_streams(request)
+    return {"tapi-streaming:available-stream": found}

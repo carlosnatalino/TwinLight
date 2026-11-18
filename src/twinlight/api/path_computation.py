@@ -138,7 +138,9 @@ async def create_path_comp_service(
     response.headers["Location"] = created_location(
         request, PREFIX, "path-comp-service", service.uuid
     )
-    return {_SERVICE_KEY: _dump(service)}
+    # The body is the entry as its GET returns it, an array of one; see
+    # docs/TAPI_COMPLIANCE.md for why a 201 carries it at all.
+    return {_SERVICE_KEY: [_dump(service)]}
 
 
 @router.get("/path-comp-service={uuid}")
@@ -146,7 +148,8 @@ async def get_path_comp_service(uuid: str, request: Request) -> dict:
     service = request.app.state.context.get_path_comp_service(uuid)
     if service is None:
         raise HTTPException(status_code=404, detail=f"path-comp-service {uuid} not found")
-    return {_SERVICE_KEY: _dump(service)}
+    # A list entry is an array of one (RFC 7951 §5.4).
+    return {_SERVICE_KEY: [_dump(service)]}
 
 
 @router.delete(
@@ -169,4 +172,4 @@ async def get_path(uuid: str, request: Request) -> dict:
     path = request.app.state.context.get_path(uuid)
     if path is None:
         raise HTTPException(status_code=404, detail=f"path {uuid} not found")
-    return {_PATH_KEY: path}
+    return {_PATH_KEY: [path]}

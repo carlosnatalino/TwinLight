@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def _get_two_sip_uuids(app) -> tuple[str, str]:
     data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
-    sips = data["tapi-common:context"]["service-interface-point"]
+    sips = data["tapi-common:service-interface-point"]
     assert len(sips) >= 2
     return sips[0]["uuid"], sips[1]["uuid"]
 

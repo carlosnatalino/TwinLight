@@ -31,7 +31,7 @@ def egn_app() -> TestClient:
 def _create_service(client: TestClient) -> str:
     sips = client.get(
         "/restconf/data/tapi-common:context/service-interface-point"
-    ).json()["tapi-common:context"]["service-interface-point"]
+    ).json()["tapi-common:service-interface-point"]
     sip_a, sip_z = sips[0]["uuid"], sips[1]["uuid"]
     body = {
         "tapi-connectivity:connectivity-service": {
@@ -47,7 +47,7 @@ def _create_service(client: TestClient) -> str:
         json=body,
     )
     assert r.status_code == 201, r.text
-    return r.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    return r.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
 
 
 class TestGetConfigUnderEgn:

@@ -281,24 +281,28 @@ class TestConnectivityMutations:
                          json=_service_body(refs, "trx A", "trx C"))
         assert resp.status_code == 201, resp.text
         assert resp.headers["content-type"].startswith("application/yang-data+json")
-        uuid = resp.json()[_SVC_KEY]["uuid"]
+        (created,) = resp.json()[_SVC_KEY]
+        uuid = created["uuid"]
 
         mine = _get(mesh, f"{services}={uuid}")
-        assert _services(mesh, root)[uuid] == mine[_SVC_KEY]
+        assert mine == resp.json()  # the 201's body is the entry's GET body
+        assert _services(mesh, root)[uuid] == mine[_SVC_KEY][0]
 
         # PUT: a full replacement to another source transceiver.
         resp = mesh.put(f"{services}={uuid}",
                         json=_service_body(refs, "trx B", "trx C", uuid=uuid))
-        assert resp.status_code == 200, resp.text
-        replaced = _get(mesh, f"{services}={uuid}")[_SVC_KEY]
+        assert resp.status_code == 204, resp.text  # RFC 8040 §4.5
+        assert resp.content == b""
+        (replaced,) = _get(mesh, f"{services}={uuid}")[_SVC_KEY]
         sip = replaced["end-point"][0]["service-interface-point"]["service-interface-point-uuid"]
         assert sip == refs.sip("trx B")
 
         # PATCH: a name.
         name = [{"value-name": "service-name", "value": "renamed"}]
-        resp = mesh.patch(f"{services}={uuid}", json={"name": name})
+        resp = mesh.patch(f"{services}={uuid}", json={_SVC_KEY: [{"name": name}]})
         assert resp.status_code == 200, resp.text
-        assert _get(mesh, f"{services}={uuid}")[_SVC_KEY]["name"] == name
+        assert resp.json() == _get(mesh, f"{services}={uuid}")
+        assert _get(mesh, f"{services}={uuid}")[_SVC_KEY][0]["name"] == name
         assert _services(mesh, root)[uuid]["name"] == name
 
         assert mesh.delete(f"{services}={uuid}").status_code == 204
@@ -315,13 +319,14 @@ class TestPathCompServiceMutations:
 
         resp = mesh.post(container, json=_pcs_body(refs, "trx A", "trx B"))
         assert resp.status_code == 201, resp.text
-        service = resp.json()[_PCS_KEY]
+        (service,) = resp.json()[_PCS_KEY]
         path_uuid = service["path"][0]["path-uuid"]
 
         assert _get(mesh, f"{container}/path-comp-service={service['uuid']}") == {
-            _PCS_KEY: service
+            _PCS_KEY: [service]
         }
-        assert _get(mesh, f"{container}/path={path_uuid}")
+        (path,) = _get(mesh, f"{container}/path={path_uuid}")["tapi-path-computation:path"]
+        assert path["uuid"] == path_uuid
         full = _get(mesh, f"{root}/data/tapi-common:context")["tapi-common:context"]
         section = full["tapi-path-computation:path-computation-context"]
         assert [s["uuid"] for s in section["path-comp-service"]] == [service["uuid"]]
@@ -379,7 +384,7 @@ class TestErrorsOnTheLongForm:
 
     def test_sip_routes_are_not_shadowed(self, app: TestClient) -> None:
         sips = _get(app, f"{ROOTS[-1]}/data/tapi-common:context/service-interface-point")
-        uuid = sips["tapi-common:context"]["service-interface-point"][0]["uuid"]
+        uuid = sips["tapi-common:service-interface-point"][0]["uuid"]
         _get(app, f"{ROOTS[-1]}/data/tapi-common:context/service-interface-point={uuid}")
 
 

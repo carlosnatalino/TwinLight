@@ -191,8 +191,8 @@ export default function AddServicePage() {
 
     try {
       const client = createClient(baseUrl);
-      const result = await client.createConnectivityService(body);
-      setCreatedUuid(result["tapi-connectivity:connectivity-service"].uuid);
+      const created = await client.createConnectivityService(body);
+      setCreatedUuid(created.uuid);
     } catch (err) {
       if (err instanceof ApiError) {
         // Try to parse a structured error detail from the response body

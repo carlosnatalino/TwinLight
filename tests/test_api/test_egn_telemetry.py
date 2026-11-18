@@ -63,7 +63,7 @@ def _create(client: TestClient, a: str, z: str) -> str:
         "end-point": [tapi_end_point("a", refs.sip(a)), tapi_end_point("z", refs.sip(z))],
     }]})
     assert resp.status_code == 201, resp.text
-    return resp.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    return resp.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
 
 
 def _prometheus(client: TestClient, metric: str, uuid: str) -> float:

@@ -58,6 +58,13 @@ in the rows after the paths:
 | `404` with `error-tag: data-missing`, on any T-API resource | `404` with `invalid-value` (RFC 8040 §4.3; `data-missing` is a `409` tag) |
 | `422` (`invalid-value`) for a T-API request that does not validate | `400`, with the tag that names the problem: `malformed-message`, `missing-element`, `bad-element` or `invalid-value` (see [Error format](#error-format)) |
 | `422` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required` (RFC 7950 §15.5) |
+| `GET …/service-interface-point` answering `{"tapi-common:context": {"service-interface-point": […]}}` | `{"tapi-common:service-interface-point": […]}` (RFC 8040 §4.3); the old body is the full context's SIP section |
+| `GET …/service-interface-point={uuid}` answering `{"tapi-common:context": {"service-interface-point": [{…}]}}` | `{"tapi-common:service-interface-point": [{…}]}` |
+| `GET` of one `connectivity-service=`, `path-comp-service=`, `path=`, `device=`, `device=/equipment=` or `physical-span=` answering `{"<module>:<list>": {…}}` | An array of one, `{"<module>:<list>": [{…}]}` (RFC 7951 §5.4), as `topology=`, `node=`, `link=` and `oam-job=` already answered |
+| `GET …/supported-stream-type={uuid}`, `…/available-stream={uuid}` answering the whole list | That one entry, `{"tapi-streaming:<list>": [{…}]}`; another UUID is `404` |
+| The `201` of a creating `POST` carrying `{"tapi-connectivity:connectivity-service": {…}}` or `{"tapi-path-computation:path-comp-service": {…}}` | The entry's `GET` body, an array of one; the status and `Location` are unchanged |
+| `PUT …/connectivity-service={uuid}` answering `200` with the entry | `204` with no body when it replaced a service; `201` with `Location` and the entry when it created one (RFC 8040 §4.5) |
+| `PATCH …/connectivity-service={uuid}` with `{"tapi-connectivity:connectivity-service": {…}}` answering `200` and changing nothing (only a bare body was read), with the entry as an object | The envelope (array of one or object) is read and merged; any leaf `PATCH` cannot merge is a `400` naming it; the `200` carries the entry's `GET` body |
 | `HEAD` and `OPTIONS` answering `405` on every resource | `HEAD` answers as `GET` without the body, `OPTIONS` answers `200` with `Allow` (and `Accept-Patch` where `PATCH` is allowed); a `405` lists both in `Allow` (see [HEAD and OPTIONS](#head-and-options)) |
 
 The standard paths are given for the default root, `/restconf`; on a twin
@@ -187,6 +194,20 @@ GET returns (built by the same function), so a client may read either. Each
 SIP's `name` list carries the underlying GNPy element UID under the value-name
 `node-name`, which is how SIPs map back to physical elements.
 
+**Response bodies.** Every GET returns the target resource as the body's one
+member, named with the module that defines it (RFC 8040 §4.3; RFC 7951 §4,
+"A namespace-qualified member name MUST be used for all members of a
+top-level JSON object"), and a list entry is an array of one (RFC 7951 §5.4,
+"A list instance is encoded as a name/array pair"). So the SIP list answers
+`{"tapi-common:service-interface-point": [ … ]}` and one SIP
+`{"tapi-common:service-interface-point": [ { … } ]}`; the same holds for
+every keyed resource below — `topology=`, `node=`, `link=`,
+`owned-node-edge-point=`, `connectivity-service=`, `path-comp-service=`,
+`path=`, `device=`, `equipment=`, `physical-span=`, `oam-job=`,
+`supported-stream-type=` and `available-stream=` — each answering
+`{"<module>:<list>": [ { … } ]}`, the entry exactly as the parent's GET lists
+it.
+
 ### Topology
 
 | Method | Path |
@@ -232,9 +253,10 @@ RFC 8040 §4.4.1 makes the parent the target of a creating `POST`. The list
 path `…/connectivity-service` serves `GET` only, and a `POST` there is a
 `405`. A created service answers `201` with a `Location` header naming it,
 `{restconf_root}/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}`
-(the key percent-encoded), and with the created entry as the body, which
-carries the UUID, the format and the spectrum admission chose; RFC 8040 sends
-no body there (a deliberate deviation, see
+(the key percent-encoded), and with the created entry as the body — the same
+body a `GET` of that entry returns, `{"tapi-connectivity:connectivity-service":
+[ { … } ]}` — which carries the UUID, the format and the spectrum admission
+chose; RFC 8040 sends no body there (a deliberate deviation, see
 [TAPI_COMPLIANCE.md § 2.2](TAPI_COMPLIANCE.md#22-restconf-protocol-gaps)).
 
 ```bash
@@ -340,8 +362,8 @@ a node or link that does not exist a `409` (`data-missing`, see
 
 | Verb | Behaviour |
 |------|-----------|
-| PUT | Full replacement at the given UUID; the body must be a complete connectivity-service and its UUID must match the path |
-| PATCH | Partial update of `name`, `administrative-state`, `lifecycle-state` only — **not** the modulation format, which would invalidate the admission decision |
+| PUT | Full replacement at the given UUID; the body must be a complete connectivity-service and its UUID must match the path. `204` with no body when it replaced a service, `201` with a `Location` and the entry (like a creating `POST`) when it created one (RFC 8040 §4.5); read what admission chose for a replacement with a `GET` |
+| PATCH | A plain patch (RFC 8040 §4.6.1) of `name`, `administrative-state`, `lifecycle-state` only — **not** the modulation format or anything else admission decided, which is refused by name (`400`, replace the service with `PUT`). The body is the entry, `{"tapi-connectivity:connectivity-service": [{…}]}` (a bare object, or the bare entry, are accepted too); a `uuid` in it must be the path's. `200` with the patched entry, as its `GET` returns it |
 | DELETE | Releases spectrum, invalidates the cached baseline, records the channel drop with the EDFA tracker; returns 204 |
 
 A service with a spectrum allocation carries it on **each end-point**, beside
@@ -453,7 +475,7 @@ T-API v2.6.0 has no path-computation RPC: computation is a resource. A
 `path-computation-context`, with the entry below as the body (RFC 8040
 §4.4.1; a `POST` on `…/path-comp-service` is a `405`). The `201` carries a
 `Location` naming the new entry, `…/path-comp-service={uuid}`, and the entry
-itself, with its `path` references. Creating
+itself as its `GET` returns it (an array of one), with its `path` references. Creating
 a `path-comp-service` computes up to `rmsa.k_shortest_paths` routes, shortest
 fiber length first (GNPy's ranking, see
 [ARCHITECTURE.md](ARCHITECTURE.md#creating-a-connectivity-service)), stores each as a `path` in the context and lists them in the service's

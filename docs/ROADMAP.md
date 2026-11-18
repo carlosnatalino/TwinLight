@@ -18,26 +18,6 @@ Bug reports and feature requests are welcome as
 
 ## Known issues
 
-### A GET on a single list entry returns its parent container
-
-**Current behaviour:** `GET …/service-interface-point={uuid}` (and the other
-per-entry GETs) returns the parent container:
-
-```json
-{"tapi-common:context": {"service-interface-point": [ { … } ]}}
-```
-
-**Planned:** return the target resource keyed by its own module-qualified name,
-as RFC 8040 §4.3 and RFC 7951 §4 specify:
-
-```json
-{"tapi-common:service-interface-point": [ { … } ]}
-```
-
-**What to do now:** unwrap `["tapi-common:context"]["service-interface-point"][0]`.
-The fix changes the response shape of every single-entry GET, so clients that
-unwrap the current form will need a one-line change when it lands.
-
 ### `gnpy.no_insert_edfas` has no effect
 
 **Current behaviour:** the option is accepted in the YAML file and by

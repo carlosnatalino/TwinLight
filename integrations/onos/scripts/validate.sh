@@ -50,7 +50,7 @@ check "twin serves T-API v2.6.0 SIPs at its RESTCONF root" \
     SCRIPT_DIR='${SCRIPT_DIR}'; TWIN_URL='${TWIN_URL}'
     twin_auth_problem || exit 1
     twin_curl -sSf '${TWIN_DATA}/tapi-common:context/service-interface-point' \
-    | python3 -c 'import json,sys; n=len(json.load(sys.stdin)[\"tapi-common:context\"][\"service-interface-point\"]); assert n>0, \"no SIPs\"; print(n)'"
+    | python3 -c 'import json,sys; n=len(json.load(sys.stdin)[\"tapi-common:service-interface-point\"]); assert n>0, \"no SIPs\"; print(n)'"
 
 # --- Layer 2: the adapter --------------------------------------------------
 say "Layer 2 — T-API 2.6 to 2.1 adapter"
@@ -109,7 +109,7 @@ check "per-SIP resource is unwrapped for TapiDeviceLambdaQuery" \
 import json, sys
 d = json.load(sys.stdin)
 assert \"tapi-photonic-media:media-channel-service-interface-point-spec\" in d, \\
-    \"mc-pool must be at the top level, not wrapped in tapi-common:context\"
+    \"mc-pool must be at the top level, not wrapped as the twin answers it\"
 '"
 
 # --- Layer 3: ONOS ---------------------------------------------------------

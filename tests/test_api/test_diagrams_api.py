@@ -14,7 +14,7 @@ from tests.conftest import tapi_end_point
 def _create_service(app: TestClient) -> str:
     """Create a test connectivity service and return its UUID."""
     sips_resp = app.get("/restconf/data/tapi-common:context/service-interface-point")
-    sips = sips_resp.json()["tapi-common:context"]["service-interface-point"]
+    sips = sips_resp.json()["tapi-common:service-interface-point"]
     sip_a, sip_z = sips[0]["uuid"], sips[1]["uuid"]
 
     body = {
@@ -31,7 +31,7 @@ def _create_service(app: TestClient) -> str:
         json=body,
     )
     assert resp.status_code == 201
-    return resp.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    return resp.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
 
 
 class TestConstellationEndpoint:

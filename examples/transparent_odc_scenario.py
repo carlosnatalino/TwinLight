@@ -108,7 +108,8 @@ def create_lightpath(
     if r.status_code == 409:  # admission refused: no path, spectrum or QoT
         return None
     r.raise_for_status()
-    uuid: str = r.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    (created,) = r.json()["tapi-connectivity:connectivity-service"]  # an array of one
+    uuid: str = created["uuid"]
     return uuid
 
 

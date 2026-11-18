@@ -154,7 +154,7 @@ def test_without_physics_the_most_robust_format_is_chosen(app) -> None:
     """No QoT model: a request that names no format gets DP-QPSK, never the
     densest format the twin has no way to check."""
     data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
-    sips = [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
+    sips = [s["uuid"] for s in data["tapi-common:service-interface-point"]]
     end_points = [tapi_end_point("a", sips[0]), tapi_end_point("z", sips[1])]
     for ep in end_points:
         del ep["layer-protocol-constraint"]
@@ -163,6 +163,6 @@ def test_without_physics_the_most_robust_format_is_chosen(app) -> None:
         json={"end-point": end_points},
     )
     assert resp.status_code == 201
-    ep = resp.json()["tapi-connectivity:connectivity-service"]["end-point"][0]
+    ep = resp.json()["tapi-connectivity:connectivity-service"][0]["end-point"][0]
     spec = ep["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]
     assert spec["otsi-config"][0]["modulation"]["standard-modulation-technique"] == "MT_DP-QPSK"

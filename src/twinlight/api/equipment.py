@@ -57,7 +57,8 @@ async def get_devices(request: Request) -> dict:
 async def get_device(uuid: str, request: Request) -> dict:
     for device in request.app.state.context.physical_context().device:
         if device.uuid == uuid:
-            return {"tapi-equipment:device": _dump(device)}
+            # A list entry is an array of one (RFC 7951 §5.4).
+            return {"tapi-equipment:device": [_dump(device)]}
     raise HTTPException(status_code=404, detail=f"device {uuid} not found")
 
 
@@ -68,7 +69,7 @@ async def get_equipment(device_uuid: str, uuid: str, request: Request) -> dict:
             continue
         for equipment in device.equipment:
             if equipment.uuid == uuid:
-                return {"tapi-equipment:equipment": _dump(equipment)}
+                return {"tapi-equipment:equipment": [_dump(equipment)]}
         raise HTTPException(status_code=404, detail=f"equipment {uuid} not found")
     raise HTTPException(status_code=404, detail=f"device {device_uuid} not found")
 
@@ -83,5 +84,5 @@ async def get_physical_spans(request: Request) -> dict:
 async def get_physical_span(uuid: str, request: Request) -> dict:
     for span in request.app.state.context.physical_context().physical_span:
         if span.uuid == uuid:
-            return {"tapi-equipment:physical-span": _dump(span)}
+            return {"tapi-equipment:physical-span": [_dump(span)]}
     raise HTTPException(status_code=404, detail=f"physical-span {uuid} not found")

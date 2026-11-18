@@ -10,6 +10,22 @@ import httpx
 from twinlight_client.credentials import bearer_headers
 from twinlight_client.restconf import discover_root
 
+_SIP_KEY = "tapi-common:service-interface-point"
+
+
+def _single_entry(body: dict[str, Any], key: str) -> dict[str, Any]:
+    """The one entry of a list-entry GET body, ``{key: [entry]}``.
+
+    RFC 7951 §5.4 encodes a list entry as an array of one. A body without
+    ``key``, or with another number of entries, is not what the twin sends,
+    so it raises (``KeyError``, ``ValueError``) instead of guessing.
+    """
+    entries = body[key]
+    if not isinstance(entries, list) or len(entries) != 1:
+        raise ValueError(f"expected {key} to be a list of one entry, got {entries!r:.200}")
+    entry: dict[str, Any] = entries[0]
+    return entry
+
 
 class TapiClient:
     """Async HTTP client wrapping all T-API REST endpoints."""
@@ -70,18 +86,27 @@ class TapiClient:
         return resp.json()
 
     async def get_sips(self) -> list[dict[str, Any]]:
+        """Every service interface point.
+
+        The list GET answers with the list as its one top-level member,
+        ``tapi-common:service-interface-point`` (RFC 8040 §4.3); a body
+        without it raises ``KeyError`` rather than reading as "no SIPs".
+        """
         resp = await self._client.get(
             await self._tapi(f"{self._CONTEXT}/service-interface-point")
         )
         resp.raise_for_status()
-        return resp.json()
+        sips: list[dict[str, Any]] = resp.json()[_SIP_KEY]
+        return sips
 
     async def get_sip(self, uuid: str) -> dict[str, Any]:
+        """One service interface point, unwrapped from its array of one
+        (RFC 7951 §5.4); any other body is an error."""
         resp = await self._client.get(
             await self._tapi(f"{self._CONTEXT}/service-interface-point={uuid}")
         )
         resp.raise_for_status()
-        return resp.json()
+        return _single_entry(resp.json(), _SIP_KEY)
 
     # -- TAPI Topology --------------------------------------------------------
 
@@ -162,7 +187,10 @@ class TapiClient:
             await self._tapi(f"{self._CONTEXT}/tapi-oam:oam-context/oam-job")
         )
         resp.raise_for_status()
-        return resp.json().get("tapi-oam:oam-job", [])
+        # The list GET answers {"tapi-oam:oam-job": [...]}, [] when there are
+        # none; a body without the member is an error, not "no jobs".
+        jobs: list[dict[str, Any]] = resp.json()["tapi-oam:oam-job"]
+        return jobs
 
     # -- Internal / OPM -------------------------------------------------------
 

@@ -76,28 +76,30 @@ async def get_context(request: Request) -> dict:
     }
 
 
+#: The SIP list's member name. RFC 8040 §4.3 returns the target resource
+#: itself, and RFC 7951 §4 names a top-level member with its module:
+#: "A namespace-qualified member name MUST be used for all members of a
+#: top-level JSON object".
+SIP_KEY = "tapi-common:service-interface-point"
+
+
 @router.get("/tapi-common:context/service-interface-point")
 async def get_sips(request: Request) -> dict:
-    """Return all service interface points."""
+    """Every service interface point, as the body's one member (RFC 8040 §4.3)."""
     ctx = request.app.state.context
-    return {
-        "tapi-common:context": {
-            "service-interface-point": [
-                _sip_payload(ctx, sip) for sip in ctx.get_sips()
-            ],
-        }
-    }
+    return {SIP_KEY: [_sip_payload(ctx, sip) for sip in ctx.get_sips()]}
 
 
 @router.get("/tapi-common:context/service-interface-point={uuid}")
 async def get_sip(uuid: str, request: Request) -> dict:
-    """Return a specific service interface point."""
+    """One service interface point: the list entry, an array of one.
+
+    RFC 7951 §5.4: "A list instance is encoded as a name/array pair", with
+    no exception for a single entry (RFC 8040 §4.5 shows the same for an
+    entry it PUTs).
+    """
     ctx = request.app.state.context
     sip = ctx.get_sip(uuid)
     if sip is None:
         raise HTTPException(status_code=404, detail=f"SIP {uuid} not found")
-    return {
-        "tapi-common:context": {
-            "service-interface-point": [_sip_payload(ctx, sip)]
-        }
-    }
+    return {SIP_KEY: [_sip_payload(ctx, sip)]}
