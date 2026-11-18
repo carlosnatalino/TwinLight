@@ -1,6 +1,7 @@
 # API reference
 
-TwinLight exposes 75 REST operations plus a gNMI gRPC service carrying the
+TwinLight exposes 89 REST operations (the OpenAPI schema's count; every
+resource also answers `HEAD` and `OPTIONS`) plus a gNMI gRPC service carrying the
 T-API performance-measurement stream. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
@@ -65,6 +66,11 @@ in the rows after the paths:
 | The `201` of a creating `POST` carrying `{"tapi-connectivity:connectivity-service": {…}}` or `{"tapi-path-computation:path-comp-service": {…}}` | The entry's `GET` body, an array of one; the status and `Location` are unchanged |
 | `PUT …/connectivity-service={uuid}` answering `200` with the entry | `204` with no body when it replaced a service; `201` with `Location` and the entry when it created one (RFC 8040 §4.5) |
 | `PATCH …/connectivity-service={uuid}` with `{"tapi-connectivity:connectivity-service": {…}}` answering `200` and changing nothing (only a bare body was read), with the entry as an object | The envelope (array of one or object) is read and merged; any leaf `PATCH` cannot merge is a `400` naming it; the `200` carries the entry's `GET` body |
+| `GET /restconf` and `/restconf/yang-library-version` served as `application/json` | `application/yang-data+json`, like every RESTCONF response, with `Cache-Control: no-cache` |
+| Any query parameter on a T-API resource ignored (`?depth=1` answered the full resource) | `400` (`invalid-value`) for anything but `content=all`; `content=config`/`nonconfig` is `501` |
+| A non-JSON `Accept` (`application/yang-data+xml`) answered with JSON | `406` |
+| A request body in any media type parsed as JSON when it parsed | `415` unless it is `application/yang-data+json` or `application/json` |
+| `GET /restconf/data`, the YANG library, `restconf-state` and `/restconf/operations` answering `404` | Served (RFC 8040 §3.3, §9, §10) |
 | `HEAD` and `OPTIONS` answering `405` on every resource | `HEAD` answers as `GET` without the body, `OPTIONS` answers `200` with `Allow` (and `Accept-Patch` where `PATCH` is allowed); a `405` lists both in `Allow` (see [HEAD and OPTIONS](#head-and-options)) |
 
 The standard paths are given for the default root, `/restconf`; on a twin
@@ -779,18 +785,48 @@ percent-encode those to `%3A` per the WHATWG URL specification, which would
 otherwise miss the route. `PathDecodeMiddleware` decodes them before routing, so
 both spellings work.
 
-### RESTCONF root
+### RESTCONF root and protocol resources
 
 | Method | Path | Returns |
 |--------|------|---------|
 | GET | `/.well-known/host-meta` | XRD (RFC 6415) advertising the RESTCONF root |
 | GET | `/restconf` | `ietf-restconf:restconf` with `data`, `operations`, `yang-library-version` |
 | GET | `/restconf/yang-library-version` | `{"ietf-restconf:yang-library-version": "2019-01-04"}` |
+| GET | `/restconf/operations` | `{"ietf-restconf:operations": {}}` — T-API v2.6.0 defines no RPC (§3.3.2) |
+| GET | `/restconf/data` | The datastore (§3.4): `{"ietf-restconf:data": {…}}` holding `tapi-common:context` and the three IETF containers below |
+| GET | `/restconf/data/ietf-yang-library:yang-library` | RFC 8525: one module set, every module the twin implements (with `tapi-streaming`'s feature `tapi-streaming`) and those it only imports |
+| GET | `/restconf/data/ietf-yang-library:modules-state` | The same list in the RFC 7895 form RFC 8040 §10.1 names, with `conformance-type` |
+| GET | `/restconf/data/ietf-restconf-monitoring:restconf-state[/capabilities]` | RFC 8040 §9: the mandatory `defaults` capability, `basic-mode=explicit`; no optional query parameter is supported, so none other is listed |
 
 RFC 8040 §3.1 has a client discover the root rather than assume it, so
 `host-meta` is XML by specification — a JSON variant would not be found. The
 root path itself is `server.restconf_root`; setting it to `""` puts the data
-resource at `/data/…` and omits these three resources.
+resource at `/data/…` (and the datastore, YANG library and restconf-state
+there too) and omits host-meta, the API resource, `yang-library-version` and
+`operations` (a known gap, see
+[TAPI_COMPLIANCE.md § 2.7](TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix)).
+None of these resources is writable: `POST`, `PUT`, `PATCH` and `DELETE` on
+the datastore are `405`.
+
+### Media types, caching and query parameters
+
+Every RESTCONF response — everything under the root, errors and `401`s
+included — is `application/yang-data+json` when it has a body and carries
+`Cache-Control: no-cache` (RFC 8040 §5.5: "The server MUST include a
+'Cache-Control' header field in every response").
+
+| Request | Answer |
+|---------|--------|
+| `Accept` that admits none of `application/yang-data+json`, `application/yang-data`, `application/json`, `application/*`, `*/*` (e.g. `application/yang-data+xml`) | `406`, `invalid-value` (RFC 8040 §5.2) |
+| A body whose `Content-Type` is not `application/yang-data+json` or `application/json`, or that has none (XML, `text/plain`, a form, `application/yang-patch+json`) | `415`, `invalid-value` (§5.2) |
+| A query parameter other than `content`, or one given twice (`depth`, `fields`, `filter`, `with-defaults`, `insert`, `point`, …) | `400`, `invalid-value` (§4.8: "A server MUST return an error with a '400 Bad Request' status-line if a query parameter is unexpected") |
+| `content=all` on `GET`/`HEAD` | The full resource, as without it |
+| `content=config` or `content=nonconfig` | `501`, `operation-not-supported`: the twin cannot split configuration from state yet |
+| `content` on any other method | `400` (§4.8.1) |
+
+`application/json` is accepted as a request body beside the RESTCONF media
+type, since it names the same JSON and is what generic HTTP clients send.
+The proprietary endpoints do none of these checks.
 
 ## Non-standard endpoints
 

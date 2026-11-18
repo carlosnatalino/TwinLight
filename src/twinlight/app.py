@@ -26,6 +26,7 @@ from twinlight.api import (
     oam,
     parameters,
     path_computation,
+    restconf_resources,
     streaming,
     topology,
     transparent,
@@ -42,7 +43,8 @@ from twinlight.api.middleware import (
     HeadMiddleware,
     OptionsMiddleware,
     PathDecodeMiddleware,
-    RestconfContentTypeMiddleware,
+    RestconfHeadersMiddleware,
+    RestconfRequestMiddleware,
     TokenAuthMiddleware,
 )
 from twinlight.api.restconf import (
@@ -51,6 +53,7 @@ from twinlight.api.restconf import (
     is_restconf_path,
     validation_error_tag,
 )
+from twinlight.api.restconf_resources import YANG_LIBRARY_REVISION
 from twinlight.auth import TokenAuthenticator
 from twinlight.config import TwinConfig
 from twinlight.state.context import TapiContext
@@ -119,8 +122,9 @@ def _http_status_to_error_tag(status_code: int, restconf: bool = True) -> str:
 
 
 # RFC 8040 §3.3 requires the root resource to expose the YANG library
-# version, which is the revision date of ietf-yang-library (RFC 8525).
-_YANG_LIBRARY_VERSION = "2019-01-04"
+# version, which is the revision date of ietf-yang-library (RFC 8525), the
+# revision restconf_resources serves.
+_YANG_LIBRARY_VERSION = YANG_LIBRARY_REVISION
 
 
 def _add_restconf_root_resources(app: FastAPI, root: str) -> None:
@@ -233,6 +237,11 @@ def create_app(config: TwinConfig) -> FastAPI:
     # set (RFC 8040 §4.1). HeadMiddleware, just inside CORS and outside the
     # token check, runs a HEAD as its GET and drops the body (RFC 8040
     # §4.2), so it is authenticated as the GET would be.
+    # RestconfRequestMiddleware, inside the token check and path decoding,
+    # refuses the query parameters, Accept and body media types RFC 8040
+    # refuses (400, 406, 415); RestconfHeadersMiddleware, just inside CORS,
+    # stamps Content-Type and Cache-Control on every RESTCONF response, a
+    # 401 included.
     refusals = (transparent.refused_methods,)
     app.add_middleware(AllowHeaderMiddleware, refusals=refusals)
     app.add_middleware(
@@ -240,11 +249,10 @@ def create_app(config: TwinConfig) -> FastAPI:
         restconf_root=config.server.restconf_root,
         refusals=refusals,
     )
-    app.add_middleware(PathDecodeMiddleware)
     app.add_middleware(
-        RestconfContentTypeMiddleware,
-        restconf_root=config.server.restconf_root,
+        RestconfRequestMiddleware, restconf_root=config.server.restconf_root
     )
+    app.add_middleware(PathDecodeMiddleware)
     if authenticator.enabled:
         app.add_middleware(
             TokenAuthMiddleware,
@@ -252,6 +260,9 @@ def create_app(config: TwinConfig) -> FastAPI:
             public_paths=PUBLIC_PATHS,
         )
     app.add_middleware(HeadMiddleware)
+    app.add_middleware(
+        RestconfHeadersMiddleware, restconf_root=config.server.restconf_root
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.server.cors_origins,
@@ -292,6 +303,9 @@ def create_app(config: TwinConfig) -> FastAPI:
         streaming.router,
     ):
         app.include_router(tapi_router, prefix=root)
+    # The RESTCONF protocol's own data resources: the datastore, the YANG
+    # library and restconf-state (RFC 8040 §3.3.1, §9, §10).
+    app.include_router(restconf_resources.router, prefix=root)
 
     app.include_router(internal.router)
     app.include_router(diagrams.router)
@@ -304,6 +318,7 @@ def create_app(config: TwinConfig) -> FastAPI:
 
     if root:
         _add_restconf_root_resources(app, root)
+        app.include_router(restconf_resources.operations_router, prefix=root)
 
     if authenticator.enabled:
         _document_bearer_auth(app, PUBLIC_PATHS)

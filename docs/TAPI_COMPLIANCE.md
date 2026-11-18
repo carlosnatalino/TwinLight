@@ -47,7 +47,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 ### 1.4 Protocol and conventions
 
 - **RESTCONF root**: The T-API modules are served under `server.restconf_root` (default `/restconf`), discoverable via `GET /.well-known/host-meta` (XRD, RFC 6415) as RFC 8040 §3.1 requires, and only there: one path per resource. The bare `/data/...` earlier releases also served is gone (with an empty root, `/data/...` is the data resource itself).
-- **Capability discovery**: `GET {restconf-root}` and `GET {restconf-root}/yang-library-version` answer per RFC 8040 §3.3.
+- **Capability discovery**: `GET {restconf-root}`, `{restconf-root}/yang-library-version` and `{restconf-root}/operations` answer per RFC 8040 §3.3; `GET {restconf-root}/data` is the datastore, and `ietf-yang-library:yang-library`, `ietf-yang-library:modules-state` and `ietf-restconf-monitoring:restconf-state` under it list the modules and capabilities (§9, §10). See §2.7 for the full matrix.
 - **URL path encoding**: Colons in paths handled (PathDecodeMiddleware for `%3A` → `:`).
 - **RESTCONF-style paths**: Resource paths follow the `.../connectivity-service={uuid}` pattern.
 - **Augment paths**: Every context augment is served under the context, at its RFC 8040 §3.5.3 path, with a module prefix only where the module changes: `/restconf/data/tapi-common:context/tapi-topology:topology-context`, `…/tapi-connectivity:connectivity-context`, `…/tapi-path-computation:path-computation-context`, `…/tapi-equipment:physical-context`, `…/tapi-oam:oam-context`, `…/tapi-streaming:stream-context`. Each is served there only; the short `/data/<module>:<container>/…` earlier releases also served for the connectivity, path-computation and physical contexts is gone.
@@ -115,8 +115,8 @@ So: **Common, Topology, Connectivity, Path Computation and Equipment** are imple
 
 | Gap | RFC / practice | Current behavior |
 |-----|----------------|------------------|
-| **Query parameters** | RFC 8040: `content`, `depth`, `filter`, `with-defaults` on GET | Not supported. All GETs return full resource; no `content=(config\|nonconfig\|all)`, no `depth`, no `filter`. |
-| **Accept header** | RESTCONF allows client to request `application/yang-data+json` or `application/yang-data+xml` | Only JSON is produced; XML not supported. |
+| **Query parameters** | RFC 8040 §4.8: an unexpected or repeated parameter MUST be a 400; §4.8.1 `content` MUST be supported; `depth`, `fields`, `filter`, `with-defaults`, `start-time`, `stop-time` are optional | ◐ `content=all` is accepted; `content=config`/`nonconfig` is a `501` (a MUST not met, see §2.7); every other parameter, and any given twice, is a `400` `invalid-value`. No optional parameter is supported or advertised. |
+| **Accept / media types** | RFC 8040 §5.2: a server MUST support one of XML and JSON, MUST answer an unsupported `Accept` with 406 and an unsupported request media type with 415 | ✓ JSON only (`application/yang-data+json`); an `Accept` that admits no JSON is a `406`, a request body that is not `application/yang-data+json` or `application/json` a `415`. Accepting `application/json` is a deliberate leniency (§2.7). |
 | **Error format** | RESTCONF errors (e.g. `application/yang-data+json` with `ietf-restconf:errors`) | ✓ Implemented: HTTP and validation errors return `ietf-restconf:errors` with `error-type`, `error-tag`, `error-message`, and `error-app-tag`/`error-path` where RFC 7950 §15 defines them. Each status carries the tag RFC 8040 §7 pairs it with: a missing resource is `404` `invalid-value` (§4.3), a request refused as sent is `400` with `malformed-message`, `missing-element`, `bad-element` or `invalid-value` (no `422`), a reference to a SIP, node or link that does not exist is `409` `data-missing`/`instance-required` (RFC 7950 §15.5). A 405 has `error-tag: operation-not-supported` (RFC 8040 §7) and an `Allow` header naming every method the resource serves (RFC 9110 §15.5.6); see [API.md § Error format](API.md#error-format). |
 | **PATCH semantics** | RFC 8040 §4.6.1 plain patch: the target's representation merged into it; §4.6: `200` with a body or `204` | ◐ The body is the entry, `{"tapi-connectivity:connectivity-service": [{…}]}` (an object, or the bare entry, are accepted too), its key checked against the URI; `name`, `administrative-state` and `lifecycle-state` are merged and any other config leaf is refused by name (`400`), since the rest decide the admission and are changed with `PUT`. `200` with the entry's `GET` body. Not a general merge, and no YANG Patch (`application/yang-patch+json`). |
 | **PUT** | RFC 8040 §4.5: create or replace the target; `201` when created, `204` when replaced | ✓ Implemented for connectivity-service: `PUT .../connectivity-service={uuid}` replaces by UUID (`204`, no body) or creates (`201` with `Location`; the body is the deviation below). PUT on other data resources and on the datastore is not offered (`405`). |
@@ -216,6 +216,70 @@ or is not followed, with the reason for each.
 
 Neither interface implements authorization scopes or TLS. Authentication is opt-in: with `TWINLIGHT_API_TOKENS` set, RESTCONF (every path but `/health`) and gNMI both require one of those pre-shared bearer tokens (RFC 6750; a rejected RESTCONF request gets 401 with an RFC 8040 `access-denied` error). T-API deployments normally sit behind an authenticating gateway; TwinLight is designed for lab and Compose use. See [SECURITY.md](../SECURITY.md).
 
+### 2.7 RFC 8040 and RFC 7951 conformance matrix
+
+What every T-API resource and the RESTCONF protocol resources do, against
+RFC 8040 (with its verified errata) and RFC 7951, as of this release. "Conforms"
+means the twin does what the clause requires; "Gap" means it does not, and
+the row says why it is left and what is recommended. Where an RFC sentence
+decides the question it is quoted.
+
+**Resources and discovery**
+
+| Requirement | Level | Status |
+|-------------|-------|--------|
+| §3.1 root discovered from `/.well-known/host-meta`, exactly one `restconf` link | MUST | Conforms with a root; **gap with `server.restconf_root: ""`**: no host-meta (the bundled clients read its `404` as "the root is empty"). Recommendation: serve host-meta with `href=""` and let the clients take an empty href as the empty root, or drop the empty-root mode — a client-visible decision for the owner |
+| §3.3 API resource `{+restconf}` as `ietf-restconf:restconf`, media type `application/yang-data+json` | MUST | Conforms with a root (the media type was `application/json` before this release); **gap with an empty root**, as above |
+| §3.3.1 `{+restconf}/data`, the datastore | MUST | Conforms: `GET` returns `ietf-restconf:data` with every top-level node |
+| §3.3.2 `{+restconf}/operations` | MAY | Served, empty: T-API v2.6.0 defines no RPC |
+| §3.3.3 `yang-library-version` | MUST | Conforms (`2019-01-04`, the revision served) |
+| §9 `ietf-restconf-monitoring`: `restconf-state/capabilities` with the `defaults` capability | MUST | Conforms: `basic-mode=explicit`; no optional query parameter, so no other capability; `streams` omitted (§9.2 allows it) |
+| §10 `ietf-yang-library`: "All YANG modules and submodules used by the server MUST be identified" | MUST | Conforms: `yang-library` (RFC 8525) and `modules-state` (RFC 7895). The `datastore` list names `running` and `operational` with one schema; the twin does not implement the NMDA `{+restconf}/ds/…` resources (RFC 8527), which is optional. `tapi-notification` is listed as import-only although most T-API modules import it; the twin offers no notification service (§2.1) |
+
+**Methods** (every T-API resource; the sweeps in `tests/test_api/` are driven by the OpenAPI schema)
+
+| Requirement | Level | Status |
+|-------------|-------|--------|
+| §4.1 OPTIONS, with `Accept-Patch` | MUST | Conforms on every route; `Accept-Patch` where `PATCH` is allowed (RFC 5789 §3.1 makes the field mean that) |
+| §4.2 HEAD as GET without the body | MUST | Conforms on every route that serves `GET` |
+| §4.3 GET; a missing instance is `404` `invalid-value` | MUST | Conforms |
+| §4.4.1 create by POST on the parent, `201` with `Location` and no body; an existing entry is `409` `resource-denied` | MUST | Conforms but for the body (the deviation in §2.2, recommended to keep). §4.4.1 names `resource-denied` for a POST of an existing entry, and the IETF rejected changing it to `data-exists` (erratum 5761), so that is what the twin sends |
+| §4.4.1, §4.5 `insert`/`point` "MUST be supported" | MUST | Conforms vacuously: "only allowed if the list or leaf-list is 'ordered-by user'", and no T-API v2.6.0 list is, so they are refused (`400`) |
+| §4.5 PUT creates (`201`) or replaces (`204`); a missing body is `400` `invalid-value`; the key in the body must be the URI's | MUST | Conforms for connectivity-service |
+| §4.5 "The PUT method MUST be supported for data and datastore resources" | MUST | **Gap**: only a connectivity-service entry takes PUT. Most of the T-API tree the twin serves is `config false` (topology, SIPs, paths, OAM jobs, streams), which no edit may change; the `config true` nodes it does not let a client replace — the context, a path-comp-service (created and deleted only), the datastore — answer `405`. Recommendation: leave them read-only and say so; a datastore PUT would replace every service at once |
+| §4.6 PATCH: plain patch, `200` with a body or `204`; a missing target is not created | MUST | Conforms for connectivity-service, restricted to the leaves a patch can change (§2.2); other resources `405`, as for PUT |
+| §4.7 DELETE `204`; a missing instance `404` `invalid-value` | MUST | Conforms. A `404` is what §4.7 permits ("A server MAY return a '404 Not Found' status-line ... 'invalid-value'"); NETCONF's own error for deleting missing data is `data-missing`, which §7 pairs with `409`, a stricter reading the twin does not take because clients, the ONOS adapter included, treat a `404` on DELETE as "already gone" |
+
+**Messages**
+
+| Requirement | Level | Status |
+|-------------|-------|--------|
+| §4.8 an unexpected or repeated query parameter is `400` `invalid-value` | MUST | Conforms |
+| §4.8.1 `content` "MUST be supported" | MUST | **Gap** for `config`/`nonconfig` (`501`); `all`, the default, is accepted. Recommendation: implement it from the YANG `config` statements (the trees mark every node `rw`/`ro`) — a filter over the bodies, with no client depending on its absence |
+| §4.8.2–§4.8.9 `depth`, `fields`, `filter`, `with-defaults`, `start-time`, `stop-time` | optional | Not supported, not advertised, refused with `400` |
+| §5.2 one of XML and JSON; `Accept` and `406`; `415` for an unsupported input encoding | MUST | Conforms: JSON. `application/json` request bodies are accepted beside `application/yang-data+json` — the same JSON, sent by generic HTTP clients (`TapiClient`, the examples and the ONOS scripts send it); it is a second spelling of one media type, not a second encoding. Recommendation: keep it |
+| §5.5 `Cache-Control` "in every response" | MUST | Conforms (`no-cache`) |
+| §3.4.1.2 "The server MUST maintain a unique opaque entity-tag for the datastore resource and MUST return it in the 'ETag' header"; §3.4.1.1 and §3.5.1–§3.5.2 `Last-Modified` and per-resource ETags | MUST / SHOULD | **Gap**: no `ETag` or `Last-Modified` on any T-API resource, and no `If-Match`/`If-None-Match`/`If-Unmodified-Since` handling (RFC 9110 §13 makes evaluating them a MUST once they are). Recommendation: a revision counter on the T-API configuration (service and path-comp-service writes, restores), its value as the datastore's ETag on `GET`/`HEAD` of every T-API resource, and `412`/`304` on the conditional headers, as the transparent controller already does for its own tree. Additive for clients, but it touches every write path, so it is left for a change of its own |
+| §6 notifications, §9.2 `streams` | optional | Not offered (the T-API stream is the gNMI one, §1.6) |
+| §7 each error-tag with its status; `ietf-restconf:errors` | MUST/SHOULD | Conforms (§2.2, Error format). `missing-element` is paired with 400 by verified erratum 7311 |
+| YANG Patch (RFC 8072) | optional | Not offered: `application/yang-patch+json` on a T-API resource is a `415` |
+
+**Encoding (RFC 7951)**
+
+| Requirement | Level | Status |
+|-------------|-------|--------|
+| §4 member names: qualified at the top level and where the module changes, simple otherwise | MUST | Conforms: every member of every GET body of a twin holding services, a path-comp-service and OAM jobs, on both backends, was checked against the v2.6.0 YANG trees (augments included) — no unknown member, none qualified where it must not be |
+| §5.4 a list instance is a name/array pair | MUST | Conforms for every list and every list entry. A container whose list is empty carries `[]` (`connectivity-context`, `path-computation-context`) or omits it (`oam-context`): RFC 7951 encodes instances and says nothing of an empty list, so both are read the same way; a list GET with no entries answers `[]` |
+| §6.8 identityref values qualified unless the identity is in the leaf's own module | MUST | Conforms (`tapi-streaming:…`, `tapi-oam:…` qualified; `GRID_TYPE_FLEX`, `MT_DP-QPSK`, `ADJUSTMENT_GRANULARITY_G_6_25GHZ` are `tapi-photonic-media` identities in `tapi-photonic-media` leaves) |
+| §6.1 "A value of the 'int64', 'uint64', or 'decimal64' type is represented as a JSON string" | MUST | **Gap**: the `uint64` frequencies (`lower-frequency`, `upper-frequency`, `central-frequency`), `number-of-mc`, `number-of-otsi` and the `decimal64` `channel-output-power` are JSON numbers. Input accepts both. Recommendation: emit strings — `"191278125000000"` — once the readers parse both (the UI's `spectrumOf` returns nothing for a string today, and the ONOS adapter's `_mc_pool` and `_spectrum_of` do arithmetic on them), in a change of its own with a migration row |
+
+**Request bodies**
+
+| Requirement | Level | Status |
+|-------------|-------|--------|
+| A body with a member the schema does not define is an error (`unknown-element`, RFC 6241 Appendix A) | MUST (NETCONF `edit-config` semantics, which RFC 8040 §1.4 maps onto) | **Gap** on connectivity-service: an unknown member (`"foo": 1`, or T-API 2.1's `service-layer`) is ignored, at the service and the end-point. A path-comp-service refuses it (`400`). Standard leaves the twin does not implement are refused with `501` (§2.3). Recommendation: refuse unknown members with `400` `unknown-element` naming each, as path-comp-service does — but an outside client sending T-API 2.1 leaves would start failing, so it is the owner's call |
+| A leafref to an instance that does not exist: `data-missing`, `instance-required` (RFC 7950 §15.5) | MUST | Conforms for the end-point SIP (with `error-path`) and for constraint nodes and links |
+
 ---
 
 ## 3. Summary table
@@ -223,7 +287,7 @@ Neither interface implements authorization scopes or TLS. Authentication is opt-
 | Category | Implemented | Gaps |
 |----------|-------------|------|
 | **T-API modules** | Common, Topology, Connectivity (full CRUD), Path Computation, Equipment, Photonic Media (SIP spectrum capability, OTSi modulation), OAM jobs, Streaming (TR-548 measurement stream) | Virtual Network, Fault, Notification, the rest of OAM, entity and alarm streams; media channels |
-| **RESTCONF** | Root resource + `host-meta` discovery + `yang-library-version`, paths, JSON, `yang-data+json` content type, `ietf-restconf:errors` error bodies, PUT, list-encoded bodies | `content`/`depth`/`filter`/`with-defaults` query parameters, XML, full YANG-aware PATCH/merge semantics |
+| **RESTCONF** | Root resource + `host-meta` discovery + `yang-library-version`, the datastore, `ietf-yang-library` and `ietf-restconf-monitoring`, HEAD and OPTIONS everywhere, paths, JSON with `406`/`415`, `yang-data+json` content type and `Cache-Control`, `ietf-restconf:errors` with the RFC 8040 §7 tags, standard response bodies, PUT `201`/`204`, plain-patch PATCH | `content=config`/`nonconfig`, `ETag`/`Last-Modified` and conditional requests, 64-bit numbers as JSON strings, unknown request members ignored, the empty-root mode's missing discovery, optional query parameters, XML, YANG Patch (see §2.7) |
 | **Data model** | Core topology + connectivity + SIP, per-SIP spectrum capability, standard modulation and assigned-spectrum augments, link latency-characteristic | Separate Connection resource, routing/resilience/cost constraints, richer topology quality attributes |
 | **Behaviour** | Create/read/update/delete connectivity with QoT-aware admission; path computation; snapshot/restore | State and lifecycle semantics are stored but not enforced; the modulation format is immutable after create; QoT is exposed non-standardly |
 | **gNMI** | TR-548 measurement stream: Capabilities, the §6.3.4 Subscribe, history-extension resume, PROTO records | Get, Set, other streams |
@@ -234,7 +298,7 @@ Neither interface implements authorization scopes or TLS. Authentication is opt-
 ## 4. References
 
 - **T-API 2.6**: ONF Transport API 2.6 (YANG, OpenAPI, path computation, virtual network, equipment, OAM, fault, notification).
-- **RESTCONF**: [RFC 8040](https://www.rfc-editor.org/rfc/rfc8040) — query parameters and error format.
+- **RESTCONF**: [RFC 8040](https://www.rfc-editor.org/rfc/rfc8040) and its [errata](https://www.rfc-editor.org/errata/rfc8040) (7311 verified; 5565 and 5761 rejected) — methods, query parameters, media types and error format; [RFC 7951](https://www.rfc-editor.org/rfc/rfc7951) — JSON encoding; [RFC 7950](https://www.rfc-editor.org/rfc/rfc7950) §15 — error tags of YANG constraints; [RFC 6241](https://www.rfc-editor.org/rfc/rfc6241) Appendix A — the error-tags; [RFC 8525](https://www.rfc-editor.org/rfc/rfc8525) — YANG library.
 - **TR-548 v3.2**: TAPI v2.6.0 Reference Implementation Agreement — Streaming. [TAPI-Documentation v2.6.0](https://github.com/Open-Network-Models-and-Interfaces-ONMI/TAPI-Documentation/tree/v2.6.0/ReferenceImplementationAgreements/TR-548) — §3.7, §3.8.1.2, §6, use cases ST-0.x, ST-1.1, ST-6.x.
 - **TR-547 v3.3**: TAPI v2.6.0 Reference Implementation Agreement, use cases 17a/17b (OAM jobs).
 - **TAPI v2.6.0 YANG and protobuf**: [`tapi-streaming`, `tapi-gnmi-streaming`, `tapi-oam`](https://github.com/Open-Network-Models-and-Interfaces-ONMI/TAPI/tree/v2.6.0/YANG); [`tapi-streaming-performance.proto`](https://github.com/Open-Network-Models-and-Interfaces-ONMI/TAPI/blob/v2.6.0/PROTOBUF/tapi-streaming-performance.proto).
