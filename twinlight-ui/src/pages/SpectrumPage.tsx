@@ -21,11 +21,11 @@ export default function SpectrumPage() {
     const client = createClient(baseUrl);
     Promise.all([
       client.getSpectrumContext().catch(() => null),
-      client.getServices().then((r) => r["tapi-connectivity:connectivity-context"]["connectivity-service"]),
+      client.getServices(),
     ])
       .then(([ctx, svcs]) => {
         setSpectrumContext(ctx ?? null);
-        setServices(svcs ?? []);
+        setServices(svcs);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));

@@ -37,10 +37,11 @@ Endpoints fall into two groups, kept strictly apart (see
 
 Each T-API resource has exactly one path, the one the v2.6.0 YANG gives it.
 Paths earlier releases served anywhere else are removed, not redirected, and
-answer `404` (`401` without a token when authentication is on):
+answer `404` (`401` without a token when authentication is on). One response
+body changed too, in the last row:
 
-| Removed path | Standard path |
-|--------------|---------------|
+| Removed path or body | Standard path or body |
+|----------------------|-----------------------|
 | `/data/tapi-connectivity:connectivity-context/…` | `/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/…` |
 | `/data/tapi-path-computation:path-computation-context/…` | `/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/…` |
 | `/data/tapi-equipment:physical-context/…` | `/restconf/data/tapi-common:context/tapi-equipment:physical-context/…` |
@@ -48,10 +49,12 @@ answer `404` (`401` without a token when authentication is on):
 | `/restconf/data/tapi-path-computation:path-computation-context/…` | `/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/…` |
 | `/restconf/data/tapi-equipment:physical-context/…` | `/restconf/data/tapi-common:context/tapi-equipment:physical-context/…` |
 | `/data/tapi-common:context` and every path below it (the bare mount) | `/restconf/data/tapi-common:context` and the same path below it |
+| `GET …/tapi-connectivity:connectivity-context/connectivity-service` answering `{"tapi-connectivity:connectivity-context": {"connectivity-service": […]}}` | The list GET answers `{"tapi-connectivity:connectivity-service": […]}` (RFC 8040 §4.3); the old body is the container GET's, `GET …/tapi-connectivity:connectivity-context` |
 
 The standard paths are given for the default root, `/restconf`; on a twin
 configured with another, substitute it. Everything after the container is
-unchanged, and so are request and response bodies. A twin configured with
+unchanged, and so are request and response bodies, except the
+connectivity-service list GET's (last row). A twin configured with
 `server.restconf_root: ""` serves the data resource at `/data/…` by
 definition, so on such a twin only the short context paths change.
 
@@ -203,9 +206,13 @@ e.g. `"392.110"` for 80 km.
 
 The container GET returns `{"tapi-connectivity:connectivity-context":
 {"connectivity-service": […]}}`, the same section as the full context. The
-list GET `…/connectivity-service` answers with that same container envelope
-rather than a `tapi-connectivity:connectivity-service` array, as it always
-has; the UI and the ONOS adapter read it that way.
+list GET `…/connectivity-service` returns the list as the body's one
+top-level member, `{"tapi-connectivity:connectivity-service": […]}` (RFC 8040
+§4.3, RFC 7951 §4), with the same entries; with no services it is
+`{"tapi-connectivity:connectivity-service": []}`. Earlier releases answered
+the list GET with the container's envelope; a client that wants that body
+reads the container GET (see
+[Migrating from earlier releases](#migrating-from-earlier-releases)).
 
 **Create (POST) body:**
 

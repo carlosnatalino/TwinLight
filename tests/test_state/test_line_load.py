@@ -242,8 +242,8 @@ class TestOperationalState:
         assert one["operational-state"] == "DISABLED"
 
         ctx.apply_element_overrides({"fiber (A → B)": {"loss_coef": 0.2}})
-        listed = client.get(_SVC).json()["tapi-connectivity:connectivity-context"]
-        assert listed["connectivity-service"][0]["operational-state"] == "ENABLED"
+        listed = client.get(_SVC).json()["tapi-connectivity:connectivity-service"]
+        assert listed[0]["operational-state"] == "ENABLED"
 
 
 class TestAFailedLightpath:

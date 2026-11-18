@@ -148,12 +148,7 @@ class TwinStub:
             return httpx.Response(self.create_status, json=self.create_body)
         if path.endswith("/connectivity-service") and request.method == "GET":
             return httpx.Response(
-                200,
-                json={
-                    "tapi-connectivity:connectivity-context": {
-                        "connectivity-service": self.services
-                    }
-                },
+                200, json={"tapi-connectivity:connectivity-service": self.services}
             )
         if request.method == "DELETE":
             self.deleted.append(path.rsplit("=", 1)[-1])
@@ -596,6 +591,44 @@ def test_onos_created_services_remain_visible_for_resync(client, twin):
     assert [s["uuid"] for s in listed] == ["onos-uuid-1"]
 
 
+def test_onos_reads_the_twins_connectivity_service_list(client, twin, monkeypatch):
+    """The adapter reads the twin's list GET in its standard body and serves
+    ONOS the container ONOS asks for."""
+    monkeypatch.setattr(tapi_adapter, "EXPOSE_TWIN_SERVICES", True)
+    twin.services = [{"uuid": "svc-1"}, {"uuid": "svc-2"}]
+    r = client.get("/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context")
+    assert r.status_code == 200
+    assert r.json() == {
+        "tapi-connectivity:connectivity-context": {"connectivity-service": twin.services}
+    }
+    assert (
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+        "/connectivity-service"
+    ) in twin.paths
+
+
+def test_a_list_body_without_the_list_is_a_bad_gateway(client, twin, monkeypatch):
+    """The container envelope earlier twins sent from the list GET is not read
+    as "no services": ONOS would take that as every service being gone."""
+    monkeypatch.setattr(tapi_adapter, "EXPOSE_TWIN_SERVICES", True)
+    original = twin.handler
+
+    def old_envelope(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/connectivity-service"):
+            return httpx.Response(200, json={
+                "tapi-connectivity:connectivity-context": {
+                    "connectivity-service": [{"uuid": "svc-1"}]
+                }
+            })
+        return original(request)
+
+    client.app.state.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(old_envelope), base_url="http://twin"
+    )
+    r = client.get("/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context")
+    assert r.status_code == 502
+
+
 # --- Runtime modulation switch ---------------------------------------------
 
 
@@ -699,6 +732,22 @@ def test_a_custom_root_is_followed(twin):
     with _client_for(twin) as c:
         assert c.get("/restconf/data/tapi-common:context").status_code == 200
     assert all(p.startswith("/api/data/tapi-common:context/") for p in _twin_paths(twin))
+
+
+def test_a_custom_root_serves_the_service_list(twin, monkeypatch):
+    monkeypatch.setattr(tapi_adapter, "EXPOSE_TWIN_SERVICES", True)
+    twin.restconf_root = "/api"
+    twin.services = [{"uuid": "svc-1"}]
+    with _client_for(twin) as c:
+        r = c.get("/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context")
+    assert r.status_code == 200
+    assert r.json()["tapi-connectivity:connectivity-context"]["connectivity-service"] == [
+        {"uuid": "svc-1"}
+    ]
+    assert (
+        "/api/data/tapi-common:context/tapi-connectivity:connectivity-context"
+        "/connectivity-service"
+    ) in twin.paths
 
 
 def test_a_twin_without_host_meta_is_served_at_data(twin):

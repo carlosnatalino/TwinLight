@@ -37,7 +37,7 @@ For the endpoint catalogue itself see [API.md](API.md).
 |--------|--------|------|
 | **Connectivity context** | ✓ | `GET /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context`, the augment's RESTCONF path; the same section as in the full-context GET |
 | **Create service** | ✓ | `POST .../tapi-connectivity:connectivity-context/connectivity-service` with end-points (SIP refs) and the photonic modulation augment |
-| **List / get service** | ✓ | `GET .../connectivity-service`, `GET .../connectivity-service={uuid}` |
+| **List / get service** | ✓ | `GET .../connectivity-service`, `GET .../connectivity-service={uuid}`. The list GET answers with the list as its one top-level member, `{"tapi-connectivity:connectivity-service": [...]}` (RFC 8040 §4.3, RFC 7951 §4); earlier releases answered with the container's envelope, which the connectivity-context GET still returns |
 | **Replace service** | ✓ | `PUT .../connectivity-service={uuid}` (full replacement; body UUID must match path) |
 | **Update service** | ✓ | `PATCH .../connectivity-service={uuid}` (name, administrative-state, lifecycle-state) |
 | **Delete service** | ✓ | `DELETE .../connectivity-service={uuid}` (204) |

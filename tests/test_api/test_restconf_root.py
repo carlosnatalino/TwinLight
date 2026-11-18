@@ -141,6 +141,7 @@ class TestConfigurableRoot:
         full = client.get(f"{data}/tapi-common:context").json()["tapi-common:context"]
         (svc,) = full["tapi-connectivity:connectivity-context"]["connectivity-service"]
         assert svc["name"] == name
+        assert client.get(f"{data}{_SERVICES}").json() == {_SVC_KEY: [svc]}
         assert client.delete(f"{data}{_SERVICES}={uuid}").status_code == 204
         assert client.get(f"{data}{_SERVICES}={uuid}").status_code == 404
 

@@ -307,10 +307,9 @@ export interface CreateConnectivityServiceResponse {
   "tapi-connectivity:connectivity-service": ConnectivityService;
 }
 
-export interface ConnectivityContextResponse {
-  "tapi-connectivity:connectivity-context": {
-    "connectivity-service": ConnectivityService[];
-  };
+/** GET …/connectivity-context/connectivity-service (RFC 8040 §4.3). */
+export interface ConnectivityServiceListResponse {
+  "tapi-connectivity:connectivity-service": ConnectivityService[];
 }
 
 export interface UpdateConnectivityServiceRequest {

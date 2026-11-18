@@ -132,17 +132,19 @@ class TapiClient:
     # -- TAPI Connectivity ----------------------------------------------------
 
     async def get_connectivity_services(self) -> list[dict[str, Any]]:
-        """Return the list of connectivity services (T-API standard endpoint)."""
+        """Return the list of connectivity services (T-API standard endpoint).
+
+        The list GET answers with the list as its one top-level member
+        (RFC 8040 §4.3); a body without it is an error, not "no services".
+        """
         resp = await self._client.get(
             await self._tapi(
                 f"{self._CONTEXT}/tapi-connectivity:connectivity-context/connectivity-service"
             )
         )
         resp.raise_for_status()
-        body = resp.json()
-        return body.get("tapi-connectivity:connectivity-context", {}).get(
-            "connectivity-service", []
-        )
+        services: list[dict[str, Any]] = resp.json()["tapi-connectivity:connectivity-service"]
+        return services
 
     # -- TAPI Streaming and OAM (TR-548 discovery) ---------------------------
 
