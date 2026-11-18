@@ -15,7 +15,7 @@ from twinlight.streaming.measurement_stream import (
     SUPPORTED_STREAM_TYPE_UUID,
 )
 
-_SC = "/data/tapi-common:context/tapi-streaming:stream-context"
+_SC = "/restconf/data/tapi-common:context/tapi-streaming:stream-context"
 
 # Leaves of tapi-streaming:stream-context in the v2.6.0 YANG
 # (TAPI v2.6.0 YANG/tapi-streaming.tree). Anything outside these sets would
@@ -127,7 +127,7 @@ def test_unknown_entries_are_404(app: TestClient) -> None:
 
 
 def test_in_full_context_and_under_restconf_root(app: TestClient) -> None:
-    full = app.get("/data/tapi-common:context").json()["tapi-common:context"]
+    full = app.get("/restconf/data/tapi-common:context").json()["tapi-common:context"]
     assert full["tapi-streaming:stream-context"] == _context(app)
-    rooted = app.get(f"/restconf{_SC}").json()
+    rooted = app.get(f"{_SC}").json()
     assert rooted["tapi-streaming:stream-context"] == _context(app)

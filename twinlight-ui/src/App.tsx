@@ -2,6 +2,8 @@ import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom";
 import Sidebar from "@/components/layout/Sidebar";
 import Header from "@/components/layout/Header";
 import ConnectionBanner from "@/components/common/ConnectionBanner";
+import TokenPrompt from "@/components/common/TokenPrompt";
+import PageGate from "@/components/layout/PageGate";
 import DashboardPage from "@/pages/DashboardPage";
 import TopologyPage from "@/pages/TopologyPage";
 import MonitoringPage from "@/pages/MonitoringPage";
@@ -25,9 +27,12 @@ function RootLayout() {
         <Header />
         <ConnectionBanner />
         <main className="flex-1 overflow-y-auto">
-          <Outlet />
+          <PageGate>
+            <Outlet />
+          </PageGate>
         </main>
       </div>
+      <TokenPrompt />
     </div>
   );
 }

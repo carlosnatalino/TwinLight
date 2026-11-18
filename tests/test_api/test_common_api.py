@@ -9,40 +9,45 @@ from tests.conftest import MeshRefs, _mesh_config, tapi_end_point
 from twinlight.app import create_app
 from twinlight.models.connectivity import MCG_CSEP_SPEC
 
-_SVC = "/data/tapi-connectivity:connectivity-context/connectivity-service"
-_PATH_COMP_SVC = "/data/tapi-path-computation:path-computation-context/path-comp-service"
+_SVC = (
+    "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+)
+_PATH_COMP_SVC = (
+    "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
+    "/path-comp-service"
+)
 
 
 class TestGetContext:
     def test_returns_200(self, app: TestClient) -> None:
-        resp = app.get("/data/tapi-common:context")
+        resp = app.get("/restconf/data/tapi-common:context")
         assert resp.status_code == 200
 
     def test_has_tapi_context_key(self, app: TestClient) -> None:
-        data = app.get("/data/tapi-common:context").json()
+        data = app.get("/restconf/data/tapi-common:context").json()
         assert "tapi-common:context" in data
 
     def test_context_has_sips(self, app: TestClient) -> None:
-        ctx = app.get("/data/tapi-common:context").json()["tapi-common:context"]
+        ctx = app.get("/restconf/data/tapi-common:context").json()["tapi-common:context"]
         assert "service-interface-point" in ctx
         assert len(ctx["service-interface-point"]) == 2
 
     def test_context_has_topology_context(self, app: TestClient) -> None:
-        ctx = app.get("/data/tapi-common:context").json()["tapi-common:context"]
+        ctx = app.get("/restconf/data/tapi-common:context").json()["tapi-common:context"]
         assert "tapi-topology:topology-context" in ctx
 
     def test_content_type_yang_data(self, app: TestClient) -> None:
-        resp = app.get("/data/tapi-common:context")
+        resp = app.get("/restconf/data/tapi-common:context")
         assert resp.headers["content-type"].startswith("application/yang-data+json")
 
 
 class TestGetSips:
     def test_returns_200(self, app: TestClient) -> None:
-        resp = app.get("/data/tapi-common:context/service-interface-point")
+        resp = app.get("/restconf/data/tapi-common:context/service-interface-point")
         assert resp.status_code == 200
 
     def test_returns_sip_list(self, app: TestClient) -> None:
-        data = app.get("/data/tapi-common:context/service-interface-point").json()
+        data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
         sips = data["tapi-common:context"]["service-interface-point"]
         assert len(sips) == 2
 
@@ -50,44 +55,58 @@ class TestGetSips:
 class TestGetSipByUuid:
     def test_returns_existing_sip(self, app: TestClient) -> None:
         # Get a SIP uuid first
-        data = app.get("/data/tapi-common:context/service-interface-point").json()
+        data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
         sip_uuid = data["tapi-common:context"]["service-interface-point"][0]["uuid"]
-        resp = app.get(f"/data/tapi-common:context/service-interface-point={sip_uuid}")
+        resp = app.get(f"/restconf/data/tapi-common:context/service-interface-point={sip_uuid}")
         assert resp.status_code == 200
 
     def test_404_for_unknown_sip(self, app: TestClient) -> None:
-        resp = app.get("/data/tapi-common:context/service-interface-point=nonexistent")
+        resp = app.get("/restconf/data/tapi-common:context/service-interface-point=nonexistent")
         assert resp.status_code == 404
 
 
 # The full-context GET carries every augment of /tapi-common:context the twin
-# serves. Each section must equal what that module's own GET serves: one
-# row per section, keyed by the module-qualified name (RFC 7951 §4), with the
-# URL whose response carries the same container under the same key.
+# serves. Each section must equal what that module's own GETs serve: rows
+# keyed by the module-qualified name (RFC 7951 §4), each with the URLs whose
+# response carries the same container under the same key: the container's
+# RESTCONF path (RFC 8040 §3.5.3: it is an augment of tapi-common:context)
+# and, for connectivity, the connectivity-service list GET, which answers
+# with the container's envelope.
 _SECTIONS = {
-    "tapi-topology:topology-context":
-        "/data/tapi-common:context/tapi-topology:topology-context",
-    "tapi-connectivity:connectivity-context":
-        "/data/tapi-connectivity:connectivity-context/connectivity-service",
-    "tapi-path-computation:path-computation-context":
-        "/data/tapi-path-computation:path-computation-context",
-    "tapi-equipment:physical-context":
-        "/data/tapi-equipment:physical-context",
-    "tapi-oam:oam-context":
-        "/data/tapi-common:context/tapi-oam:oam-context",
-    "tapi-streaming:stream-context":
-        "/data/tapi-common:context/tapi-streaming:stream-context",
+    "tapi-topology:topology-context": [
+        "/restconf/data/tapi-common:context/tapi-topology:topology-context",
+    ],
+    "tapi-connectivity:connectivity-context": [
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
+        (
+            "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+            "/connectivity-service"
+        ),
+    ],
+    "tapi-path-computation:path-computation-context": [
+        "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context",
+    ],
+    "tapi-equipment:physical-context": [
+        "/restconf/data/tapi-common:context/tapi-equipment:physical-context",
+    ],
+    "tapi-oam:oam-context": [
+        "/restconf/data/tapi-common:context/tapi-oam:oam-context",
+    ],
+    "tapi-streaming:stream-context": [
+        "/restconf/data/tapi-common:context/tapi-streaming:stream-context",
+    ],
 }
+_SECTION_URLS = [(section, url) for section, urls in _SECTIONS.items() for url in urls]
 
 
-def _full_context(app: TestClient, root: str = "") -> dict:
+def _full_context(app: TestClient, root: str = "/restconf") -> dict:
     resp = app.get(f"{root}/data/tapi-common:context")
     assert resp.status_code == 200, resp.text
     return resp.json()["tapi-common:context"]
 
 
-def _per_module(app: TestClient, section: str, root: str = "") -> dict:
-    resp = app.get(f"{root}{_SECTIONS[section]}")
+def _per_module(app: TestClient, section: str, url: str) -> dict:
+    resp = app.get(url)
     assert resp.status_code == 200, resp.text
     return resp.json()[section]
 
@@ -118,28 +137,29 @@ class TestFullContextAugments:
     def test_carries_every_augment(self, app: TestClient) -> None:
         assert set(_SECTIONS) <= set(_full_context(app))
 
-    @pytest.mark.parametrize("section", list(_SECTIONS))
+    @pytest.mark.parametrize(("section", "url"), _SECTION_URLS)
     def test_section_equals_its_module_get_with_nothing_admitted(
-        self, app: TestClient, section: str,
+        self, app: TestClient, section: str, url: str,
     ) -> None:
-        assert _full_context(app)[section] == _per_module(app, section)
+        assert _full_context(app)[section] == _per_module(app, section, url)
 
     @pytest.mark.parametrize("admitted", ["gnpy", "egn"], indirect=True)
-    @pytest.mark.parametrize("section", list(_SECTIONS))
+    @pytest.mark.parametrize(("section", "url"), _SECTION_URLS)
     def test_section_equals_its_module_get_with_services_admitted(
-        self, admitted: TestClient, section: str,
+        self, admitted: TestClient, section: str, url: str,
     ) -> None:
         full = _full_context(admitted)
         assert len(full["tapi-connectivity:connectivity-context"]["connectivity-service"]) == 2
         assert full["tapi-path-computation:path-computation-context"]["path"]
-        assert full[section] == _per_module(admitted, section)
+        assert full[section] == _per_module(admitted, section, url)
 
     @pytest.mark.parametrize("admitted", ["gnpy"], indirect=True)
-    def test_restconf_root_serves_the_same_context(self, admitted: TestClient) -> None:
-        full = _full_context(admitted, root="/restconf")
-        assert full == _full_context(admitted)
-        for section in _SECTIONS:
-            assert full[section] == _per_module(admitted, section, root="/restconf")
+    def test_only_the_restconf_root_serves_the_context(self, admitted: TestClient) -> None:
+        # One path per resource: the bare /data/ mount of earlier releases
+        # is gone, for the full context and for every section.
+        assert admitted.get("/data/tapi-common:context").status_code == 404
+        for _, url in _SECTION_URLS:
+            assert admitted.get(url.removeprefix("/restconf")).status_code == 404, url
 
     @pytest.mark.parametrize("admitted", ["gnpy", "egn"], indirect=True)
     def test_oam_jobs_reference_services_in_the_same_response(

@@ -1,6 +1,6 @@
 """T-API v2.6.0 path computation (``tapi-path-computation``).
 
-GET    /data/tapi-path-computation:path-computation-context
+GET    {root}/data/tapi-common:context/tapi-path-computation:path-computation-context
 GET    …/path-comp-service
 POST   …/path-comp-service
 GET    …/path-comp-service={uuid}
@@ -11,6 +11,9 @@ GET    …/path={uuid}
 v2.6.0 defines no RPCs: a client creates a ``path-comp-service`` and reads the
 computed ``path`` objects it references. The ranked-candidates view with a
 candidate count, which T-API has no leaf for, is ``POST /internal/compute-path``.
+
+``tapi-path-computation`` augments ``/tapi-common:context``, so RFC 8040
+§3.5.3 puts the container under the context.
 """
 
 from __future__ import annotations
@@ -24,9 +27,11 @@ from twinlight.algorithms.path_constraints import ConstraintError
 from twinlight.models.path_computation import PathCompService
 from twinlight.state.context import NoPathError
 
-router = APIRouter(prefix="/data", tags=["tapi-path-computation"])
+#: The container's RESTCONF path: an augment of tapi-common:context, so
+#: module-qualified where the module changes (RFC 8040 §3.5.3).
+PREFIX = "/data/tapi-common:context/tapi-path-computation:path-computation-context"
 
-_BASE = "/tapi-path-computation:path-computation-context"
+router = APIRouter(prefix=PREFIX, tags=["tapi-path-computation"])
 _SERVICE_KEY = "tapi-path-computation:path-comp-service"
 _PATH_KEY = "tapi-path-computation:path"
 
@@ -74,7 +79,7 @@ def path_computation_context_payload(ctx) -> dict[str, Any]:
     }
 
 
-@router.get(_BASE)
+@router.get("")
 async def get_path_computation_context(request: Request) -> dict:
     """The whole path-computation context: services and computed paths."""
     return {
@@ -84,13 +89,13 @@ async def get_path_computation_context(request: Request) -> dict:
     }
 
 
-@router.get(f"{_BASE}/path-comp-service")
+@router.get("/path-comp-service")
 async def get_path_comp_services(request: Request) -> dict:
     ctx = request.app.state.context
     return {_SERVICE_KEY: [_dump(s) for s in ctx.get_path_comp_services()]}
 
 
-@router.post(f"{_BASE}/path-comp-service", status_code=status.HTTP_201_CREATED)
+@router.post("/path-comp-service", status_code=status.HTTP_201_CREATED)
 async def create_path_comp_service(body: dict, request: Request) -> dict:
     """Create a path-comp-service; its ``path`` list holds the computed routes.
 
@@ -121,7 +126,7 @@ async def create_path_comp_service(body: dict, request: Request) -> dict:
     return {_SERVICE_KEY: _dump(service)}
 
 
-@router.get(f"{_BASE}/path-comp-service={{uuid}}")
+@router.get("/path-comp-service={uuid}")
 async def get_path_comp_service(uuid: str, request: Request) -> dict:
     service = request.app.state.context.get_path_comp_service(uuid)
     if service is None:
@@ -130,7 +135,7 @@ async def get_path_comp_service(uuid: str, request: Request) -> dict:
 
 
 @router.delete(
-    f"{_BASE}/path-comp-service={{uuid}}",
+    "/path-comp-service={uuid}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_path_comp_service(uuid: str, request: Request) -> None:
@@ -139,12 +144,12 @@ async def delete_path_comp_service(uuid: str, request: Request) -> None:
         raise HTTPException(status_code=404, detail=f"path-comp-service {uuid} not found")
 
 
-@router.get(f"{_BASE}/path")
+@router.get("/path")
 async def get_paths(request: Request) -> dict:
     return {_PATH_KEY: request.app.state.context.get_paths()}
 
 
-@router.get(f"{_BASE}/path={{uuid}}")
+@router.get("/path={uuid}")
 async def get_path(uuid: str, request: Request) -> dict:
     path = request.app.state.context.get_path(uuid)
     if path is None:

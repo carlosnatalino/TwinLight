@@ -1,9 +1,10 @@
-"""The RFC 8040 RESTCONF root and its discovery document.
+"""The RFC 8040 RESTCONF root, its discovery document, and the one T-API mount.
 
 RFC 8040 §3.1 locates the API under a root resource that a client finds via
 ``/.well-known/host-meta`` rather than by assuming a path. TwinLight serves
-the T-API modules under that root *and* at the bare ``/data/`` they have
-always been at, so clients written against earlier releases keep working.
+the T-API modules under ``{server.restconf_root}/data/…`` and nowhere else:
+the bare ``/data/…`` that earlier releases also served is gone, unless the
+root itself is empty, in which case ``/data/…`` *is* the data resource.
 """
 
 from __future__ import annotations
@@ -11,35 +12,64 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import tapi_end_point
 from twinlight.app import create_app
 from twinlight.config import GnpyConfig, ServerConfig, TwinConfig
 
 _RESOURCE = "/tapi-common:context/service-interface-point"
 
+#: One GET per T-API module, relative to the data resource.
+MODULE_GETS = [
+    "/tapi-common:context",
+    "/tapi-common:context/service-interface-point",
+    "/tapi-common:context/tapi-topology:topology-context",
+    "/tapi-common:context/tapi-connectivity:connectivity-context",
+    "/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
+    "/tapi-common:context/tapi-path-computation:path-computation-context",
+    "/tapi-common:context/tapi-equipment:physical-context",
+    "/tapi-common:context/tapi-oam:oam-context",
+    "/tapi-common:context/tapi-oam:oam-context/oam-job",
+    "/tapi-common:context/tapi-streaming:stream-context",
+]
 
-class TestBothMountsAgree:
-    def test_same_resource_at_both_paths(self, app: TestClient) -> None:
-        bare = app.get(f"/data{_RESOURCE}")
-        rooted = app.get(f"/restconf/data{_RESOURCE}")
-        assert bare.status_code == rooted.status_code == 200
-        assert bare.json() == rooted.json()
+_SVC_KEY = "tapi-connectivity:connectivity-service"
+_SERVICES = "/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 
-    def test_restconf_media_type_on_both(self, app: TestClient) -> None:
-        """A rooted response with application/json would be the gap itself.
 
-        The content-type middleware originally matched only "/data/", so
-        this is the assertion that catches it regressing.
-        """
-        for path in (f"/data{_RESOURCE}", f"/restconf/data{_RESOURCE}"):
-            resp = app.get(path)
-            assert resp.headers["content-type"].startswith(
-                "application/yang-data+json"
-            ), path
+def _with_root(twin_config: TwinConfig, root: str) -> TestClient:
+    twin_config.server.restconf_root = root
+    return TestClient(create_app(twin_config))
+
+
+class TestOneMount:
+    @pytest.mark.parametrize("path", MODULE_GETS)
+    def test_served_under_the_root(self, app: TestClient, path: str) -> None:
+        resp = app.get(f"/restconf/data{path}")
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("application/yang-data+json")
+
+    @pytest.mark.parametrize("path", MODULE_GETS)
+    def test_the_bare_mount_is_gone(self, app: TestClient, path: str) -> None:
+        resp = app.get(f"/data{path}")
+        assert resp.status_code == 404
+        (error,) = resp.json()["ietf-restconf:errors"]["error"]
+        assert error["error-message"] == "Not Found"  # no route, not a missing entry
+
+    def test_the_bare_mount_takes_no_writes(self, app: TestClient) -> None:
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
+            resp = app.request(method, f"/data{_SERVICES}=x", json={})
+            assert resp.status_code == 404, method
+
+    def test_openapi_documents_t_api_under_the_root_only(self, app: TestClient) -> None:
+        paths = app.get("/openapi.json").json()["paths"]
+        t_api = [p for p in paths if "tapi-" in p]
+        assert len(t_api) > 20
+        assert all(p.startswith("/restconf/data/tapi-common:context") for p in t_api), t_api
 
     def test_percent_encoded_colon_works_under_the_root(
         self, app: TestClient
     ) -> None:
-        """PathDecodeMiddleware runs before routing, so it covers both."""
+        """PathDecodeMiddleware runs before routing."""
         resp = app.get(
             "/restconf/data/tapi-common%3Acontext/service-interface-point"
         )
@@ -73,22 +103,60 @@ class TestRootResource:
 
 
 class TestConfigurableRoot:
-    def test_custom_root(self, twin_config: TwinConfig) -> None:
-        twin_config.server.restconf_root = "/rc"
-        client = TestClient(create_app(twin_config))
-        assert client.get(f"/rc/data{_RESOURCE}").status_code == 200
-        assert client.get("/rc/yang-library-version").status_code == 200
-        assert "href='/rc'" in client.get("/.well-known/host-meta").text
-        # The bare mount is unconditional.
-        assert client.get(f"/data{_RESOURCE}").status_code == 200
+    @pytest.mark.parametrize("path", MODULE_GETS)
+    def test_custom_root(self, twin_config: TwinConfig, path: str) -> None:
+        client = _with_root(twin_config, "/api")
+        resp = client.get(f"/api/data{path}")
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("application/yang-data+json")
+        # Only there: not at the default root, not bare.
+        assert client.get(f"/restconf/data{path}").status_code == 404
+        assert client.get(f"/data{path}").status_code == 404
 
-    def test_empty_root_serves_only_bare_paths(
-        self, twin_config: TwinConfig
+    def test_custom_root_is_advertised_and_documented(self, twin_config: TwinConfig) -> None:
+        client = _with_root(twin_config, "/api")
+        assert "href='/api'" in client.get("/.well-known/host-meta").text
+        assert client.get("/api/yang-library-version").status_code == 200
+        paths = client.get("/openapi.json").json()["paths"]
+        t_api = [p for p in paths if "tapi-" in p]
+        assert t_api and all(p.startswith("/api/data/") for p in t_api)
+
+    @pytest.mark.parametrize("root", ["/api", ""])
+    def test_services_are_managed_under_any_root(
+        self, twin_config: TwinConfig, root: str
     ) -> None:
-        twin_config.server.restconf_root = ""
-        client = TestClient(create_app(twin_config))
-        assert client.get(f"/data{_RESOURCE}").status_code == 200
-        assert client.get(f"/restconf/data{_RESOURCE}").status_code == 404
+        client = _with_root(twin_config, root)
+        data = f"{root}/data"
+        sips = client.get(f"{data}{_RESOURCE}").json()["tapi-common:context"][
+            "service-interface-point"
+        ]
+        body = {_SVC_KEY: {"end-point": [
+            tapi_end_point("a", sips[0]["uuid"]), tapi_end_point("z", sips[1]["uuid"]),
+        ]}}
+        resp = client.post(f"{data}{_SERVICES}", json=body)
+        assert resp.status_code == 201, resp.text
+        uuid = resp.json()[_SVC_KEY]["uuid"]
+        name = [{"value-name": "service-name", "value": "renamed"}]
+        assert client.patch(f"{data}{_SERVICES}={uuid}", json={"name": name}).status_code == 200
+        full = client.get(f"{data}/tapi-common:context").json()["tapi-common:context"]
+        (svc,) = full["tapi-connectivity:connectivity-context"]["connectivity-service"]
+        assert svc["name"] == name
+        assert client.delete(f"{data}{_SERVICES}={uuid}").status_code == 204
+        assert client.get(f"{data}{_SERVICES}={uuid}").status_code == 404
+
+    @pytest.mark.parametrize("path", MODULE_GETS)
+    def test_empty_root_serves_the_data_resource_at_data(
+        self, twin_config: TwinConfig, path: str
+    ) -> None:
+        client = _with_root(twin_config, "")
+        resp = client.get(f"/data{path}")
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("application/yang-data+json")
+        assert client.get(f"/restconf/data{path}").status_code == 404
+
+    def test_empty_root_serves_no_host_meta(self, twin_config: TwinConfig) -> None:
+        # Clients read the 404 as "T-API is at /data" (twinlight_client.restconf).
+        client = _with_root(twin_config, "")
         assert client.get("/.well-known/host-meta").status_code == 404
 
     @pytest.mark.parametrize("root", ["restconf", "no/leading/slash"])

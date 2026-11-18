@@ -47,10 +47,10 @@ class Twin:
 
     async def add_service(self) -> str:
         sips = (await self.rest.get(
-            "/data/tapi-common:context/service-interface-point"
+            "/restconf/data/tapi-common:context/service-interface-point"
         )).json()["tapi-common:context"]["service-interface-point"]
         resp = await self.rest.post(
-            "/data/tapi-connectivity:connectivity-context/connectivity-service",
+            "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
             json={"tapi-connectivity:connectivity-service": {"end-point": [
                 tapi_end_point("a", sips[0]["uuid"]), tapi_end_point("z", sips[1]["uuid"]),
             ]}},

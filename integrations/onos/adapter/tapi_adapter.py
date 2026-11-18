@@ -7,8 +7,9 @@ version adapter between the two. It is deliberately *not* part of
 T-API modules implement only the standard (CONTRIBUTING.md, "T-API surfaces
 stay standard").
 
-Both now sit under an RFC 8040 RESTCONF root, so the root itself is no longer
-one of the differences -- see ``TWIN_DATA_ROOT``.
+Both sit under an RFC 8040 RESTCONF root, so the root itself is not one of
+the differences: the adapter reads the twin's from its host-meta -- see
+``_twin_data``.
 
 Everything here is driven by what the ONOS driver source actually does, not by
 what the T-API specification says it should do. The four behaviours that matter:
@@ -61,8 +62,10 @@ import logging
 import os
 import re
 import time
+import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -76,11 +79,13 @@ log = logging.getLogger("tapi-adapter")
 
 TWIN_BASE_URL = os.getenv("TWIN_BASE_URL", "http://twin:8080").rstrip("/")
 
-# Where the twin serves its T-API data resources. It now mounts them under an
-# RFC 8040 root (default /restconf) as well as the bare /data/ it has always
-# used, so this adapter asks at the canonical location. Override with
-# TWIN_DATA_ROOT=/data to talk to a twin predating that change.
-TWIN_DATA_ROOT = os.getenv("TWIN_DATA_ROOT", "/restconf/data").rstrip("/")
+# Where the twin serves its T-API data resources: {root}/data, under the
+# RESTCONF root it advertises at /.well-known/host-meta (RFC 8040 §3.1),
+# /restconf by default but configurable. Unset, the adapter discovers it on
+# its first call to the twin (see _twin_data). Set it (e.g.
+# TWIN_DATA_ROOT=/restconf/data) to pin it and skip discovery.
+TWIN_DATA_ROOT = os.getenv("TWIN_DATA_ROOT", "").rstrip("/") or None
+_data_root: str | None = TWIN_DATA_ROOT
 
 # Modulation format the adapter requests when ONOS asks for a lightpath. ONOS's
 # TAPI 2.1 connectivity request has nowhere to carry one, so it is adapter
@@ -330,6 +335,41 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 
 
+def _parse_host_meta(xrd: str) -> str:
+    """The ``restconf`` link of the twin's RFC 6415 host-meta, or ""."""
+    for link in ET.fromstring(xrd).iter("{http://docs.oasis-open.org/ns/xri/xrd-1.0}Link"):
+        if link.get("rel") == "restconf":
+            href = link.get("href", "")
+            return (urlsplit(href).path if urlsplit(href).scheme else href).rstrip("/")
+    return ""
+
+
+async def _twin_data(request: Request) -> str:
+    """The twin's data resource, ``{root}/data``, discovered once.
+
+    A twin without host-meta (404) runs with an empty root, or predates it,
+    and serves T-API at /data. Any other failure is the twin being
+    unavailable, and is not cached, so the next call retries.
+    """
+    global _data_root
+    if _data_root is None:
+        try:
+            response = await request.app.state.client.get("/.well-known/host-meta")
+        except httpx.HTTPError as exc:
+            raise TwinUnavailableError(f"GET /.well-known/host-meta: {exc}") from exc
+        if response.status_code == 404:
+            root = ""
+        elif response.status_code >= 400:
+            raise TwinUnavailableError(
+                f"GET /.well-known/host-meta: HTTP {response.status_code}"
+            )
+        else:
+            root = _parse_host_meta(response.text)
+        _data_root = f"{root}/data"
+        log.info("Twin T-API data resource: %s", _data_root)
+    return _data_root
+
+
 async def _twin_get(request: Request, path: str) -> Any:
     try:
         response = await request.app.state.client.get(path)
@@ -342,7 +382,7 @@ async def _twin_get(request: Request, path: str) -> Any:
 
 async def _list_sips(request: Request) -> list[dict[str, Any]]:
     payload = await _twin_get(
-        request, f"{TWIN_DATA_ROOT}/tapi-common:context/service-interface-point"
+        request, f"{await _twin_data(request)}/tapi-common:context/service-interface-point"
     )
     return payload.get("tapi-common:context", {}).get("service-interface-point", [])
 
@@ -531,7 +571,8 @@ async def get_connectivity_context(request: Request) -> JSONResponse:
     try:
         payload = await _twin_get(
             request,
-            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{await _twin_data(request)}/tapi-common:context"
+            "/tapi-connectivity:connectivity-context/connectivity-service",
         )
     except TwinUnavailableError as exc:
         raise HTTPException(
@@ -641,10 +682,11 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
 
     try:
         response = await request.app.state.client.post(
-            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{await _twin_data(request)}/tapi-common:context"
+            "/tapi-connectivity:connectivity-context/connectivity-service",
             json=twin_body,
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, TwinUnavailableError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         ) from exc
@@ -697,10 +739,10 @@ async def delete_connectivity_service(uuid: str, request: Request) -> Response:
     """Delete a lightpath. ONOS treats only 204 as success."""
     try:
         response = await request.app.state.client.delete(
-            f"{TWIN_DATA_ROOT}/tapi-connectivity:connectivity-context"
-            f"/connectivity-service={uuid}"
+            f"{await _twin_data(request)}/tapi-common:context"
+            f"/tapi-connectivity:connectivity-context/connectivity-service={uuid}"
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, TwinUnavailableError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         ) from exc

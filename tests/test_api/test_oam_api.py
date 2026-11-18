@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 from tests.conftest import tapi_end_point
 from twinlight.models.oam import oam_job_uuid
 
-_CONN = "/data/tapi-connectivity:connectivity-context/connectivity-service"
-_OAM = "/data/tapi-common:context/tapi-oam:oam-context"
+_CONN = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_OAM = "/restconf/data/tapi-common:context/tapi-oam:oam-context"
 
 # Every leaf of tapi-oam:oam-context/oam-job in the v2.6.0 YANG
 # (TAPI v2.6.0 YANG/tapi-oam.tree). A key outside this set would be a
@@ -33,7 +33,7 @@ TAPI_DATE_AND_TIME = re.compile(r"^\d{14}\.\dZ$")
 
 
 def _sips(app: TestClient) -> list[str]:
-    data = app.get("/data/tapi-common:context/service-interface-point").json()
+    data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
     return [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
 
 
@@ -163,11 +163,11 @@ class TestYangConformance:
     def test_full_context_and_restconf_root(self, app: TestClient) -> None:
         sip_a, sip_z = _sips(app)[:2]
         svc_uuid = create_service(app, sip_a, sip_z)
-        ctx = app.get("/data/tapi-common:context").json()["tapi-common:context"]
+        ctx = app.get("/restconf/data/tapi-common:context").json()["tapi-common:context"]
         assert [j["uuid"] for j in ctx["tapi-oam:oam-context"]["oam-job"]] == [
             oam_job_uuid(svc_uuid)
         ]
-        rooted = app.get(f"/restconf{_OAM}/oam-job").json()
+        rooted = app.get(f"{_OAM}/oam-job").json()
         assert rooted == {"tapi-oam:oam-job": _jobs(app)}
 
 

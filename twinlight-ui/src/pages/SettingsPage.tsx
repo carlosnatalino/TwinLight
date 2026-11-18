@@ -176,7 +176,9 @@ export default function SettingsPage() {
             Needed when the DT sets{" "}
             <code className="bg-gray-100 px-1 rounded">TWINLIGHT_API_TOKENS</code>. Sent as{" "}
             <code className="bg-gray-100 px-1 rounded">Authorization: Bearer …</code> on every
-            request and kept in this browser&apos;s local storage.
+            request. Kept in this browser tab&apos;s session storage only, until the tab or
+            browser is closed; the UI asks for it when the DT needs one. Save an empty field
+            to forget it.
           </p>
           {tokenMessage && (
             <p className="mt-1.5 text-sm text-green-600 flex items-center gap-1">

@@ -35,6 +35,9 @@
 
 . "$(dirname "$0")/lib.sh"
 
+# Where the twin serves T-API, read once from its host-meta.
+TWIN_DATA="$(twin_data)"
+
 require_stack
 
 onos_port_count() {
@@ -57,7 +60,7 @@ print(len([f for f in json.load(sys.stdin).get('flows', [])
 }
 
 twin_service_count() {
-  curl -sS "${TWIN_URL}/data/tapi-connectivity:connectivity-context/connectivity-service" \
+  curl -sS "${TWIN_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service" \
     | python3 -c "
 import json, sys
 print(len(json.load(sys.stdin)['tapi-connectivity:connectivity-context']['connectivity-service']))

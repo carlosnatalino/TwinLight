@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-_BASE = "/data/tapi-equipment:physical-context"
+_BASE = "/restconf/data/tapi-common:context/tapi-equipment:physical-context"
 _DEVICE_KEYS = {"uuid", "name", "equipment"}
 _EQUIPMENT_KEYS = {"uuid", "name", "actual-equipment"}
 
@@ -42,7 +42,7 @@ class TestPhysicalContext:
         assert props["equipment-type-identifier"]  # the GNPy type_variety
 
     def test_old_equipment_context_is_gone(self, app: TestClient) -> None:
-        assert app.get("/data/tapi-equipment:equipment-context").status_code == 404
+        assert app.get("/restconf/data/tapi-equipment:equipment-context").status_code == 404
 
 
 class TestLookups:

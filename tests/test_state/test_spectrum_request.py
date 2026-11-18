@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import MeshRefs, tapi_end_point
 from twinlight.models.connectivity import MCG_CSEP_SPEC, OTSIA_CSEP_SPEC
 
-_SVC = "/data/tapi-connectivity:connectivity-context/connectivity-service"
+_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 GRID_LOWER = 190_696_875_000_000   # 193.1 THz - 384.5 x 6.25 GHz
 SLOT = 6_250_000_000
 WIDTH = 9                          # 8 slots (50 GHz) + 1 guard
@@ -83,7 +83,7 @@ class TestFirstFitInsideTheAmplifierBand:
         assert mask.argmax() == FIRST_IN_BAND
 
     def test_without_physics_the_whole_grid_is_assignable(self, app: TestClient) -> None:
-        data = app.get("/data/tapi-common:context/service-interface-point").json()
+        data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
         sips = [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
         resp = app.post(_SVC, json=_body(sips[0], sips[1]))
         (lower, _), _ = _assigned(resp.json()["tapi-connectivity:connectivity-service"])

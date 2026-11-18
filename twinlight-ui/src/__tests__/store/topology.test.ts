@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { withHostMeta } from "../helpers/hostMeta";
 import { useTopologyStore } from "@/store/topology";
 import { cacheRead, CACHE_KEYS } from "@/lib/cache";
 
 const mockFetch = vi.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-(globalThis as any).fetch = mockFetch;
+(globalThis as any).fetch = withHostMeta(mockFetch);
 
 const topology = { uuid: "topo-1", node: [{ uuid: "node-1" }], link: [] };
 const sip = { uuid: "sip-1" };

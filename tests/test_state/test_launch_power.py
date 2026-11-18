@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import MeshRefs, tapi_end_point
 from twinlight.models.connectivity import OTSIA_CSEP_SPEC, ConnectivityService
 
-_SVC = "/data/tapi-connectivity:connectivity-context/connectivity-service"
+_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 
 
 def _body(sip_a: str, sip_z: str, power=None) -> dict:

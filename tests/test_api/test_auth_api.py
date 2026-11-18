@@ -69,7 +69,7 @@ class TestRejection:
     @pytest.mark.parametrize(
         ("method", "path"),
         [
-            ("GET", "/data/tapi-common:context"),
+            ("GET", "/restconf/data/tapi-common:context"),
             ("GET", "/restconf"),
             ("GET", "/internal/opm"),
             ("GET", "/internal/whoami"),
@@ -80,32 +80,49 @@ class TestRejection:
             ("GET", "/redoc"),
             ("GET", "/openapi.json"),
             ("GET", "/transparent/data"),
-            ("GET", "/data/tapi-common:context/tapi-streaming:stream-context"),
-            ("GET", "/data/tapi-common:context/tapi-oam:oam-context"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-streaming:stream-context"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-oam:oam-context"),
             ("POST", "/admin/snapshot"),
             ("POST", "/config/parameters"),
             ("DELETE", (
-                "/data/tapi-connectivity:connectivity-context"
+                "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
                 "/connectivity-service=x"
             )),
             ("PUT", (
-                "/data/tapi-connectivity:connectivity-context"
+                "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
                 "/connectivity-service=x"
             )),
             # Path computation, inventory and the ranked-candidates endpoint.
             ("POST", "/internal/compute-path"),
             ("GET", "/internal/path-info"),
             ("GET", (
-                "/data/tapi-path-computation:path-computation-context"
+                "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
                 "/path-comp-service"
             )),
             ("POST", (
-                "/data/tapi-path-computation:path-computation-context"
+                "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
                 "/path-comp-service"
             )),
-            ("GET", "/data/tapi-path-computation:path-computation-context/path"),
-            ("GET", "/data/tapi-equipment:physical-context/device"),
-            ("GET", "/data/tapi-equipment:physical-context/physical-span"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/path"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-equipment:physical-context/device"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-equipment:physical-context/physical-span"),
+            ("GET", "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"),
+            ("POST", (
+                "/restconf/data/tapi-common:context"
+                "/tapi-connectivity:connectivity-context/connectivity-service"
+            )),
+            ("PATCH", (
+                "/restconf/data/tapi-common:context"
+                "/tapi-connectivity:connectivity-context/connectivity-service=x"
+            )),
+            ("DELETE", (
+                "/restconf/data/tapi-common:context"
+                "/tapi-path-computation:path-computation-context/path-comp-service=x"
+            )),
+            ("GET", (
+                "/restconf/data/tapi-common:context"
+                "/tapi-equipment:physical-context/device=x/equipment=y"
+            )),
             # Unknown paths too: a 404 would map the API for an anonymous probe.
             ("GET", "/no/such/route"),
             # Exact matches only.
@@ -132,6 +149,37 @@ class TestRejection:
                 assert resp.status_code == 401, (method, route)
                 checked += 1
         assert checked > 50  # the walk did reach the API
+
+    def test_the_removed_bare_mount_is_401_then_404(
+        self, secured: TestClient
+    ) -> None:
+        """The bare /data/ mount is gone. A request there is denied without a
+        token like any path (no route map for an anonymous probe), and is
+        404 with one: checked for every documented T-API operation."""
+        checked = 0
+        for route, operations in secured.app.openapi()["paths"].items():
+            if not route.startswith("/restconf/data/"):
+                continue
+            bare = route.replace("{", "").replace("}", "").removeprefix("/restconf")
+            for method in operations:
+                assert secured.request(method.upper(), bare).status_code == 401, (method, bare)
+                resp = secured.request(method.upper(), bare, headers=_bearer(UI))
+                assert resp.status_code == 404, (method, bare)
+                checked += 1
+        assert checked > 20
+
+    @pytest.mark.parametrize("root", ["", "/restconf"])
+    @pytest.mark.parametrize("container", [
+        "tapi-connectivity:connectivity-context",
+        "tapi-path-computation:path-computation-context",
+        "tapi-equipment:physical-context",
+    ])
+    def test_the_removed_short_context_paths_are_401_then_404(
+        self, secured: TestClient, root: str, container: str
+    ) -> None:
+        # Deny by default: no token, no route map — even for a path that is gone.
+        assert secured.get(f"{root}/data/{container}").status_code == 401
+        assert secured.get(f"{root}/data/{container}", headers=_bearer(UI)).status_code == 404
 
     def test_a_rejected_request_has_no_side_effect(
         self, secured: TestClient

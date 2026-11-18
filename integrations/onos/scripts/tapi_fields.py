@@ -1,4 +1,5 @@
-"""Read T-API v2.6.0 connectivity-service fields that live on the end-point.
+"""Read T-API v2.6.0 connectivity-service fields that live on the end-point,
+and find where the twin serves T-API (``twin_data_root``).
 
 ``tapi-connectivity`` has no leaf for either modulation or assigned spectrum.
 The photonic module augments the end-point's ``layer-protocol-constraint``
@@ -66,3 +67,33 @@ def spectrum_of(service: dict) -> tuple[float, float] | None:
             if lower and upper:
                 return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
     return None
+
+
+def twin_data_root(base: str) -> str:
+    """The twin's T-API data resource, ``{root}/data``, as a full URL.
+
+    The root comes from ``/.well-known/host-meta`` (RFC 8040 §3.1): it is
+    ``/restconf`` by default but configurable, so the scripts do not assume
+    it. A twin without host-meta (404) runs with an empty root, or predates
+    it, and serves T-API at ``/data``.
+    """
+    import urllib.error
+    import urllib.request
+    import xml.etree.ElementTree as ET
+    from urllib.parse import urlsplit
+
+    base = base.rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base}/.well-known/host-meta", timeout=30) as resp:
+            xrd = resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+        return f"{base}/data"
+    root = ""
+    for link in ET.fromstring(xrd).iter("{http://docs.oasis-open.org/ns/xri/xrd-1.0}Link"):
+        if link.get("rel") == "restconf":
+            href = link.get("href", "")
+            root = (urlsplit(href).path if urlsplit(href).scheme else href).rstrip("/")
+            break
+    return f"{base}{root}/data"

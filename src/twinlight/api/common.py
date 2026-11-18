@@ -1,8 +1,11 @@
 """TAPI Common API endpoints.
 
-GET /data/tapi-common:context
-GET /data/tapi-common:context/service-interface-point
-GET /data/tapi-common:context/service-interface-point={uuid}
+GET {root}/data/tapi-common:context
+GET {root}/data/tapi-common:context/service-interface-point
+GET {root}/data/tapi-common:context/service-interface-point={uuid}
+
+``{root}`` is ``server.restconf_root`` (``/restconf`` by default): app.py
+mounts every T-API router under it, and only there.
 """
 
 from __future__ import annotations

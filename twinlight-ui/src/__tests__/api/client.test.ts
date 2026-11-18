@@ -1,15 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { hostMetaResponse, withHostMeta, xrd } from "../helpers/hostMeta";
 import {
   TapiApiClient,
   ApiError,
   NetworkError,
   isAuthError,
   setTokenProvider,
+  createClient,
+  parseRestconfRoot,
+  resetRestconfRoots,
 } from "@/api/client";
 
 const mockFetch = vi.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-(globalThis as any).fetch = mockFetch;
+(globalThis as any).fetch = withHostMeta(mockFetch);
 
 function makeResponse(body: unknown, status = 200) {
   return {
@@ -158,5 +162,122 @@ describe("TapiApiClient authentication", () => {
     expect(isAuthError(new ApiError(403, "x"))).toBe(true);
     expect(isAuthError(new ApiError(404, "x"))).toBe(false);
     expect(isAuthError(new NetworkError("x"))).toBe(false);
+  });
+});
+
+describe("RESTCONF root discovery", () => {
+  // Every request, host-meta included, with the answer the test sets per URL.
+  const calls: { url: string; init?: RequestInit }[] = [];
+  let hostMeta: () => unknown;
+
+  beforeEach(() => {
+    calls.length = 0;
+    resetRestconfRoots();
+    hostMeta = () => hostMetaResponse("/restconf");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).fetch = (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return Promise.resolve(
+        url.endsWith("/.well-known/host-meta") ? hostMeta() : makeResponse({})
+      );
+    };
+  });
+
+  afterEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).fetch = withHostMeta(mockFetch);
+    setTokenProvider(() => undefined);
+  });
+
+  const urls = () => calls.map((c) => c.url);
+  const CONTEXT = "/data/tapi-common:context";
+
+  it("addresses T-API under the advertised root", async () => {
+    await new TapiApiClient("http://dt").getContext();
+    expect(urls()).toEqual([
+      "http://dt/.well-known/host-meta",
+      `http://dt/restconf${CONTEXT}`,
+    ]);
+  });
+
+  it("follows a root other than /restconf", async () => {
+    hostMeta = () => hostMetaResponse("/api");
+    await new TapiApiClient("http://dt").getServices();
+    expect(urls()[1]).toBe(
+      "http://dt/api/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+    );
+  });
+
+  it("asks once per base URL, across calls and clients", async () => {
+    await createClient("http://dt").getContext();
+    await createClient("http://dt").getPhysicalContext();
+    await createClient("http://dt").deleteService("svc-1");
+    await createClient("http://other").getContext();
+    expect(urls().filter((u) => u.endsWith("/.well-known/host-meta"))).toEqual([
+      "http://dt/.well-known/host-meta",
+      "http://other/.well-known/host-meta",
+    ]);
+    expect(urls()).toContain(
+      "http://dt/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=svc-1"
+    );
+  });
+
+  it("sends the token to host-meta, which needs one on a secured twin", async () => {
+    await new TapiApiClient("http://dt", "tok-123").getContext();
+    const headers = calls[0].init?.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer tok-123");
+  });
+
+  it("uses /data when the twin serves no host-meta", async () => {
+    hostMeta = () => makeResponse({}, 404);
+    await new TapiApiClient("http://dt").getContext();
+    expect(urls()[1]).toBe(`http://dt${CONTEXT}`);
+  });
+
+  it("reports a rejected token and retries discovery on the next call", async () => {
+    hostMeta = () => makeResponse({}, 401);
+    const err = await new TapiApiClient("http://dt").getContext().catch((e) => e);
+    expect(isAuthError(err)).toBe(true);
+    expect(urls()).toEqual(["http://dt/.well-known/host-meta"]);
+
+    hostMeta = () => hostMetaResponse("/restconf");
+    await new TapiApiClient("http://dt", "tok").getContext();
+    expect(urls().slice(1)).toEqual([
+      "http://dt/.well-known/host-meta",
+      `http://dt/restconf${CONTEXT}`,
+    ]);
+  });
+
+  it("leaves the non-T-API endpoints where they are", async () => {
+    const c = new TapiApiClient("http://dt");
+    await c.health();
+    await c.whoami();
+    await c.getAllOpm();
+    await c.getElementList();
+    expect(urls()).toEqual([
+      "http://dt/health",
+      "http://dt/internal/whoami",
+      "http://dt/internal/opm",
+      "http://dt/transparent/data/ElementList",
+    ]);
+  });
+});
+
+describe("parseRestconfRoot", () => {
+  it("reads the restconf link", () => {
+    expect(parseRestconfRoot(xrd("/restconf"))).toBe("/restconf");
+    expect(parseRestconfRoot(xrd("/api/"))).toBe("/api");
+  });
+
+  it("reduces an absolute href to its path", () => {
+    expect(parseRestconfRoot(xrd("http://twin:8080/top/restconf"))).toBe("/top/restconf");
+  });
+
+  it("accepts either attribute order and quote style", () => {
+    expect(parseRestconfRoot('<XRD><Link href="/rc" rel="restconf"/></XRD>')).toBe("/rc");
+  });
+
+  it("ignores other links and treats no restconf link as the server root", () => {
+    expect(parseRestconfRoot("<XRD><Link rel='lrdd' href='/x'/></XRD>")).toBe("");
   });
 });

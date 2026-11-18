@@ -66,7 +66,7 @@ async def take(it: AsyncIterator[MeasurementRecord], n: int) -> list[Measurement
 
 def test_select_stream_from_the_twins_stream_context(app: TestClient) -> None:
     ctx = app.get(
-        "/data/tapi-common:context/tapi-streaming:stream-context"
+        "/restconf/data/tapi-common:context/tapi-streaming:stream-context"
     ).json()["tapi-streaming:stream-context"]
     endpoint = select_stream(ctx)
     assert endpoint.uuid == ctx["available-stream"][0]["uuid"]
@@ -75,7 +75,7 @@ def test_select_stream_from_the_twins_stream_context(app: TestClient) -> None:
 
 def test_select_stream_rejects_other_stream_types(app: TestClient) -> None:
     ctx = app.get(
-        "/data/tapi-common:context/tapi-streaming:stream-context"
+        "/restconf/data/tapi-common:context/tapi-streaming:stream-context"
     ).json()["tapi-streaming:stream-context"]
     ctx["supported-stream-type"][0]["log-storage-strategy"] = (
         "tapi-streaming:LOG_STORAGE_STRATEGY_COMPACTED"

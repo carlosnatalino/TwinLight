@@ -9,15 +9,24 @@ import { usePolling } from "./usePolling";
  * /health is public even on a twin that requires a token, so reachability
  * alone says nothing about the token. Each check therefore also asks
  * /internal/whoami, which only a request with an accepted token gets past.
+ * That 401 is the one signal that a token is needed: it opens the token
+ * prompt (unless the user dismissed it for this twin and token). A twin
+ * with authentication off answers whoami with "disabled" and never prompts.
+ *
+ * The first check settling marks the UI ready: pages load after it, so the
+ * RESTCONF root (whose host-meta needs the token on a protected twin) is
+ * discovered only once a token, if needed, is in hand.
  *
  * Reads the store when called rather than closing over it, so Settings can
  * run a check the moment a new token is saved instead of waiting for the
  * next poll.
  */
 export async function checkConnection(): Promise<void> {
-  const { baseUrl, setStatus, setLastSuccess } = useConnectionStore.getState();
+  const { baseUrl, setStatus, setLastSuccess, setReady, requestToken } =
+    useConnectionStore.getState();
   if (!baseUrl) {
     setStatus("disconnected");
+    setReady();
     return;
   }
   try {
@@ -29,6 +38,7 @@ export async function checkConnection(): Promise<void> {
     } catch (err) {
       if (isAuthError(err)) {
         setStatus("unauthorized");
+        requestToken();
         return;
       }
       // 404: a twin from before authentication existed — open by definition.
@@ -37,6 +47,8 @@ export async function checkConnection(): Promise<void> {
     setLastSuccess(); // sets status → "connected"
   } catch {
     setStatus("disconnected");
+  } finally {
+    setReady();
   }
 }
 

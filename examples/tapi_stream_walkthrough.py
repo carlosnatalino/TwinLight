@@ -49,7 +49,6 @@ import asyncio
 import datetime as dt
 import sys
 import time
-import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,6 +59,7 @@ import httpx
 from twinlight.streaming.proto import gnmi_pb2, gnmi_pb2_grpc
 from twinlight.streaming.proto import tapi_streaming_performance_pb2 as tapi
 from twinlight_client.credentials import add_token_argument, bearer_headers, resolve_token
+from twinlight_client.restconf import discover_root
 from twinlight_client.streaming import (
     MeasurementRecord,
     StreamEndpoint,
@@ -213,10 +213,7 @@ async def run(http: httpx.AsyncClient, opts: Options) -> int:
           + (f", authenticated as {who['principal']!r}" if who["principal"] else ""))
 
     heading(2, "RESTCONF discovery (RFC 8040 §3.1)")
-    resp = await http.get("/.well-known/host-meta")
-    resp.raise_for_status()
-    link = ET.fromstring(resp.text).find("{http://docs.oasis-open.org/ns/xri/xrd-1.0}Link")
-    root = link.get("href", "") if link is not None else ""
+    root = await discover_root(http)
     print(f"   GET /.well-known/host-meta → RESTCONF root {root!r}")
     context = f"{root}/data/tapi-common:context"
 
@@ -244,7 +241,7 @@ async def run(http: httpx.AsyncClient, opts: Options) -> int:
     resp = await http.get(f"{context}/tapi-oam:oam-context/oam-job")
     resp.raise_for_status()
     jobs = resp.json().get("tapi-oam:oam-job", [])
-    resp = await http.get(f"{root}/data/tapi-connectivity:connectivity-context/connectivity-service")
+    resp = await http.get(f"{context}/tapi-connectivity:connectivity-context/connectivity-service")
     resp.raise_for_status()
     services = {
         s["uuid"]: next((n["value"] for n in s.get("name", [])), s["uuid"])

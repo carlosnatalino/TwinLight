@@ -8,11 +8,11 @@ from fastapi.testclient import TestClient
 from tests.conftest import MeshRefs, tapi_end_point
 from twinlight.models.connectivity import MCG_CSEP_SPEC, OTSIA_CSEP_SPEC
 
-_BASE = "/data/tapi-connectivity:connectivity-context"
+_BASE = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
 
 
 def _get_two_sip_uuids(app: TestClient) -> tuple[str, str]:
-    data = app.get("/data/tapi-common:context/service-interface-point").json()
+    data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
     sips = data["tapi-common:context"]["service-interface-point"]
     assert len(sips) >= 2
     return sips[0]["uuid"], sips[1]["uuid"]
@@ -344,7 +344,7 @@ class TestConstraints:
     """routing-constraint / topology-constraint on a connectivity-service."""
 
     def test_unsupported_constraint_is_refused_by_name(self, app: TestClient) -> None:
-        data = app.get("/data/tapi-common:context/service-interface-point").json()
+        data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
         sips = [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
         body = {"tapi-connectivity:connectivity-service": [{
             "end-point": [tapi_end_point("a", sips[0]), tapi_end_point("z", sips[1])],
@@ -624,7 +624,7 @@ class TestRequestValidation:
 
     @pytest.mark.parametrize("count", [1, 3])
     def test_a_lightpath_has_exactly_two_end_points(self, app: TestClient, count: int) -> None:
-        sips = [s["uuid"] for s in app.get("/data/tapi-common:context/service-interface-point")
+        sips = [s["uuid"] for s in app.get("/restconf/data/tapi-common:context/service-interface-point")
                 .json()["tapi-common:context"]["service-interface-point"]]
         body = {"tapi-connectivity:connectivity-service": [{
             "end-point": [tapi_end_point(f"e{i}", sips[i % len(sips)]) for i in range(count)],

@@ -1,19 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { withHostMeta } from "../helpers/hostMeta";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import SettingsPage from "@/pages/SettingsPage";
 import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
+import { SESSION_TOKEN_KEY } from "@/lib/tokenStorage";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-(globalThis as any).fetch = mockFetch;
+(globalThis as any).fetch = withHostMeta(mockFetch);
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   mockFetch.mockReset();
-  useConnectionStore.setState({ apiToken: "", baseUrl: "http://localhost:8080" });
+  useConnectionStore.setState({
+    apiToken: "",
+    baseUrl: "http://localhost:8080",
+    tokenPromptOpen: false,
+    tokenPromptDismissedFor: null,
+  });
 });
 
 function respond(body: unknown, status = 200) {
@@ -113,6 +121,9 @@ describe("SettingsPage", () => {
     });
     fireEvent.click(screen.getByText("Save token"));
     expect(useConnectionStore.getState().apiToken).toBe("tok-abc");
+    // Kept for the session, not on disk.
+    expect(sessionStorage.getItem(SESSION_TOKEN_KEY)).toBe("tok-abc");
+    expect(localStorage.getItem("twinlight-ui:settings") ?? "").not.toContain("tok-abc");
     expect(screen.getByText("API token saved.")).toBeInTheDocument();
 
     // No waiting for the next poll: the status follows the new token now.
@@ -179,5 +190,28 @@ describe("SettingsPage", () => {
     renderSettings();
     fireEvent.click(screen.getByText("Test Connection"));
     expect(await screen.findByText(/authentication is disabled/)).toBeInTheDocument();
+  });
+
+  it("clearing the token forgets it for the session, and the UI asks again", async () => {
+    useConnectionStore.getState().setApiToken("tok-old");
+    expect(sessionStorage.getItem(SESSION_TOKEN_KEY)).toBe("tok-old");
+    // The twin requires a token.
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/health") ? respond({ status: "ok" }) : respond({}, 401)
+      )
+    );
+    renderSettings();
+    fireEvent.change(screen.getByLabelText("API Token"), { target: { value: "" } });
+    fireEvent.click(screen.getByText("Save token"));
+    expect(screen.getByText("API token cleared.")).toBeInTheDocument();
+    expect(sessionStorage.getItem(SESSION_TOKEN_KEY)).toBeNull();
+    expect(useConnectionStore.getState().apiToken).toBe("");
+    await waitFor(() => expect(useConnectionStore.getState().tokenPromptOpen).toBe(true));
+  });
+
+  it("says where the token is kept", () => {
+    renderSettings();
+    expect(screen.getByText(/session storage only/)).toBeInTheDocument();
   });
 });

@@ -31,7 +31,9 @@ import json
 import os
 import random
 import urllib.request
+import xml.etree.ElementTree as ET
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 
 MODULATION_FORMATS = ("DP-QPSK", "DP-16QAM", "DP-64QAM")
 
@@ -90,7 +92,28 @@ def _end_point(local_id: str, sip_uuid: str, modulation: str) -> dict:
     }
 
 
-def _create_service(base: str, sips: list, modulation: str, attempts: int) -> bool:
+def _restconf_root(base: str) -> str:
+    """The twin's RESTCONF root, from /.well-known/host-meta (RFC 8040 §3.1).
+
+    T-API is served under ``{root}/data``. A twin without host-meta (404)
+    runs with an empty root or predates it, and serves T-API at ``/data``.
+    The same rule as ``twinlight_client.restconf``, which this stdlib-only
+    script cannot import.
+    """
+    try:
+        xrd = urllib.request.urlopen(f"{base}/.well-known/host-meta").read()
+    except HTTPError as exc:
+        if exc.code == 404:
+            return ""
+        raise
+    for link in ET.fromstring(xrd).iter("{http://docs.oasis-open.org/ns/xri/xrd-1.0}Link"):
+        if link.get("rel") == "restconf":
+            href = link.get("href", "")
+            return (urlsplit(href).path if urlsplit(href).scheme else href).rstrip("/")
+    return ""
+
+
+def _create_service(data: str, base: str, sips: list, modulation: str, attempts: int) -> bool:
     """Try random endpoint pairs until one service of `modulation` is admitted.
 
     Returns True and prints the service's live OPM on success; returns False if
@@ -110,7 +133,7 @@ def _create_service(base: str, sips: list, modulation: str, attempts: int) -> bo
             }
         }
         req = urllib.request.Request(
-            f"{base}/data/tapi-connectivity:connectivity-context/connectivity-service",
+            f"{data}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
             data=json.dumps(body).encode(),
             method="POST",
             headers={"Content-Type": "application/json"},
@@ -176,8 +199,9 @@ def main() -> None:
         urllib.request.install_opener(opener)
 
     try:
+        data = f"{base}{_restconf_root(base)}/data"
         ctx = json.load(
-            urllib.request.urlopen(f"{base}/data/tapi-common:context/service-interface-point")
+            urllib.request.urlopen(f"{data}/tapi-common:context/service-interface-point")
         )
     except HTTPError as exc:
         if exc.code == 401:
@@ -192,7 +216,7 @@ def main() -> None:
     for modulation in MODULATION_FORMATS:
         admitted = 0
         for _ in range(args.services_per_mf):
-            if _create_service(base, sips, modulation, args.attempts):
+            if _create_service(data, base, sips, modulation, args.attempts):
                 admitted += 1
         if args.services_per_mf > 1:
             print(f"{modulation:<9} admitted {admitted}/{args.services_per_mf}")

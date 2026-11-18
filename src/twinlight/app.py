@@ -223,12 +223,12 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.state.measurement_stream = MeasurementStream(app.state.context, config)
 
     # Routers
-    # The T-API modules are mounted twice: under the RESTCONF root
-    # (RFC 8040 §3.1, the canonical location) and at the bare /data/ they
-    # have always been served from. The bare mount is hidden from OpenAPI
-    # so the documented surface shows one path per resource; it exists for
-    # clients written against earlier releases, and docs/ROADMAP.md tracks
-    # retiring it.
+    # The T-API modules are mounted once, under the RESTCONF root (RFC 8040
+    # §3.1), at {root}/data/…: one path per resource. Clients find the root
+    # at /.well-known/host-meta. With an empty root the data resource is
+    # /data/…. Every augment of the context (topology, connectivity, path
+    # computation, equipment, OAM, streaming) is under tapi-common:context
+    # (RFC 8040 §3.5.3).
     #
     # There is no photonic-media router: the twin's photonic surface is the
     # augments on the SIP and the connectivity-service end-point, served by
@@ -245,9 +245,7 @@ def create_app(config: TwinConfig) -> FastAPI:
         oam.router,
         streaming.router,
     ):
-        if root:
-            app.include_router(tapi_router, prefix=root)
-        app.include_router(tapi_router, include_in_schema=not root)
+        app.include_router(tapi_router, prefix=root)
 
     app.include_router(internal.router)
     app.include_router(diagrams.router)

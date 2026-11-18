@@ -1,8 +1,16 @@
-"""TAPI Connectivity API endpoints.
+"""T-API v2.6.0 connectivity (``tapi-connectivity:connectivity-context``).
 
-POST /data/tapi-connectivity:connectivity-context/connectivity-service
-GET  /data/tapi-connectivity:connectivity-context/connectivity-service
-GET  /data/tapi-connectivity:connectivity-context/connectivity-service={uuid}
+GET    {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
+GET    …/connectivity-service
+POST   …/connectivity-service
+GET    …/connectivity-service={uuid}
+PUT    …/connectivity-service={uuid}
+PATCH  …/connectivity-service={uuid}
+DELETE …/connectivity-service={uuid}
+
+``tapi-connectivity`` augments ``/tapi-common:context`` with
+``connectivity-context``, so RFC 8040 §3.5.3 puts its data resource under
+the context, beside the topology, OAM and stream contexts.
 """
 
 from __future__ import annotations
@@ -28,9 +36,11 @@ from twinlight.state.context import (
     SpectrumRequestError,
 )
 
-router = APIRouter(prefix="/data", tags=["tapi-connectivity"])
+#: The container's RESTCONF path: an augment of tapi-common:context, so
+#: module-qualified where the module changes (RFC 8040 §3.5.3).
+PREFIX = "/data/tapi-common:context/tapi-connectivity:connectivity-context"
 
-_BASE = "/tapi-connectivity:connectivity-context"
+router = APIRouter(prefix=PREFIX, tags=["tapi-connectivity"])
 
 
 def _single_service(body: dict) -> dict:
@@ -231,7 +241,7 @@ def _parse_service(body: dict) -> ConnectivityService:
 
 
 @router.post(
-    f"{_BASE}/connectivity-service",
+    "/connectivity-service",
     status_code=status.HTTP_201_CREATED,
 )
 async def create_service(body: dict, request: Request) -> dict:
@@ -331,16 +341,27 @@ async def connectivity_context_payload(ctx) -> dict:
     }
 
 
-@router.get(f"{_BASE}/connectivity-service")
-async def get_services(request: Request) -> dict:
-    """Return all connectivity services, with assigned spectrum when held."""
+@router.get("")
+async def get_connectivity_context(request: Request) -> dict:
+    """The whole connectivity context: every service, with live spectrum."""
     ctx = request.app.state.context
     return {
         "tapi-connectivity:connectivity-context": await connectivity_context_payload(ctx)
     }
 
 
-@router.get(f"{_BASE}/connectivity-service={{uuid}}")
+@router.get("/connectivity-service")
+async def get_services(request: Request) -> dict:
+    """Return all connectivity services, with assigned spectrum when held.
+
+    Answers with the container's envelope, the same body as the container
+    GET, as it always has: the UI, the client library and the ONOS adapter
+    read it that way.
+    """
+    return await get_connectivity_context(request)
+
+
+@router.get("/connectivity-service={uuid}")
 async def get_service(uuid: str, request: Request) -> dict:
     """Return one connectivity service, with assigned spectrum when held."""
     ctx = request.app.state.context
@@ -355,7 +376,7 @@ async def get_service(uuid: str, request: Request) -> dict:
     }
 
 
-@router.put(f"{_BASE}/connectivity-service={{uuid}}")
+@router.put("/connectivity-service={uuid}")
 async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     """Replace a connectivity service by UUID (full replacement).
 
@@ -399,7 +420,7 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     }
 
 
-@router.patch(f"{_BASE}/connectivity-service={{uuid}}")
+@router.patch("/connectivity-service={uuid}")
 async def update_service(
     uuid: str, body: UpdateConnectivityServiceRequest, request: Request
 ) -> dict:
@@ -425,7 +446,7 @@ async def update_service(
 
 
 @router.delete(
-    f"{_BASE}/connectivity-service={{uuid}}",
+    "/connectivity-service={uuid}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_service(uuid: str, request: Request) -> None:

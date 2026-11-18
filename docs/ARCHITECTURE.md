@@ -200,7 +200,7 @@ src/twinlight_client/    Companion client library and CLI
 
 ### Creating a connectivity service
 
-`POST /data/tapi-connectivity:connectivity-context/connectivity-service`
+`POST /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service`
 
 1. Resolve both endpoint SIP UUIDs to GNPy element UIDs via
    `TapiContext._sip_to_gnpy_uid` (populated at build time — `TapiBuilder`
@@ -392,7 +392,7 @@ then authentication, then the rest):
 | `CORSMiddleware` | Answers preflights and adds CORS headers, including to a 401, so a browser client can read it. |
 | `TokenAuthMiddleware` | Only when API tokens are configured. A pure ASGI middleware that rejects every request without a valid bearer token (401, RFC 6750 challenge, RFC 8040 `access-denied` body) before routing; `/health` is the one exemption. Without tokens it is not installed. Its gRPC counterpart, `streaming/interceptors.py:TokenAuthInterceptor`, checks the same `app.state.authenticator` and is likewise installed only with tokens. |
 | `PathDecodeMiddleware` | URL-decodes `%3A` → `:` before routing. Browsers percent-encode colons in paths per the WHATWG URL spec, but T-API RESTCONF paths contain literal colons. |
-| `RestconfContentTypeMiddleware` | Sets `Content-Type: application/yang-data+json` on all `/data/` responses, as RESTCONF requires. |
+| `RestconfContentTypeMiddleware` | Sets `Content-Type: application/yang-data+json` on all `{restconf_root}/data/` responses, as RESTCONF requires. |
 
 ## Extension points
 
