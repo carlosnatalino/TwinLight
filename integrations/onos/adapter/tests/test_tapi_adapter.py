@@ -1191,3 +1191,148 @@ def test_adapter_status_answers_200_whatever_the_twin_does(twin):
     assert refused.status_code == 200
     assert refused.json()["twin-authorized"] is False
     assert refused.json()["twin-reachable"] is True
+
+
+# --- An outage ends only when the twin answers usably ----------------------
+
+
+class _Faulty:
+    """A twin whose T-API resources can answer an error status, refuse the
+    connection, or (``mode=None``) answer normally; /health stays up."""
+
+    def __init__(self, twin: TwinStub) -> None:
+        self.twin, self.mode = twin, None
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        mode = self.mode
+        if mode is not None and "tapi-common:context" in request.url.path:
+            if mode == "refused" or (mode == "alternate" and self.flip()):
+                raise httpx.ConnectError("connection refused", request=request)
+            return httpx.Response(503, json={})
+        return self.twin.handler(request)
+
+    _n = 0
+
+    def flip(self) -> bool:
+        self._n += 1
+        return self._n % 2 == 1
+
+
+def _outage_lines(caplog) -> tuple[list[str], list[str]]:
+    records = [r for r in caplog.records if r.name == "tapi-adapter"]
+    down = [r.levelname for r in records if "twin unreachable" in r.getMessage()]
+    back = [r.levelname for r in records if "the twin answers again" in r.getMessage()]
+    return down, back
+
+
+def test_an_error_status_on_every_poll_is_one_outage(twin, caplog):
+    """A 503 (a proxy in front of the twin) or a 404 (a twin of another
+    version) on every ONOS poll: one ERROR when it starts, one INFO when the
+    twin answers usably again -- not two lines per poll."""
+    faulty = _Faulty(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        faulty.mode = "503"
+        polls = [c.get(CONTEXT).status_code for _ in range(5)]
+        status_during, health_during = c.get("/adapter/status").json(), c.get("/health").json()
+        polls.append(c.get(CONTEXT).status_code)
+        assert _outage_lines(caplog) == (["ERROR"], [])
+        faulty.mode = None
+        after = [c.get(CONTEXT).status_code for _ in range(3)]
+        status_after, health_after = c.get("/adapter/status").json(), c.get("/health").json()
+    assert polls == [502] * 6 and after == [200] * 3
+    assert _outage_lines(caplog) == (["ERROR"], ["INFO"])
+    for during in (status_during, health_during):
+        assert during["twin-reachable"] is False
+        assert "HTTP 503" in during["twin-error"]
+    assert health_during["status"] == "degraded"
+    for done in (status_after, health_after):
+        assert done["twin-reachable"] is True and done["twin-error"] is None
+    assert health_after["status"] == "ok"
+
+
+def test_refused_and_503_alternating_is_still_one_outage(twin, caplog):
+    faulty = _Faulty(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        faulty.mode = "alternate"
+        polls = [c.get(CONTEXT).status_code for _ in range(6)]
+        assert _outage_lines(caplog) == (["ERROR"], [])
+        faulty.mode = None
+        assert c.get(CONTEXT).status_code == 200
+    assert polls == [502] * 6
+    assert _outage_lines(caplog) == (["ERROR"], ["INFO"])
+
+
+def test_a_health_probe_that_works_does_not_end_an_outage(twin, caplog):
+    """/health is public and can answer while the T-API resources do not
+    (a 503 in front of /restconf only): it must not end the outage, or every
+    healthcheck between two polls would log it ending and starting again."""
+    faulty = _Faulty(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        faulty.mode = "503"
+        for _ in range(3):
+            assert c.get(CONTEXT).status_code == 502
+            assert c.get("/health").json()["twin-reachable"] is False
+    assert _outage_lines(caplog) == (["ERROR"], [])
+
+
+def test_a_refusal_or_a_missing_service_is_no_outage(twin, caplog):
+    """A 409 (admission refused) and a 404 on DELETE (already gone) are the
+    twin answering usably: they neither start an outage nor fail to end one."""
+    caplog.set_level("INFO", logger="tapi-adapter")
+    twin.create_status = 409
+    twin.create_body = {"ietf-restconf:errors": {"error": [
+        {"error-tag": "resource-denied", "error-message": "no spectrum"}]}}
+    original = twin.handler
+
+    def gone(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(404, json={})
+        return original(request)
+
+    with _client_for(twin, transport=httpx.MockTransport(gone)) as c:
+        create = c.post(CONNECTIVITY, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"))
+        delete = c.delete(f"{CONNECTIVITY}connectivity-service=onos-uuid-1")
+        status_body = c.get("/adapter/status").json()
+    assert (create.status_code, delete.status_code) == (409, 204)
+    assert _outage_lines(caplog) == ([], [])
+    assert status_body["twin-reachable"] is True and status_body["twin-error"] is None
+
+
+def test_a_409_ends_an_outage_the_twin_has_recovered_from(twin, caplog):
+    faulty = _Faulty(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    twin.create_status = 409
+    twin.create_body = {"ietf-restconf:errors": {"error": [{"error-message": "no spectrum"}]}}
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200  # the catalogue is built
+        faulty.mode = "refused"
+        assert c.get(CONTEXT).status_code == 502
+        faulty.mode = None
+        create = c.post(CONNECTIVITY, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"))
+    assert create.status_code == 409
+    assert _outage_lines(caplog) == (["ERROR"], ["INFO"])
+
+
+def test_a_refused_token_after_an_outage_is_not_reported_unreachable(twin):
+    """The twin answering 401 is reachable; the refusal is TwinAuthorization's
+    to report, so /adapter/status must not say both "unreachable" and
+    "unauthorized"."""
+    faulty = _Faulty(twin)
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        faulty.mode = "refused"
+        assert c.get(CONTEXT).status_code == 502
+        faulty.mode = None
+        twin.tokens = {TOKEN}  # the twin comes back requiring a token the adapter lacks
+        assert c.get(CONTEXT).status_code == 502
+        status_body = c.get("/adapter/status").json()
+        health = c.get("/health").json()
+    assert status_body["twin-reachable"] is True and status_body["twin-error"] is None
+    assert status_body["twin-authorized"] is False
+    assert health["status"] == "unauthorized" and health["twin-reachable"] is True

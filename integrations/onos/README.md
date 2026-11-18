@@ -538,7 +538,7 @@ connected, as ONOS's port cache depends on them being consistent:
 
 Introspection, safe to call any time:
 
-- `GET /health` — liveness, twin reachability, and whether the twin accepts the adapter's token
+- `GET /health` — liveness, twin reachability (its T-API resources, not only its `/health`), and whether the twin accepts the adapter's token
 - `GET /adapter/status` — modulation policy, ONOS-created services, recent refusals, the twin's verdict on the adapter's token. Always `200`: a twin that is down sets `"twin-reachable": false` with the reason in `twin-error`, as a refused token sets `twin-authorized` and `twin-auth-error`
 - `GET /adapter/ports` — the SIP ↔ ONOS-port map
 - `POST /adapter/modulation` — switch modulation format at runtime
@@ -703,13 +703,18 @@ not accept. The adapter logs that once, at `ERROR`, when it starts (and once at
 `/health` still answers `200`, so the Compose healthcheck passes and the
 scripts get to read the reason. Its body says `"status": "unauthorized"`,
 `"twin-authorized": false` and gives the sentence above in `twin-auth-error`.
-A twin that is down still reads `"status": "degraded"` with
-`"twin-reachable": false`, because the twin's `/health` is public and says
-nothing about the token. `/adapter/status` carries the same `twin-authorized`
-and `twin-auth-error` fields next to the adapter's own state, and answers
-`200` in both cases, with `twin-reachable` and `twin-error` for a twin that is
-down. Either trouble is logged when it starts and when it ends, not on every
-ONOS poll. `demo-up.sh`,
+A twin that is down, or whose T-API resources answer an error status (a
+proxy's `503`, a `404` from a twin of another version), reads
+`"status": "degraded"` with `"twin-reachable": false` and the reason in
+`twin-error`, even when the twin's public `/health` answers.
+`/adapter/status` carries the same fields next to the adapter's own state,
+and answers `200` in every case. A refused token is logged when it starts and
+when it ends; so is an outage, which ends only when the twin answers
+*usably* — a T-API resource read, or its verdict on a create or delete (a
+`409` refusal or a `404` "already gone" counts) — not at any response, so a
+twin answering an error status on every ONOS poll logs one line, not two per
+poll. While an outage lasts, `/health` and `/adapter/status` read the SIP
+list again, so they report its end without waiting for ONOS. `demo-up.sh`,
 `validate.sh` and the scripts that need ONOS stop with that sentence instead of
 waiting for ports that never appear. A script whose own token the twin refuses
 says so in the same words, naming the twin.

@@ -292,14 +292,29 @@ class TwinReachability:
     ONOS polls the adapter every few seconds, so a twin that is down would
     otherwise log "twin unreachable" at ERROR on every poll. This logs each
     transition instead, the way :class:`TwinAuthorization` reports a refused
-    token: once when the twin stops answering, once when it answers again.
-    Two kinds of trouble are told apart, since they end differently:
+    token: once when trouble starts, once when it ends. Two kinds are told
+    apart, since they end differently:
 
-    - ``unreachable``: no answer, or an error status. Over at the next
-      response of any kind (:meth:`observe`, an httpx response hook).
-    - ``unreadable``: an answer whose body the adapter does not understand
-      (:class:`TwinProtocolError`). Over when a body is read again
-      (:meth:`recovered`), not merely when the twin answers.
+    - ``unreachable``: no answer, or an error status where the adapter needed
+      a T-API resource (the SIP list, the service list, host-meta discovery).
+      Over only when the twin answers *usably*: a T-API resource read with a
+      2xx (:func:`_twin_get`), or the twin's own verdict on a create or a
+      delete -- a 409 refusal or a 404 "already gone" included -- which the
+      adapter relays (any status below 500). Any response at all is not
+      enough: a proxy answering 503, or a twin of another version answering
+      404, answers every poll, and treating that as recovery would log the
+      outage ending and starting again on each one. The twin's public
+      ``/health`` does not end it either, since it can answer while the
+      T-API resources do not.
+    - ``unreadable``: a 2xx whose body the adapter does not understand
+      (:class:`TwinProtocolError`). Over when the SIP list is read again.
+
+    A 401 or 403 is the twin answering, so it ends an ``unreachable``
+    outage (:meth:`observe`, an httpx response hook); the refusal itself is
+    :class:`TwinAuthorization`'s to report. ``/health`` and
+    ``/adapter/status`` re-read the SIP list while an outage lasts
+    (:func:`_refresh_reachability`), so they say when it is over even if ONOS
+    is not polling.
     """
 
     def __init__(self) -> None:
@@ -321,7 +336,8 @@ class TwinReachability:
             self.kind = self.problem = None
 
     async def observe(self, response: httpx.Response) -> None:
-        self.recovered("unreachable")
+        if response.status_code in (401, 403):
+            self.recovered("unreachable")
 
 
 class SipCatalogue:
@@ -557,7 +573,27 @@ async def _twin_get(request: Request, path: str) -> Any:
         raise TwinUnavailableError(f"GET {path}: {exc}") from exc
     if response.status_code >= 400:
         raise TwinUnavailableError(f"GET {path}: HTTP {response.status_code}")
+    if path != "/health":
+        # A T-API resource, read: the twin answers usably (TwinReachability).
+        request.app.state.twin_reach.recovered("unreachable")
     return response.json()
+
+
+async def _refresh_reachability(request: Request) -> None:
+    """While an outage is recorded, read the SIP list once to see if it is over.
+
+    For ``/health`` and ``/adapter/status``, which would otherwise report the
+    last outage until ONOS's next poll; between outages it costs nothing.
+    """
+    reach: TwinReachability = request.app.state.twin_reach
+    if reach.kind is None:
+        return
+    try:
+        await _list_sips(request)
+    except TwinUnavailableError as exc:
+        reach.failed(exc)
+    except TwinAuthError:
+        pass  # the twin answered; TwinAuthorization reports the refusal
 
 
 async def _list_sips(request: Request) -> list[dict[str, Any]]:
@@ -894,6 +930,9 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
         )
     except (httpx.HTTPError, TwinUnavailableError) as exc:
         raise _bad_gateway(request, exc) from exc
+    if response.status_code < 500:
+        # The twin's verdict, a 409 refusal included: it answers usably.
+        request.app.state.twin_reach.recovered("unreachable")
 
     if response.status_code in (200, 201):
         payload = response.json()
@@ -958,6 +997,9 @@ async def delete_connectivity_service(uuid: str, request: Request) -> Response:
         )
     except (httpx.HTTPError, TwinUnavailableError) as exc:
         raise _bad_gateway(request, exc) from exc
+    if response.status_code < 500:
+        # A 204, or a 404 for a service already gone: a usable answer.
+        request.app.state.twin_reach.recovered("unreachable")
 
     # 404 counts as success: the caller wants the lightpath gone, and it is.
     # This is not pedantry about REST idempotence — ONOS only retires a flow
@@ -1013,23 +1055,36 @@ async def health(request: Request) -> dict[str, Any]:
     there is reported as ``"status": "unauthorized"`` with the reason in
     ``twin-auth-error``. Still a 200, like "degraded": the adapter itself is
     alive, and the scripts read the reason from the body.
+
+    The twin is reported reachable only if its /health answers and no outage
+    of its T-API resources is recorded (TwinReachability); while one is,
+    the SIP list is read again here, so the answer is current. The reason is
+    in ``twin-error``.
     """
-    twin_ok = True
+    twin_ok, probe_error = True, None
     try:
         await _twin_get(request, "/health")
-    except TwinUnavailableError:
-        twin_ok = False
+    except TwinUnavailableError as exc:
+        twin_ok, probe_error = False, str(exc)
     auth: TwinAuthorization = request.app.state.twin_auth
+    reach: TwinReachability = request.app.state.twin_reach
     if twin_ok:
         try:
             await request.app.state.client.get("/.well-known/host-meta")
         except (httpx.HTTPError, TwinAuthError):
             pass  # a refusal is recorded by the response hook
+        await _refresh_reachability(request)
+    reachable = twin_ok and reach.kind != "unreachable"
     authorized = auth.problem is None if twin_ok else None
+    if not reachable or reach.kind == "unreadable":
+        health_status = "degraded"
+    else:
+        health_status = "ok" if authorized else "unauthorized"
     return {
-        "status": "degraded" if not twin_ok else "ok" if authorized else "unauthorized",
+        "status": health_status,
         "twin": TWIN_BASE_URL,
-        "twin-reachable": twin_ok,
+        "twin-reachable": reachable,
+        "twin-error": probe_error or reach.problem,
         "twin-authorized": authorized,
         "twin-auth-error": auth.problem if twin_ok else None,
         "token-configured": auth.token_configured,
@@ -1050,6 +1105,9 @@ async def adapter_status(request: Request) -> dict[str, Any]:
     reach: TwinReachability = request.app.state.twin_reach
     try:
         await _ensure_catalogue(request)
+        # While an outage is recorded, see whether it is over (the catalogue
+        # may be fresh, in which case nothing above asked the twin).
+        await _refresh_reachability(request)
     except TwinUnavailableError as exc:
         reach.failed(exc)  # reported below, like a refused token
     except TwinAuthError:
