@@ -490,13 +490,14 @@ _MC_SPECTRUM_KEYS = frozenset({"local-id", "name", "spectrum", "edge-frequency-c
 # Per-channel launch powers the twin models [dBm]. Above the top a single
 # channel approaches an amplifier's total output (GNPy's EDFAs saturate and
 # propagation returns NaN from ~25 dBm); below the bottom it is far under any
-# receiver's sensitivity. A request outside is a 422 rather than a QoT that
-# means nothing.
+# receiver's sensitivity. A request outside is refused (a 400 on T-API, 422 on
+# /internal/compute-path) rather than given a QoT that means nothing.
 LAUNCH_POWER_RANGE_DBM = (-20.0, 10.0)
 
 
 # These helpers run inside pydantic validators, which turn only ValueError into
-# a validation error (a 422); any other exception would escape as a 500. Hence
+# a validation error (a 400 on T-API, a 422 on the proprietary endpoints); any
+# other exception would escape as a 500. Hence
 # the TRY004 suppressions below, and the type checks on input that pydantic
 # has not validated yet.
 
@@ -504,7 +505,7 @@ LAUNCH_POWER_RANGE_DBM = (-20.0, 10.0)
 def _objects(value: Any) -> list[dict[str, Any]]:
     """The object entries of a JSON list, or none when ``value`` is not a
     list: a "before" validator must not trip over a malformed body, which
-    pydantic's own validation then reports as a 422."""
+    pydantic's own validation then reports (as a 400 on T-API)."""
     return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
 
 

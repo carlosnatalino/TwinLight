@@ -376,7 +376,8 @@ def test_onos_first_och_signal_is_computable(client):
 
 def test_single_sip_is_served_unwrapped(client):
     """TapiDeviceLambdaQuery reads mc-pool off the top level of the response;
-    the twin wraps it in tapi-common:context."""
+    the twin answers the entry as an array of one under
+    tapi-common:service-interface-point (RFC 8040 §4.3, RFC 7951 §5.4)."""
     uuid = context(client)[0]["uuid"]
     body = client.get(
         f"/restconf/data/tapi-common:context/service-interface-point={uuid}"
@@ -1059,12 +1060,10 @@ def test_against_a_real_twin_that_requires_tokens(tmp_path, monkeypatch):
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
         "/connectivity-service"
     ).json()
-    uuids = [
-        s["uuid"]
-        for s in listed.get("tapi-connectivity:connectivity-context", {}).get(
-            "connectivity-service", []
-        )
-    ]
+    # The list GET's standard body (RFC 8040 §4.3). Read leniently, as the
+    # container's envelope with a default, it would find "no services"
+    # whatever the twin held.
+    uuids = [s["uuid"] for s in listed["tapi-connectivity:connectivity-service"]]
     assert "onos-real-1" not in uuids
 
     with _client_for(stub, token=WRONG, transport=httpx.ASGITransport(app=twin_app)) as c:
