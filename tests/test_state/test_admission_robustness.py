@@ -108,7 +108,7 @@ class TestRefusedPutKeepsTheService:
 
     @staticmethod
     def _bad_spectrum(service: dict) -> dict:
-        """The same service asking for an off-grid central frequency: 422."""
+        """The same service asking for an off-grid central frequency: 400."""
         body = dict(service)
         for ep in body["end-point"]:
             ep["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0][
@@ -126,7 +126,8 @@ class TestRefusedPutKeepsTheService:
         ctx.set_link_failed("fiber (B → C)", True)
 
         resp = client.put(f"{_SVC}={uuid}", json=self._bad_spectrum(service))
-        assert resp.status_code == 422, resp.text
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert (ctx._service_allocation[uuid], ctx.get_service(uuid).modulation_format) == before
         assert "roadm B" in ctx._allocated_path_uids(uuid)
 

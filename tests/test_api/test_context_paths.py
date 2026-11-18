@@ -151,8 +151,8 @@ _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 def _probe(app: TestClient, method: str, url: str) -> tuple[int, str]:
     """Status and error message of a request that changes nothing.
 
-    Keys are dummies and bodies are empty, so a write is refused (400, 404 or
-    422) before it touches state. A route that does not exist answers 404
+    Keys are dummies and bodies are empty, so a write is refused (400 or 404)
+    before it touches state. A route that does not exist answers 404
     with Starlette's bare "Not Found", which a handler's 404 never says.
     """
     resp = app.request(method, url, json={} if method in ("POST", "PUT", "PATCH") else None)
@@ -350,7 +350,7 @@ class TestErrorsOnTheLongForm:
         assert resp.status_code == 404
         assert resp.headers["content-type"].startswith("application/yang-data+json")
         (error,) = resp.json()["ietf-restconf:errors"]["error"]
-        assert error["error-tag"] == "data-missing"
+        assert error["error-tag"] == "invalid-value"  # RFC 8040 §4.3
         assert error["error-message"] != "Not Found"  # the handler's, not the router's
 
     @pytest.mark.parametrize("root", ROOTS)
@@ -369,10 +369,11 @@ class TestErrorsOnTheLongForm:
         assert long.headers["allow"]
         assert "ietf-restconf:errors" in long.json()
 
-    def test_422_on_a_malformed_body(self, app: TestClient) -> None:
+    def test_400_on_a_malformed_body(self, app: TestClient) -> None:
         resp = app.post(f"{ROOTS[-1]}{LONG['connectivity']}",
                         json={_SVC_KEY: [{"end-point": "nope"}]})
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "bad-element"
         assert resp.headers["content-type"].startswith("application/yang-data+json")
         assert "ietf-restconf:errors" in resp.json()
 

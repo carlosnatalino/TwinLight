@@ -73,7 +73,8 @@ class TestModulationIsATapiAugment:
             "modulation-format"
         ] = "DP-16QAM"
         resp = app.post(_BASE, json=payload)
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert "modulation-format" in resp.text
 
     def test_prefixed_identity_accepted(self, app: TestClient) -> None:
@@ -106,7 +107,8 @@ class TestModulationIsATapiAugment:
         ][0]
         cfg["modulation"]["standard-modulation-technique"] = "MT_DP-QAM32"
         resp = app.post(_BASE, json=payload)
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
 
 
 class TestListEncodedBody:
@@ -173,11 +175,24 @@ class TestCreateConnectivityService:
         services = list_resp.json()["tapi-connectivity:connectivity-service"]
         assert len(services) == 2
 
-    def test_422_when_sip_not_found(self, app: TestClient) -> None:
+    def test_unknown_sip_is_a_missing_instance(self, app: TestClient) -> None:
+        """A leafref to no SIP: RFC 7950 §15.5, which RFC 8040 §7 pairs with 409."""
         sip_a, _ = _get_two_sip_uuids(app)
         payload = _create_service_payload(sip_a, "00000000-0000-0000-0000-000000000000")
         resp = app.post(_BASE, json=payload)
-        assert resp.status_code == 422
+        assert resp.status_code == 409
+        (error,) = resp.json()["ietf-restconf:errors"]["error"]
+        assert error["error-tag"] == "data-missing"
+        assert error["error-app-tag"] == "instance-required"
+        assert error["error-path"].endswith(
+            "/end-point[local-id='z-end']/service-interface-point/service-interface-point-uuid"
+        )
+        assert error["error-message"] == (
+            "SIP '00000000-0000-0000-0000-000000000000' not found"
+        )
+        assert app.get(f"{_BASE}/connectivity-service").json() == {
+            "tapi-connectivity:connectivity-service": []
+        }
 
 
 class TestGetAndDeleteConnectivityService:
@@ -351,7 +366,8 @@ class TestConstraints:
             "routing-constraint": {"diversity-policy": "SRLG"},
         }]}
         resp = app.post(_BASE, json=body)
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert "diversity-policy" in resp.text
 
     def test_constraints_are_echoed(self, mesh_app: TestClient) -> None:
@@ -372,7 +388,7 @@ class TestConstraints:
         assert service["topology-constraint"] == constraint
         assert "routing-constraint" not in service
 
-    def test_unresolvable_reference_is_422(self, mesh_app: TestClient) -> None:
+    def test_unresolvable_reference_is_a_missing_instance(self, mesh_app: TestClient) -> None:
         from tests.conftest import MeshRefs
 
         refs = MeshRefs(mesh_app.app.state.context)
@@ -381,8 +397,10 @@ class TestConstraints:
         ], "topology-constraint": [{"exclude-link": [
             {"topology-uuid": "x", "link-uuid": "y"}]}]}
         resp = mesh_app.post(_BASE, json=body)
-        assert resp.status_code == 422
-        assert "not found" in resp.text
+        assert resp.status_code == 409
+        (error,) = resp.json()["ietf-restconf:errors"]["error"]
+        assert (error["error-tag"], error["error-app-tag"]) == ("data-missing", "instance-required")
+        assert "not found" in error["error-message"]
 
 
 def _spec(ep: dict) -> dict:
@@ -511,11 +529,12 @@ class TestEndPointDirection:
         path = ctx._allocated_path_uids(service["uuid"])
         assert (path[0], path[-1]) == ("trx C", "trx A")
 
-    def test_two_sources_are_422(self, app: TestClient) -> None:
+    def test_two_sources_are_refused(self, app: TestClient) -> None:
         sip_a, sip_z = _get_two_sip_uuids(app)
         resp = self._create(app, {**tapi_end_point("a", sip_a), "direction": "SOURCE"},
                             {**tapi_end_point("z", sip_z), "direction": "SOURCE"})
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert "one SOURCE and one SINK" in resp.text
 
     def test_end_point_name_is_kept(self, app: TestClient) -> None:
@@ -630,17 +649,19 @@ class TestRequestValidation:
             "end-point": [tapi_end_point(f"e{i}", sips[i % len(sips)]) for i in range(count)],
         }]}
         resp = app.post(_BASE, json=body)
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert "exactly two end-points" in resp.text
 
-    def test_modulation_null_is_422(self, app: TestClient) -> None:
+    def test_modulation_null_is_refused(self, app: TestClient) -> None:
         sip_a, sip_z = _get_two_sip_uuids(app)
         body = _create_service_payload(sip_a, sip_z)
         for ep in body["tapi-connectivity:connectivity-service"]["end-point"]:
             ep["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0][
                 "modulation"] = None
         resp = app.post(_BASE, json=body)
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert "modulation must be an object" in resp.text
 
     def test_power_and_frequency_without_a_format(self, mesh_app: TestClient) -> None:
@@ -666,7 +687,7 @@ class TestRequestValidation:
             "MT_DP-QAM64", "MT_DP-QAM16", "MT_DP-QPSK")
 
     @pytest.mark.parametrize("centi_dbm", [2500, 1001, -2001, 10 ** 300])
-    def test_launch_power_outside_the_modelled_range_is_422(
+    def test_launch_power_outside_the_modelled_range_is_refused(
         self, app: TestClient, centi_dbm: float,
     ) -> None:
         sip_a, sip_z = _get_two_sip_uuids(app)
@@ -675,7 +696,8 @@ class TestRequestValidation:
             ep["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0][
                 "channel-output-power"] = centi_dbm
         resp = app.post(_BASE, json=body)
-        assert resp.status_code == 422, resp.text
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert "the twin models launch powers from -20 to 10 dBm" in resp.text
 
 

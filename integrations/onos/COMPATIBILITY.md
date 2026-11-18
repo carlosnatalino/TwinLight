@@ -206,8 +206,9 @@ pair"* — no exception for a single entry. `connectivity-service` is a YANG
 `list`, so the array-of-one ONOS sends is the correct encoding.
 
 POST and PUT accept both the array and the bare-object spelling. A multi-entry
-array is a `400`, since the handler admits one service, and body validation
-errors are reported as `422`.
+array is a `400`, since the handler admits one service, and so is a body that
+does not validate, with the RFC 8040 §7 `error-tag` that names the problem
+(`malformed-message`, `missing-element`, `bad-element`, `invalid-value`).
 
 ### B4. Modulation format location
 
@@ -224,8 +225,8 @@ with `MT` identities — note that ONF spells 16QAM as `MT_DP-QAM16`. The twin
 emits and accepts only that location; the module-prefixed identityref spelling
 is accepted too, per RFC 7951 §6.8.
 
-A payload carrying a bare top-level `modulation-format` key gets a **422 naming
-the standard location**, rather than silently defaulting to DP-QPSK — which
+A payload carrying a bare top-level `modulation-format` key gets a **400
+(`invalid-value`) naming the standard location**, rather than silently defaulting to DP-QPSK — which
 would provision a working lightpath of the wrong format.
 
 ### B5. Assigned-spectrum location

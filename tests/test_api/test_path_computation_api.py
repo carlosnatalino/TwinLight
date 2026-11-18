@@ -65,7 +65,9 @@ class TestPathCompService:
     def test_unknown_sip(self, app: TestClient) -> None:
         sip_a, _ = _two_sips(app)
         resp = app.post(_BASE, json={"end-point": _end_points(sip_a, "nope")})
-        assert resp.status_code == 422
+        assert resp.status_code == 409
+        error = resp.json()["ietf-restconf:errors"]["error"][0]
+        assert (error["error-tag"], error["error-app-tag"]) == ("data-missing", "instance-required")
         assert "not found" in resp.json()["ietf-restconf:errors"]["error"][0]["error-message"]
 
     @pytest.mark.parametrize(("extra", "named"), [
@@ -82,7 +84,8 @@ class TestPathCompService:
     ) -> None:
         sip_a, sip_z = _two_sips(app)
         resp = app.post(_BASE, json={"end-point": _end_points(sip_a, sip_z), **extra})
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert named in resp.json()["ietf-restconf:errors"]["error"][0]["error-message"]
 
     def test_unsupported_end_point_leaf(self, app: TestClient) -> None:
@@ -90,7 +93,8 @@ class TestPathCompService:
         eps = _end_points(sip_a, sip_z)
         eps[0]["capacity"] = {}
         resp = app.post(_BASE, json={"end-point": eps})
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert "capacity" in resp.text
 
 

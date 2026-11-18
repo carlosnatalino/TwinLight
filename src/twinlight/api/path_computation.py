@@ -25,7 +25,8 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import ValidationError
 
 from twinlight.algorithms.path_constraints import ConstraintError
-from twinlight.api.restconf import created_location
+from twinlight.api.connectivity import constraint_error
+from twinlight.api.restconf import RestconfError, created_location, validation_error_tag
 from twinlight.models.path_computation import PathCompService
 from twinlight.state.context import NoPathError
 
@@ -47,22 +48,24 @@ def _parse(body: dict) -> PathCompService:
     raw = body.get(_SERVICE_KEY, body)
     if isinstance(raw, list):
         if len(raw) != 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Expected exactly one path-comp-service, got {len(raw)}",
+            # RFC 8040 §4.4.1: exactly one instance of the new resource.
+            raise RestconfError(
+                status.HTTP_400_BAD_REQUEST, "bad-element",
+                f"Expected exactly one path-comp-service, got {len(raw)}",
             )
         raw = raw[0]
     if not isinstance(raw, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="path-comp-service must be an object or a list of one",
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "bad-element",
+            "path-comp-service must be an object or a list of one",
         )
     try:
         return PathCompService.model_validate(raw)
     except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="; ".join(
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST,
+            validation_error_tag(exc.errors()),
+            "; ".join(
                 f"{'/'.join(str(p) for p in e['loc']) or 'body'}: {e['msg']}"
                 for e in exc.errors()
             ),
@@ -116,14 +119,14 @@ async def create_path_comp_service(
     try:
         ctx.create_path_comp_service(service)
     except KeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc.args[0]),
+        # An end-point's SIP does not exist: a leafref with no instance,
+        # RFC 7950 §15.5 (see connectivity._check_sips).
+        raise RestconfError(
+            status.HTTP_409_CONFLICT, "data-missing", str(exc.args[0]),
+            error_app_tag="instance-required",
         ) from exc
     except ConstraintError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc),
-        ) from exc
+        raise constraint_error(exc) from exc
     except NoPathError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc),

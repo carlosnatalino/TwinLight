@@ -23,8 +23,12 @@ from collections.abc import Callable
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import ValidationError
 
-from twinlight.algorithms.path_constraints import ConstraintError
-from twinlight.api.restconf import created_location
+from twinlight.algorithms.path_constraints import ConstraintError, UnresolvedReferenceError
+from twinlight.api.restconf import (
+    RestconfError,
+    created_location,
+    validation_error_tag,
+)
 from twinlight.models.common import Direction, ForwardingDirection, LayerProtocolName
 from twinlight.models.connectivity import (
     MCG_CSEP_SPEC,
@@ -59,18 +63,17 @@ def _single_service(body: dict) -> dict:
     raw = body.get("tapi-connectivity:connectivity-service", body)
     if isinstance(raw, list):
         if len(raw) != 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"Expected exactly one connectivity-service, got "
-                    f"{len(raw)}"
-                ),
+            # RFC 8040 §4.4.1: "The message-body MUST contain exactly one
+            # instance of the expected data resource."
+            raise RestconfError(
+                status.HTTP_400_BAD_REQUEST, "bad-element",
+                f"Expected exactly one connectivity-service, got {len(raw)}",
             )
         raw = raw[0]
     if not isinstance(raw, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="connectivity-service must be an object or a list of one",
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "bad-element",
+            "connectivity-service must be an object or a list of one",
         )
     return raw
 
@@ -117,8 +120,8 @@ _UNIMPLEMENTED: dict[str, tuple[str, ...]] = {
 # A lightpath runs from its SOURCE end-point to its SINK over one-way fibres,
 # so the service is UNIDIRECTIONAL (TapiContext.add_service). Each entry is
 # (the values the twin supports, the values the YANG type admits): a value
-# outside the type is invalid (422), a valid one the twin does not support is
-# not implemented (501).
+# outside the type is invalid (400, invalid-value), a valid one the twin does
+# not support is not implemented (501).
 _LAYER_PROTOCOL_NAMES = frozenset(v.value for v in LayerProtocolName)
 _FIXED: dict[str, dict[str, tuple[tuple[object, ...], Callable[[object], bool]]]] = {
     "connectivity-service": {
@@ -188,21 +191,22 @@ def _parse_service(body: dict) -> ConnectivityService:
 
     The body is validated by hand rather than through a FastAPI parameter
     annotation (the envelope key and the list-or-object spelling both have
-    to be resolved first), so pydantic's error has to be mapped to a 422
+    to be resolved first), so pydantic's error has to be mapped to a 400
     here — otherwise a malformed payload surfaces as a 500.
 
     Raises:
         HTTPException: 501 (``operation-not-supported``) when the body
             carries a standard leaf the twin does not implement, naming
-            each (see ``_UNIMPLEMENTED`` and ``_FIXED``); 422 when it does
-            not validate.
+            each (see ``_UNIMPLEMENTED`` and ``_FIXED``); 400 with the
+            RFC 8040 §7 tag of the first problem when it does not validate
+            (``validation_error_tag``).
     """
     raw = _single_service(body)
     refused, invalid = _unimplemented(raw)
     if invalid:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="invalid value: " + "; ".join(invalid),
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value",
+            "invalid value: " + "; ".join(invalid),
         )
     if refused:
         hint = (
@@ -224,9 +228,10 @@ def _parse_service(body: dict) -> ConnectivityService:
     try:
         svc = ConnectivityService.model_validate(raw)
     except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="; ".join(
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST,
+            validation_error_tag(exc.errors()),
+            "; ".join(
                 f"{'/'.join(str(p) for p in e['loc']) or 'body'}: {e['msg']}"
                 for e in exc.errors()
             ),
@@ -234,14 +239,54 @@ def _parse_service(body: dict) -> ConnectivityService:
     if len(svc.end_point) != 2:
         # A lightpath has a head and a tail; a third end-point would be
         # silently ignored by admission.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                "a connectivity-service is a point-to-point lightpath: it needs "
-                f"exactly two end-points, got {len(svc.end_point)}"
-            ),
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value",
+            "a connectivity-service is a point-to-point lightpath: it needs "
+            f"exactly two end-points, got {len(svc.end_point)}",
         )
     return svc
+
+
+def _check_sips(ctx, svc: ConnectivityService) -> None:
+    """Refuse a service whose end-points reference a SIP that does not exist.
+
+    ``service-interface-point-uuid`` is a leafref to the context's SIP list
+    (tapi-common v2.6.0, require-instance true by default), and RFC 7950
+    §15.5 fixes the error for a leafref that "refers to an instance that
+    does not exist": error-tag ``data-missing``, error-app-tag
+    ``instance-required``, error-path the leafref leaf. RFC 8040 §7 pairs
+    ``data-missing`` with 409.
+    """
+    for ep in svc.end_point:
+        sip_uuid = ep.service_interface_point.service_interface_point_uuid
+        if ctx.get_sip(sip_uuid) is None:
+            raise RestconfError(
+                status.HTTP_409_CONFLICT, "data-missing", f"SIP {sip_uuid!r} not found",
+                error_app_tag="instance-required",
+                error_path=(
+                    "/tapi-common:context/tapi-connectivity:connectivity-context"
+                    f"/connectivity-service[uuid='{svc.uuid}']"
+                    f"/end-point[local-id='{ep.local_id}']"
+                    "/service-interface-point/service-interface-point-uuid"
+                ),
+            )
+
+
+def constraint_error(exc: Exception) -> RestconfError:
+    """The RFC 8040 error for a constraint or spectrum request the twin cannot take.
+
+    A reference to a node or link that does not exist is a leafref with no
+    instance (RFC 7950 §15.5: 409, ``data-missing``, ``instance-required``);
+    anything else — a constraint leaf or value the twin does not support, a
+    malformed or contradictory constraint, a spectrum off the grid — is a
+    value the twin does not accept, 400 ``invalid-value``.
+    """
+    if isinstance(exc, UnresolvedReferenceError):
+        return RestconfError(
+            status.HTTP_409_CONFLICT, "data-missing", str(exc),
+            error_app_tag="instance-required",
+        )
+    return RestconfError(status.HTTP_400_BAD_REQUEST, "invalid-value", str(exc))
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -268,22 +313,12 @@ async def create_service(body: dict, request: Request, response: Response) -> di
             ),
         )
 
-    # Validate that all referenced SIPs exist
-    for ep in svc.end_point:
-        sip_uuid = ep.service_interface_point.service_interface_point_uuid
-        if ctx.get_sip(sip_uuid) is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"SIP {sip_uuid!r} not found",
-            )
+    _check_sips(ctx, svc)
 
     try:
         await ctx.add_service(svc)
     except (ConstraintError, SpectrumRequestError) as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e),
-        ) from e
+        raise constraint_error(e) from e
     except NoPathError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -402,17 +437,13 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
     ctx = request.app.state.context
     svc = _parse_service(body)
     if svc.uuid != uuid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Body UUID must match path UUID",
+        # RFC 8040 §4.5: "the key leaf values, in message-body
+        # representation, MUST be the same as the key leaf values in the
+        # request URI."
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value", "Body UUID must match path UUID",
         )
-    for ep in svc.end_point:
-        sip_uuid = ep.service_interface_point.service_interface_point_uuid
-        if ctx.get_sip(sip_uuid) is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"SIP {sip_uuid!r} not found",
-            )
+    _check_sips(ctx, svc)
     # A refused replacement leaves the old service exactly as it was (same
     # route and block); with no old service, a PUT creates one.
     try:
@@ -420,15 +451,10 @@ async def replace_service(uuid: str, body: dict, request: Request) -> dict:
             await ctx.add_service(svc)
         else:
             await ctx.replace_service(svc)
-    except (RmsaError, ConstraintError, SpectrumRequestError) as e:
-        raise HTTPException(
-            status_code=(
-                status.HTTP_422_UNPROCESSABLE_ENTITY
-                if isinstance(e, (ConstraintError, SpectrumRequestError))
-                else status.HTTP_409_CONFLICT
-            ),
-            detail=str(e),
-        ) from e
+    except (ConstraintError, SpectrumRequestError) as e:
+        raise constraint_error(e) from e
+    except RmsaError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     return {
         "tapi-connectivity:connectivity-service": _connectivity_service_payload(ctx, svc)
     }

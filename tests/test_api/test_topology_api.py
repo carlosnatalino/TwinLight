@@ -128,7 +128,7 @@ class TestRestconfErrors:
         assert "ietf-restconf:errors" in data
         errors = data["ietf-restconf:errors"]["error"]
         assert len(errors) >= 1
-        assert errors[0].get("error-tag") == "data-missing"
+        assert errors[0].get("error-tag") == "invalid-value"  # RFC 8040 §4.3
         assert "error-message" in errors[0]
 
 

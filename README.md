@@ -281,7 +281,7 @@ The modulation format is carried where T-API v2.6.0 puts it: a
 `tapi-photonic-media` augment on the end-point, with the ONF identities
 `MT_DP-QPSK`, `MT_DP-QAM16` and `MT_DP-QAM64`. Omit it and admission picks the
 densest format whose QoT passes (DP-QPSK when no physics backend is loaded). A bare top-level `modulation-format` key is not part of T-API and is
-rejected with a `422` that names the standard location.
+rejected with a `400` (`invalid-value`) that names the standard location.
 
 The twin computes candidate paths, assigns the requested spectrum or else
 first-fit inside the amplifier band, and admits the request only if the

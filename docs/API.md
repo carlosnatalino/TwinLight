@@ -40,7 +40,8 @@ and each operation one way to do it. Paths earlier releases served anywhere
 else are removed, not redirected, and answer `404` (`401` without a token when
 authentication is on). Creation moved from the list path to its parent, as
 RFC 8040 §4.4.1 specifies; a `POST` on the list path answers `405`, since the
-path still serves `GET`. One response body changed too, in the last row:
+path still serves `GET`. Some response bodies and status codes changed too,
+in the rows after the paths:
 
 | Removed path or body | Standard path or body |
 |----------------------|-----------------------|
@@ -54,11 +55,14 @@ path still serves `GET`. One response body changed too, in the last row:
 | `/restconf/data/tapi-equipment:physical-context/…` | `/restconf/data/tapi-common:context/tapi-equipment:physical-context/…` |
 | `/data/tapi-common:context` and every path below it (the bare mount) | `/restconf/data/tapi-common:context` and the same path below it |
 | `GET …/tapi-connectivity:connectivity-context/connectivity-service` answering `{"tapi-connectivity:connectivity-context": {"connectivity-service": […]}}` | The list GET answers `{"tapi-connectivity:connectivity-service": […]}` (RFC 8040 §4.3); the old body is the container GET's, `GET …/tapi-connectivity:connectivity-context` |
+| `404` with `error-tag: data-missing`, on any T-API resource | `404` with `invalid-value` (RFC 8040 §4.3; `data-missing` is a `409` tag) |
+| `422` (`invalid-value`) for a T-API request that does not validate | `400`, with the tag that names the problem: `malformed-message`, `missing-element`, `bad-element` or `invalid-value` (see [Error format](#error-format)) |
+| `422` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required` (RFC 7950 §15.5) |
 
 The standard paths are given for the default root, `/restconf`; on a twin
 configured with another, substitute it. Everything after the container is
-unchanged, and so are request and response bodies, except the
-connectivity-service list GET's (last row); a create sends the same body to
+unchanged, and so are request and response bodies, except those in the rows
+after the paths; a create sends the same body to
 the container that it sent to the list path, and gets the same answer, now
 with a `Location` header. A twin configured with
 `server.restconf_root: ""` serves the data resource at `/data/…` by
@@ -273,7 +277,7 @@ The modulation format is the end-point's
 — `tapi-connectivity` has no modulation leaf of its own. `standard-modulation-technique`
 accepts `MT_DP-QPSK`, `MT_DP-QAM16` or `MT_DP-QAM64`; the module-prefixed identityref spelling is accepted too
 (RFC 7951 §6.8). A bare top-level `modulation-format` key is rejected with a
-`422` naming the standard location, rather than silently defaulting.
+`400` naming the standard location, rather than silently defaulting.
 
 The body may be a single object, as above, or a one-entry JSON array — RFC 7951
 §5.4 encodes a list entry as an array, and that is the form some controllers
@@ -302,12 +306,12 @@ to the one marked `SINK`, or, when neither says, from the first end-point to
 the second. Reads report what was provisioned: the service is
 `direction: UNIDIRECTIONAL` and `layer-protocol-name: PHOTONIC_MEDIA`, and the
 end-points are listed `SOURCE` first, then `SINK`. Two `SOURCE` (or two `SINK`)
-end-points are a `422`. An end-point `name` is kept and echoed.
+end-points are a `400`. An end-point `name` is kept and echoed.
 
 Standard leaves the twin does not act on fail the create or PUT with `501`
 (`operation-not-supported`). The error message names each one by path, so no
 service is admitted while ignoring part of the request. A value the leaf's
-YANG type does not admit (a `direction` of `"x"`) is a `422` instead. A
+YANG type does not admit (a `direction` of `"x"`) is a `400` instead. A
 `BIDIRECTIONAL` direction is refused with a note on how to get both
 directions: one service each way.
 
@@ -327,8 +331,9 @@ sent, and can be changed with `PATCH`.
 A service may carry the standard `routing-constraint` container and
 `topology-constraint` list; they constrain the route exactly as on a
 path-comp-service (see [Route constraints](#route-constraints)) and are echoed
-on reads. An unsupported constraint is a `422` naming the leaf; a constraint no
-route satisfies is a `409`.
+on reads. An unsupported constraint is a `400` naming the leaf, and one naming
+a node or link that does not exist a `409` (`data-missing`, see
+[Error format](#error-format)); a constraint no route satisfies is a `409`.
 
 **Semantics of the mutating verbs:**
 
@@ -388,7 +393,7 @@ grid — edges on slot edges, a central frequency at the centre of a block — a
 exactly one media channel wide for the format, the width a GET reports, so a
 fetched service can be sent back unchanged; numbers or RFC 7951 decimal
 strings are accepted. An `edge-frequency-constraint`, if sent, must be this
-twin's grid. These are `422`s naming the problem, as are
+twin's grid. These are `400`s naming the problem, as are
 `mc-bandwidth-config-pac`, `mc-flexi-grid-config-pac`, more than one media
 channel, and end-points that disagree. On each candidate route the requested
 block must lie in the band every amplifier on the route passes and be free on
@@ -406,17 +411,18 @@ the whole grid is assignable.
 **Requesting launch power.** `otsi-config/channel-output-power` is optional,
 in 0.01 dBm, as a number or decimal string; end-points that carry it must
 agree. A malformed value, or one outside the −20 to +10 dBm the twin models
-(−2000 to 1000), is a `422`.
+(−2000 to 1000), is a `400`.
 
 `otsi-config/modulation` is optional too: an `otsi-config` carrying only a
 central frequency or a launch power leaves the format to admission. A
-`modulation` that is not an object (`null` included) is a `422`.
+`modulation` that is not an object (`null` included) is a `400`.
 
 **Request checks.** A connectivity-service is a point-to-point lightpath:
-anything but exactly two end-points is a `422`. A `POST` naming the UUID of
+anything but exactly two end-points is a `400`. An end-point whose SIP does
+not exist is a `409` (`data-missing`). A `POST` naming the UUID of
 an existing service is a `409` (`resource-denied`, RFC 8040 §4.4.1) and
 changes nothing; replace a service with `PUT`. A body of the wrong shape (a
-string where an object belongs, an object where a list does) is a `422`,
+string where an object belongs, an object where a list does) is a `400`,
 never a `500`.
 
 **Operational state.** `operational-state` reports whether the lightpath can
@@ -494,7 +500,7 @@ does not claim either way:
 | `topology-constraint/explicit-route` | Yes — the includes must name every hop between the end-points' ROADMs; the route is not completed for you |
 | `routing-constraint/route-objective-function` | `MIN_WORK_ROUTE_LATENCY` only — routes are ranked by fiber length, and link latency is fiber length over a constant group velocity |
 | `routing-constraint/is-exclusive` | `true` only |
-| everything else (diversity, max-allowed-cost/hops/delay, cost/latency/risk characteristics, include/exclude topology, path and NEP, partitions, path sets) | Refused with a `422` naming the leaf |
+| everything else (diversity, max-allowed-cost/hops/delay, cost/latency/risk characteristics, include/exclude topology, path and NEP, partitions, path sets) | Refused with a `400` (`invalid-value`) naming the leaf |
 
 The ranked view with a candidate count, which T-API has no leaf for, is
 [`POST /internal/compute-path`](#internal--observation-and-metadata).
@@ -675,7 +681,7 @@ Errors under `/restconf/data/` use the RESTCONF format of
     "error": [
       {
         "error-type": "application",
-        "error-tag": "invalid-value",
+        "error-tag": "resource-denied",
         "error-message": "No path with sufficient GSNR: best 12.1 dB, required 16.0 dB"
       }
     ]
@@ -683,14 +689,26 @@ Errors under `/restconf/data/` use the RESTCONF format of
 }
 ```
 
+Each status is paired with the tag RFC 8040 §7 gives the condition (the tags
+themselves are NETCONF's, RFC 6241 Appendix A). RFC 8040 does not use `422`,
+so no T-API resource answers it:
+
 | HTTP status | `error-tag` | Used for |
 |-------------|-------------|----------|
-| 400 | `bad-element` | A malformed envelope (e.g. a list of more than one entry) |
-| 404 | `data-missing` | An unknown resource |
+| 400 | `malformed-message` (`error-type: rpc`) | A body that is not JSON |
+| 400 | `missing-element` | A mandatory leaf left out (an end-point without its `service-interface-point`) |
+| 400 | `bad-element` | A value of the wrong JSON type, or a malformed envelope (a list of more than one entry, a string where the entry belongs) |
+| 400 | `invalid-value` | A value the leaf or the twin does not accept: outside the YANG type, an unsupported constraint, a spectrum off the grid, a launch power outside the modelled range, a key in the body that differs from the one in the path, a `PUT` with no body (RFC 8040 §4.5) |
+| 404 | `invalid-value` | A resource that does not exist, whatever the method (RFC 8040 §4.3, §4.5–§4.7) |
 | 405 | `operation-not-supported` | A method the resource does not serve |
-| 409 | `resource-denied` | Admission refused: no route, spectrum or QoT |
-| 422 | `invalid-value` | A body that does not validate, or a constraint or value the twin cannot honour |
+| 409 | `data-missing` (`error-app-tag: instance-required`) | A reference to a SIP, node or link that does not exist: a leafref with no instance (RFC 7950 §15.5); `error-path` names the leaf where the twin knows it |
+| 409 | `resource-denied` | Admission refused (no route, spectrum or QoT), or a `POST` of an entry that already exists (RFC 8040 §4.4.1) |
 | 501 | `operation-not-supported` | A standard leaf the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
+
+The first problem a body has decides the tag; the message lists every one.
+The proprietary endpoints (`/internal`, `/admin`, `/config`, `/transparent`)
+use the same error body but keep FastAPI's `422` (`invalid-value`) for a
+request that does not validate, and `data-missing` on a `404`.
 
 A 405 also carries an `Allow` header (RFC 9110 §15.5.6) naming every method
 the resource serves at that path, on every path of the twin: T-API resources

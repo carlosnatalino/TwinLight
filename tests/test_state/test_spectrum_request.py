@@ -147,9 +147,10 @@ class TestRefusals:
          "mc-bandwidth-config-pac"),
         ({"spectrum": _block(200), "mcg_extra": {"number-of-mc": 2}}, "one media channel"),
     ])
-    def test_malformed_request_is_422_naming_it(self, mesh_app, refs, kwargs, named) -> None:
+    def test_malformed_request_is_refused_naming_it(self, mesh_app, refs, kwargs, named) -> None:
         resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), **kwargs))
-        assert resp.status_code == 422, resp.text
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert named in _error(resp)
 
     def test_end_points_must_agree(self, mesh_app, refs) -> None:
@@ -158,7 +159,7 @@ class TestRefusals:
             "layer-protocol-constraint"][0][MCG_CSEP_SPEC]["mc-spectrum-config-pac"][0]
         pac["spectrum"] = dict(zip(("lower-frequency", "upper-frequency"), _block(210), strict=True))
         resp = mesh_app.post(_CONTAINER, json=body)
-        assert resp.status_code == 422 and "different spectrum" in _error(resp)
+        assert resp.status_code == 400 and "different spectrum" in _error(resp)
 
     def test_other_grid_is_refused(self, mesh_app, refs) -> None:
         body = _body(refs.sip("trx A"), refs.sip("trx C"), spectrum=_block(200))
@@ -166,7 +167,7 @@ class TestRefusals:
             "layer-protocol-constraint"][0][MCG_CSEP_SPEC]["mc-spectrum-config-pac"][0]
         pac["edge-frequency-constraint"] = {"grid-type": "GRID_TYPE_DWDM"}
         resp = mesh_app.post(_CONTAINER, json=body)
-        assert resp.status_code == 422 and "grid-type" in _error(resp)
+        assert resp.status_code == 400 and "grid-type" in _error(resp)
 
     def test_outside_the_amplifier_band_is_409(self, mesh_app, refs) -> None:
         resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"),
