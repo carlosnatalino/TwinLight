@@ -431,6 +431,16 @@ twin_service_code() {
     "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=$1"
 }
 victim_released() { [ "$(twin_service_code "${DELETE_SCOPE_VICTIM}")" = 404 ]; }
+listed_to_onos() {
+  # the UUIDs the adapter's list GET shows ONOS, sorted, one per line
+  curl -sf "${ADAPTER_URL}/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context" 2>/dev/null \
+    | python3 -c '
+import json, sys
+body = json.load(sys.stdin)["tapi-connectivity:connectivity-context"]["connectivity-service"]
+print("\n".join(sorted(s["uuid"] for s in body)))' 2>/dev/null
+}
+DELETE_SCOPE_BEFORE=""
+listing_unchanged() { [ "$(listed_to_onos)" = "${DELETE_SCOPE_BEFORE}" ]; }
 delete_scope() {
   local body code flow
   body="$(curl -sS "${ADAPTER_URL}/adapter/ports" | python3 -c '
@@ -454,6 +464,13 @@ print(json.dumps({"tapi-connectivity:connectivity-service": [{
   [ "${code}" = 201 ] || { echo "the twin answered ${code} to a create sent to it directly"; return 1; }
   echo "created ${DELETE_SCOPE_NATIVE} on the twin directly (${SMOKE_A} -> ${SMOKE_Z})"
 
+  DELETE_SCOPE_BEFORE="$(listed_to_onos)"
+  [ -n "${DELETE_SCOPE_BEFORE}" ] || { echo "ONOS is shown no service before the restart"; return 1; }
+  if printf '%s\n' "${DELETE_SCOPE_BEFORE}" | grep -qx "${DELETE_SCOPE_NATIVE}"; then
+    echo "the twin-native service is listed to ONOS"; return 1
+  fi
+  echo "ONOS is shown $(printf '%s\n' "${DELETE_SCOPE_BEFORE}" | wc -l | tr -d ' ') service(s), not the twin-native one"
+
   if [ -n "${STARTED}" ]; then
     docker restart "${TL_PREFIX}-tapi-adapter" >/dev/null || return 1
     until_true 90 adapter_ok || { echo "the adapter is not healthy 90 s after its restart"; return 1; }
@@ -463,16 +480,12 @@ print(json.dumps({"tapi-connectivity:connectivity-service": [{
     echo "--reuse: the adapter is not restarted"
   fi
 
-  until_true 90 flows_match_services \
-    || { echo "ONOS holds $(onos_rest_flows | wc -l | tr -d ' ') REST flows, the adapter reports $(adapter_service_count) services"; return 1; }
-  curl -sS "${ADAPTER_URL}/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context" \
-    | python3 -c '
-import json, sys
-listed = [s["uuid"] for s in json.load(sys.stdin)["tapi-connectivity:connectivity-context"]["connectivity-service"]]
-assert sys.argv[1] not in listed, "the twin-native service is listed to ONOS"
-assert listed, "ONOS is shown none of its own services"
-print("ONOS is shown its %d service(s), not the twin-native one" % len(listed))
-' "${DELETE_SCOPE_NATIVE}" || return 1
+  until_true 90 listing_unchanged \
+    || { printf 'ONOS is shown other services after the restart:\nbefore\n%s\nafter\n%s\n' \
+           "${DELETE_SCOPE_BEFORE}" "$(listed_to_onos)"; return 1; }
+  [ "$(adapter_service_count)" = "$(printf '%s\n' "${DELETE_SCOPE_BEFORE}" | wc -l | tr -d ' ')" ] \
+    || { echo "/adapter/status reports $(adapter_service_count) ONOS-created services after the restart"; return 1; }
+  echo "after the restart ONOS is shown the same services, and /adapter/status reports them"
 
   code="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
     "${ADAPTER_URL}/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${DELETE_SCOPE_NATIVE}")"

@@ -490,7 +490,7 @@ every other script and checks what it did:
 | `fault.sh cut-path`, `heal-all`, `list` | OPM reports `link-failed`, then recovers |
 | `lightpath.sh delete` | the twin releases the service |
 | `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number |
-| delete scope, across an adapter restart | a lightpath created on the twin directly is not listed to ONOS and survives a `DELETE` through the adapter (`204`, reported under `refused-deletes`); after the adapter restarts, ONOS's flows and the services it is shown still agree, and removing a flow in ONOS still releases its lightpath. The restart is skipped with `--reuse` |
+| delete scope, across an adapter restart | a lightpath created on the twin directly is not listed to ONOS and survives a `DELETE` through the adapter (`204`, reported under `refused-deletes`); after the adapter restarts, ONOS is shown the same services as before and `/adapter/status` reports them, and removing a flow in ONOS still releases its lightpath. The restart is skipped with `--reuse` |
 | `resync.sh --check`, `resync.sh` | ONOS-created lightpaths survive, every port enabled |
 | `onos-cli.sh devices` | the CLI answers and lists the device |
 | `lightpath.sh clear`, `validate.sh` again | the twin is emptied; still 16/16 |
