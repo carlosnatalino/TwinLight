@@ -499,7 +499,8 @@ every other script and checks what it did:
 Options: `--keep` leaves the stack up for inspection, `--reuse` tests a stack
 that is already running instead of booting one (and never tears it down),
 `--boots N` cold-boots N times in a row before the checks, `--rmi` also
-removes the images it built, `--out DIR` chooses where the logs go.
+removes the images it built (not the pinned ONOS image, which it pulls rather
+than builds), `--out DIR` chooses where the logs go.
 
 It never touches a stack it did not start. The test stack has its own project,
 container prefix and image tag (`twinlight-onos-test`), ports (28080 REST,
@@ -557,6 +558,29 @@ Introspection, safe to call any time:
 | `ADAPTER_EXPOSE_TWIN_SERVICES` | `false` | See below |
 | `ADAPTER_SIP_REFRESH_SECONDS` | `30` | SIP catalogue cache lifetime |
 | `TWINLIGHT_API_TOKEN` | *(empty)* | The bearer token the adapter presents to a twin with `TWINLIGHT_API_TOKENS` set. Compose passes it from `.env`. Empty, the adapter sends no credentials. See [Authentication](#authentication) |
+
+### The ONOS image
+
+The overlay pins ONOS by digest,
+`onosproject/onos:2.7-latest@sha256:ee324bcf…54813`, so every run uses the
+image the integration test last passed with: `2.7-latest` is a moving tag.
+Docker resolves the digest and ignores the tag, which stays for readers. The
+digest is that of the `linux/amd64` image manifest; ONOS publishes no manifest
+list for the tag (no other platform), so the same digest runs natively on
+amd64 Linux and under emulation on Apple Silicon.
+
+To move the pin forward, read the tag's current digest from the registry
+(public metadata, nothing is pulled), put it in
+`integrations/onos/docker-compose.onos.yml`, and run the integration test, with
+and without tokens, before committing:
+
+```bash
+docker buildx imagetools inspect onosproject/onos:2.7-latest   # Digest: sha256:…
+./integrations/onos/scripts/test-integration.sh all
+```
+
+If the tag ever becomes a manifest list, pin the list's digest (the `Digest`
+line of that command), not one platform's.
 
 ### Running a second stack side by side
 
