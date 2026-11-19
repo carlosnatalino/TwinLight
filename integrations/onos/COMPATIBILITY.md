@@ -30,6 +30,7 @@ modules implement only the standard (see
 | B4 | Modulation format location | Twin |
 | B5 | Assigned-spectrum location | Twin |
 | B6 | No invented `tapi-photonic-media` resources | Twin |
+| B7 | Create by POST on the connectivity-context | Twin |
 
 ---
 
@@ -258,6 +259,20 @@ augments on the SIP (B1) and on the connectivity-service end-point (B4, B5),
 served by the common and connectivity routers. The standard view of the grid is
 the per-SIP `spectrum-capability-pac`, which reports real bands in Hz rather
 than a slot count.
+
+### B7. Create by POST on the connectivity-context
+
+`TapiFlowRuleProgrammable` creates a service by POST on
+`…/tapi-connectivity:connectivity-context`, with the new entry in the body.
+That is RFC 8040 §4.4.1: *"The target resource for the POST method for resource
+creation is the parent of the new resource."* Earlier releases of the twin took
+the create one level down, on the list path `…/connectivity-service`, so the
+adapter re-targeted the request.
+
+The twin now creates on the container (and on the
+`path-computation-context` for a `path-comp-service`), answers `201` with a
+`Location` naming the new entry, and refuses a POST on the list path with
+`405`. The adapter forwards the create to the same path ONOS used.
 
 ---
 

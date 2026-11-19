@@ -37,9 +37,8 @@ import os
 import random
 import sys
 import urllib.error
-import urllib.request
 
-from tapi_fields import twin_data_root  # same directory: on sys.path when run
+from tapi_fields import twin_data_root, twin_urlopen  # same directory: on sys.path when run
 
 # Required GSNR per format, plus the default rmsa.qot_margin_db of 1.5 dB.
 # Ordered high to low: a probe is filed under the best format it supports.
@@ -52,7 +51,7 @@ THRESHOLDS: list[tuple[str, float]] = [
 
 
 def _get(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=120) as response:
+    with twin_urlopen(url, timeout=120) as response:
         return json.load(response)
 
 

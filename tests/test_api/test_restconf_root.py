@@ -33,7 +33,8 @@ MODULE_GETS = [
 ]
 
 _SVC_KEY = "tapi-connectivity:connectivity-service"
-_SERVICES = "/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_CONNECTIVITY = "/tapi-common:context/tapi-connectivity:connectivity-context"
+_SERVICES = f"{_CONNECTIVITY}/connectivity-service"
 
 
 def _with_root(twin_config: TwinConfig, root: str) -> TestClient:
@@ -133,14 +134,16 @@ class TestConfigurableRoot:
         body = {_SVC_KEY: {"end-point": [
             tapi_end_point("a", sips[0]["uuid"]), tapi_end_point("z", sips[1]["uuid"]),
         ]}}
-        resp = client.post(f"{data}{_SERVICES}", json=body)
+        resp = client.post(f"{data}{_CONNECTIVITY}", json=body)
         assert resp.status_code == 201, resp.text
         uuid = resp.json()[_SVC_KEY]["uuid"]
+        assert resp.headers["location"] == f"{data}{_SERVICES}={uuid}"
         name = [{"value-name": "service-name", "value": "renamed"}]
         assert client.patch(f"{data}{_SERVICES}={uuid}", json={"name": name}).status_code == 200
         full = client.get(f"{data}/tapi-common:context").json()["tapi-common:context"]
         (svc,) = full["tapi-connectivity:connectivity-context"]["connectivity-service"]
         assert svc["name"] == name
+        assert client.get(f"{data}{_SERVICES}").json() == {_SVC_KEY: [svc]}
         assert client.delete(f"{data}{_SERVICES}={uuid}").status_code == 204
         assert client.get(f"{data}{_SERVICES}={uuid}").status_code == 404
 

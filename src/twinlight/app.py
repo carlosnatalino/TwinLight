@@ -38,6 +38,7 @@ from twinlight.api import (
 )
 from twinlight.api.middleware import (
     RESTCONF_MEDIA_TYPE,
+    AllowHeaderMiddleware,
     PathDecodeMiddleware,
     RestconfContentTypeMiddleware,
     TokenAuthMiddleware,
@@ -78,6 +79,8 @@ def _http_status_to_error_tag(status_code: int) -> str:
         return "access-denied"
     if status_code == 404:
         return "data-missing"
+    if status_code == 405:
+        return "operation-not-supported"
     if status_code == 409:
         return "resource-denied"
     if status_code == 400:
@@ -189,12 +192,19 @@ def create_app(config: TwinConfig) -> FastAPI:
     authenticator = TokenAuthenticator(config.api_tokens)
 
     # Middleware (order matters: last added = first executed)
-    # PathDecodeMiddleware is added first so it runs innermost (just before
-    # the router), decoding %3A-encoded colons in RESTCONF paths.
+    # PathDecodeMiddleware runs just before the router (only
+    # AllowHeaderMiddleware is inside it), decoding %3A-encoded colons in
+    # RESTCONF paths.
     # TokenAuthMiddleware, when installed, sits just inside CORS, so
     # preflights are answered without credentials and a 401 still carries
     # CORS headers. It is outside everything else, so a rejected request
     # never reaches routing or the other middleware.
+    # AllowHeaderMiddleware is innermost of all: it rewrites the Allow header
+    # of every 405 from the router's matching (RFC 9110 §15.5.6), so it must
+    # see the decoded path and the exception handler's response.
+    app.add_middleware(
+        AllowHeaderMiddleware, refusals=(transparent.refused_methods,)
+    )
     app.add_middleware(PathDecodeMiddleware)
     app.add_middleware(
         RestconfContentTypeMiddleware,

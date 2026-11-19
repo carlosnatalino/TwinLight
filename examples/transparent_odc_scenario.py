@@ -104,7 +104,7 @@ def create_lightpath(
         "name": [{"value-name": "service-name", "value": "odc-scenario"}],
         "end-point": [end_point("a", sip_a), end_point("z", sip_z)],
     }}
-    r = http.post(f"{connectivity}/connectivity-service", json=body)
+    r = http.post(connectivity, json=body)  # created on the container (RFC 8040 §4.4.1)
     if r.status_code == 409:  # admission refused: no path, spectrum or QoT
         return None
     r.raise_for_status()

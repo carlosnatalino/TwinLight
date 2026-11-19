@@ -28,7 +28,7 @@ def _create_service(app: TestClient, sip_a: str, sip_z: str) -> str:
             ],
         }
     }
-    r = app.post(f"{_BASE}/connectivity-service", json=payload)
+    r = app.post(_BASE, json=payload)
     assert r.status_code == 201
     return r.json()["tapi-connectivity:connectivity-service"]["uuid"]
 
@@ -81,7 +81,7 @@ class TestRestore:
         # Delete the service
         app.delete(f"{_BASE}/connectivity-service={uuid}")
         list_r = app.get(f"{_BASE}/connectivity-service")
-        services = list_r.json()["tapi-connectivity:connectivity-context"]["connectivity-service"]
+        services = list_r.json()["tapi-connectivity:connectivity-service"]
         assert len(services) == 0
 
         # Restore
@@ -90,7 +90,7 @@ class TestRestore:
         assert rest.json()["services"] == 1
 
         list_r2 = app.get(f"{_BASE}/connectivity-service")
-        services2 = list_r2.json()["tapi-connectivity:connectivity-context"]["connectivity-service"]
+        services2 = list_r2.json()["tapi-connectivity:connectivity-service"]
         assert len(services2) == 1
         assert services2[0]["uuid"] == uuid
 

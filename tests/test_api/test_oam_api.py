@@ -13,7 +13,8 @@ from fastapi.testclient import TestClient
 from tests.conftest import tapi_end_point
 from twinlight.models.oam import oam_job_uuid
 
-_CONN = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_CONTAINER = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_CONN = f"{_CONTAINER}/connectivity-service"
 _OAM = "/restconf/data/tapi-common:context/tapi-oam:oam-context"
 
 # Every leaf of tapi-oam:oam-context/oam-job in the v2.6.0 YANG
@@ -38,7 +39,7 @@ def _sips(app: TestClient) -> list[str]:
 
 
 def create_service(app: TestClient, sip_a: str, sip_z: str) -> str:
-    resp = app.post(_CONN, json={"tapi-connectivity:connectivity-service": {
+    resp = app.post(_CONTAINER, json={"tapi-connectivity:connectivity-service": {
         "end-point": [tapi_end_point("a-end", sip_a), tapi_end_point("z-end", sip_z)],
     }})
     assert resp.status_code == 201, resp.text

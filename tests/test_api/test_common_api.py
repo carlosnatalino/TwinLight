@@ -9,13 +9,12 @@ from tests.conftest import MeshRefs, _mesh_config, tapi_end_point
 from twinlight.app import create_app
 from twinlight.models.connectivity import MCG_CSEP_SPEC
 
-_SVC = (
-    "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
-)
-_PATH_COMP_SVC = (
+_CONNECTIVITY = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_PATH_COMPUTATION = (
     "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
-    "/path-comp-service"
 )
+#: The connectivity-service list: GET only; services are created on _CONNECTIVITY.
+_SVC = f"{_CONNECTIVITY}/connectivity-service"
 
 
 class TestGetContext:
@@ -69,19 +68,15 @@ class TestGetSipByUuid:
 # serves. Each section must equal what that module's own GETs serve: rows
 # keyed by the module-qualified name (RFC 7951 §4), each with the URLs whose
 # response carries the same container under the same key: the container's
-# RESTCONF path (RFC 8040 §3.5.3: it is an augment of tapi-common:context)
-# and, for connectivity, the connectivity-service list GET, which answers
-# with the container's envelope.
+# RESTCONF path (RFC 8040 §3.5.3: it is an augment of tapi-common:context).
+# The connectivity-service list GET answers with the list, not the container
+# (RFC 8040 §4.3); TestConnectivityServiceList compares its entries.
 _SECTIONS = {
     "tapi-topology:topology-context": [
         "/restconf/data/tapi-common:context/tapi-topology:topology-context",
     ],
     "tapi-connectivity:connectivity-context": [
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
-        (
-            "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
-            "/connectivity-service"
-        ),
     ],
     "tapi-path-computation:path-computation-context": [
         "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context",
@@ -119,9 +114,9 @@ def admitted(request: pytest.FixtureRequest, tmp_path: Path) -> TestClient:
     for a in ("trx A", "trx B"):
         body = {"end-point": [tapi_end_point("a", refs.sip(a)),
                               tapi_end_point("z", refs.sip("trx C"))]}
-        resp = client.post(_SVC, json={"tapi-connectivity:connectivity-service": [body]})
+        resp = client.post(_CONNECTIVITY, json={"tapi-connectivity:connectivity-service": [body]})
         assert resp.status_code == 201, resp.text
-    resp = client.post(_PATH_COMP_SVC, json={
+    resp = client.post(_PATH_COMPUTATION, json={
         "tapi-path-computation:path-comp-service": [{"end-point": [
             {"local-id": "a",
              "service-interface-point": {"service-interface-point-uuid": refs.sip("trx A")}},
@@ -190,6 +185,55 @@ class TestFullContextAugments:
             "connectivity-service"
         ]
         for service in services:
+            for end_point in service["end-point"]:
+                for constraint in end_point["layer-protocol-constraint"]:
+                    assert MCG_CSEP_SPEC in constraint
+
+
+class TestConnectivityServiceList:
+    """The list GET answers with the list as its one top-level member, named
+    with its module (RFC 8040 §4.3, RFC 7951 §4), not with the container."""
+
+    _CONTAINER = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+
+    def _list(self, app: TestClient) -> dict:
+        resp = app.get(_SVC)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("application/yang-data+json")
+        return resp.json()
+
+    def _entries_everywhere(self, app: TestClient) -> tuple[list, list, list]:
+        full = _full_context(app)["tapi-connectivity:connectivity-context"]
+        container = app.get(self._CONTAINER).json()["tapi-connectivity:connectivity-context"]
+        (listed,) = self._list(app).values()
+        return listed, container["connectivity-service"], full["connectivity-service"]
+
+    def test_empty(self, app: TestClient) -> None:
+        assert self._list(app) == {"tapi-connectivity:connectivity-service": []}
+
+    @pytest.mark.parametrize("admitted", ["gnpy", "egn"], indirect=True)
+    def test_body_is_the_list(self, admitted: TestClient) -> None:
+        body = self._list(admitted)
+        assert set(body) == {"tapi-connectivity:connectivity-service"}
+        services = body["tapi-connectivity:connectivity-service"]
+        assert len(services) == 2
+        assert all("uuid" in s and "end-point" in s for s in services)
+
+    @pytest.mark.parametrize("admitted", ["gnpy", "egn"], indirect=True)
+    def test_entries_equal_the_container_and_the_full_context(
+        self, admitted: TestClient,
+    ) -> None:
+        listed, container, full = self._entries_everywhere(admitted)
+        assert len(listed) == 2
+        assert listed == container == full
+
+    def test_entries_equal_the_container_with_nothing_admitted(self, app: TestClient) -> None:
+        listed, container, full = self._entries_everywhere(app)
+        assert listed == container == full == []
+
+    @pytest.mark.parametrize("admitted", ["gnpy"], indirect=True)
+    def test_entries_carry_their_live_spectrum(self, admitted: TestClient) -> None:
+        for service in self._list(admitted)["tapi-connectivity:connectivity-service"]:
             for end_point in service["end-point"]:
                 for constraint in end_point["layer-protocol-constraint"]:
                     assert MCG_CSEP_SPEC in constraint

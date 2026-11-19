@@ -245,8 +245,7 @@ async def run(http: httpx.AsyncClient, opts: Options) -> int:
     resp.raise_for_status()
     services = {
         s["uuid"]: next((n["value"] for n in s.get("name", [])), s["uuid"])
-        for s in resp.json().get("tapi-connectivity:connectivity-context", {}).get(
-            "connectivity-service", [])
+        for s in resp.json()["tapi-connectivity:connectivity-service"]
     }
     if not jobs:
         print("   no oam-jobs: create a connectivity service first "

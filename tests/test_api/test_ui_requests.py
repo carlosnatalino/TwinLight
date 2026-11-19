@@ -20,7 +20,14 @@ from twinlight.app import create_app
 from twinlight.models.connectivity import OTSIA_CSEP_SPEC
 
 _FIXTURES = Path(__file__).parents[2] / "twinlight-ui" / "src" / "__tests__" / "fixtures"
-_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+#: Where the UI creates a service (TapiApiClient.createConnectivityService):
+#: the connectivity-context, the list's parent (RFC 8040 §4.4.1).
+_CREATE = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+#: What the UI's getServices reads (twinlight-ui/src/api/client.ts).
+_SERVICE_LIST = (
+    "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+    "/connectivity-service"
+)
 
 
 def _request(name: str, ctx) -> dict:
@@ -46,7 +53,7 @@ def client(request, tmp_path: Path) -> TestClient:
 
 def test_the_default_form_is_admitted(client: TestClient) -> None:
     ctx = client.app.state.context
-    resp = client.post(_SVC, json=_request("defaults", ctx))
+    resp = client.post(_CREATE, json=_request("defaults", ctx))
     assert resp.status_code == 201, resp.text
     service = resp.json()["tapi-connectivity:connectivity-service"]
     assert [ep["direction"] for ep in service["end-point"]] == ["SOURCE", "SINK"]
@@ -57,7 +64,7 @@ def test_the_default_form_is_admitted(client: TestClient) -> None:
 
 def test_every_option_of_the_form_is_honoured(client: TestClient) -> None:
     ctx = client.app.state.context
-    resp = client.post(_SVC, json=_request("full", ctx))
+    resp = client.post(_CREATE, json=_request("full", ctx))
     assert resp.status_code == 201, resp.text
     service = resp.json()["tapi-connectivity:connectivity-service"]
     cfg = service["end-point"][0]["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0]
@@ -66,3 +73,18 @@ def test_every_option_of_the_form_is_honoured(client: TestClient) -> None:
     assert cfg["channel-output-power"] == 150
     path = ctx._allocated_path_uids(service["uuid"])
     assert "roadm B" in path and "roadm D" not in path
+
+
+def test_the_service_list_answers_with_the_member_the_ui_reads(client: TestClient) -> None:
+    # getServices takes the list from tapi-connectivity:connectivity-service
+    # and refuses a body without it, so this is the body it must get.
+    assert client.get(_SERVICE_LIST).json() == {"tapi-connectivity:connectivity-service": []}
+    ctx = client.app.state.context
+    resp = client.post(_CREATE, json=_request("defaults", ctx))
+    assert resp.status_code == 201, resp.text
+    created = resp.json()["tapi-connectivity:connectivity-service"]
+    body = client.get(_SERVICE_LIST).json()
+    assert set(body) == {"tapi-connectivity:connectivity-service"}
+    assert [s["uuid"] for s in body["tapi-connectivity:connectivity-service"]] == [
+        created["uuid"]
+    ]

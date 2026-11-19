@@ -51,6 +51,27 @@ GRAFANA_URL="http://localhost:${TWINLIGHT_GRAFANA_PORT:-3000}"
 # Must match the static IP and port in docker-compose.onos.yml / netcfg.
 DEVICE_ID="${DEVICE_ID:-rest:${TWINLIGHT_ONOS_SUBNET_PREFIX:-172.28}.0.10:8282}"
 
+# The token these scripts present to a twin that requires one: the same
+# TWINLIGHT_API_TOKEN the CLIs and the adapter read, from the environment or
+# else from the repository's .env (where Compose reads it for the adapter).
+# Exported for the Python helpers; never printed. twin_curl and
+# tapi_fields.twin_urlopen send it to the twin only, never to ONOS or the
+# adapter -- neither needs it.
+if [ -z "${TWINLIGHT_API_TOKEN:-}" ] && [ -f "${REPO_ROOT}/.env" ]; then
+  TWINLIGHT_API_TOKEN="$(awk '
+    /^[[:space:]]*(export[[:space:]]+)?TWINLIGHT_API_TOKEN[[:space:]]*=/ {
+      v = $0
+      sub(/\r$/, "", v); sub(/^[^=]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]]+#.*$/, "", v); sub(/[[:space:]]+$/, "", v)
+      gsub(/^["\047]|["\047]$/, "", v)
+      token = v
+    }
+    END { print token }' "${REPO_ROOT}/.env")"
+fi
+if [ -n "${TWINLIGHT_API_TOKEN:-}" ]; then
+  export TWINLIGHT_API_TOKEN
+fi
+
 COMPOSE_FILES=(-f "${REPO_ROOT}/docker-compose.yml" -f "${ONOS_DIR}/docker-compose.onos.yml")
 # Further files, colon-separated, relative to the repo root or absolute; they
 # go last so they override the two above.
@@ -80,6 +101,44 @@ die()  { printf '%sFAIL%s %s\n' "${C_RED}${C_BOLD}" "${C_RESET}" "$*" >&2; exit 
 twin_data() {
   python3 -c "import sys; sys.path.insert(0, sys.argv[1]); from tapi_fields import twin_data_root; print(twin_data_root(sys.argv[2]))" \
     "${SCRIPT_DIR}" "${TWIN_URL}"
+}
+
+# curl for requests to the twin: the same arguments, plus the bearer token when
+# one is set. The header is passed through a file descriptor rather than the
+# command line, so the token does not show in the process list. For ONOS and
+# the adapter use plain curl.
+twin_curl() {
+  if [ -n "${TWINLIGHT_API_TOKEN:-}" ]; then
+    curl -H @<(printf 'Authorization: Bearer %s\n' "${TWINLIGHT_API_TOKEN}") "$@"
+  else
+    curl "$@"
+  fi
+}
+
+# Why the twin refuses this shell's token (missing or not accepted), printed;
+# fails then, succeeds silently otherwise -- also when the twin is down, which
+# is not an authorization problem.
+twin_auth_problem() {
+  python3 -c "import sys; sys.path.insert(0, sys.argv[1]); from tapi_fields import twin_auth_problem; p = twin_auth_problem(sys.argv[2]); print(p or ''); sys.exit(1 if p else 0)" \
+    "${SCRIPT_DIR}" "${TWIN_URL}"
+}
+
+# Why the twin refuses the ADAPTER's token, as the adapter's /health reports
+# it; fails then, succeeds silently otherwise. Without this, a refused adapter
+# looks like ONOS discovering zero ports, or a lightpath that never appears.
+adapter_auth_problem() {
+  local health
+  health="$(curl -sS "${ADAPTER_URL}/health" 2>/dev/null)" || return 0
+  printf '%s' "${health}" | python3 -c '
+import json, sys
+try:
+    health = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+if health.get("twin-authorized") is False:
+    print(health.get("twin-auth-error") or "the twin refuses the adapter")
+    sys.exit(1)
+'
 }
 
 # Compose takes the project name from COMPOSE_PROJECT_NAME (environment or
@@ -335,6 +394,10 @@ require_stack() {
     sleep 3
     waited=$((waited + 3))
   done
+  local why
+  why="$(adapter_auth_problem)" \
+    || die "adapter: ${why} — see integrations/onos/README.md § Authentication"
   onos_ready \
     || die "ONOS not ready at ${ONOS_URL} — run integrations/onos/scripts/demo-up.sh first"
+  why="$(twin_auth_problem)" || die "${why}"
 }

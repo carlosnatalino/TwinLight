@@ -19,6 +19,10 @@ ok "twin is up: $(curl -sS "${TWIN_URL}/health")"
 say "Waiting for the T-API adapter"
 wait_for "adapter /health" 120 curl -sSf "${ADAPTER_URL}/health" \
   || die "adapter never became healthy — check: docker logs ${ADAPTER_CONTAINER}"
+# A twin that refuses the adapter's token would otherwise surface minutes
+# later as ONOS discovering zero ports.
+why="$(adapter_auth_problem)" \
+  || die "adapter: ${why} — see integrations/onos/README.md § Authentication"
 ok "adapter is up"
 
 say "Waiting for ONOS (Karaf boot — slow under Rosetta on Apple Silicon)"

@@ -20,7 +20,7 @@ JSON="$(python3 - "$@" <<PY
 import json, sys, urllib.request, base64
 
 sys.path.insert(0, "${SCRIPT_DIR}")
-from tapi_fields import spectrum_of
+from tapi_fields import spectrum_of, twin_urlopen
 
 onos_auth = base64.b64encode(b"${ONOS_AUTH}").decode()
 
@@ -74,8 +74,8 @@ for f in flows:
         band = spectrum_of(svc)
         row["centre-thz"] = round(band[0], 4) if band else None
         try:
-            opm = get("${TWIN_URL}/internal/opm/" + uuid)
-            info = get("${TWIN_URL}/internal/services/" + uuid)
+            opm = json.load(twin_urlopen("${TWIN_URL}/internal/opm/" + uuid))
+            info = json.load(twin_urlopen("${TWIN_URL}/internal/services/" + uuid))
             m = opm["measurements"]
             row["twin-status"] = opm.get("status", "ok")
             row["gsnr-db"], row["osnr-db"] = m.get("gsnr-db"), m.get("osnr-db")

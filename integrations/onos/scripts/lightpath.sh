@@ -111,12 +111,14 @@ else:
   # Physics readback, straight from the twin.
   say "Twin optical performance monitoring"
   curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c "
-import json, sys, urllib.request
+import json, sys
+sys.path.insert(0, '${SCRIPT_DIR}')
+from tapi_fields import twin_urlopen
 uuids = list(json.load(sys.stdin)['onos-created-services'])
 for u in uuids:
     try:
-        opm = json.load(urllib.request.urlopen('${TWIN_URL}/internal/opm/' + u))['measurements']
-        info = json.load(urllib.request.urlopen('${TWIN_URL}/internal/services/' + u))
+        opm = json.load(twin_urlopen('${TWIN_URL}/internal/opm/' + u))['measurements']
+        info = json.load(twin_urlopen('${TWIN_URL}/internal/services/' + u))
     except Exception as exc:
         print('    %s: %s' % (u[:8], exc)); continue
     # Every optical metric is null while a fiber on the path is cut.

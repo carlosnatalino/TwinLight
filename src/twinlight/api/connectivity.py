@@ -1,8 +1,8 @@
 """T-API v2.6.0 connectivity (``tapi-connectivity:connectivity-context``).
 
 GET    {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
+POST   {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
 GET    …/connectivity-service
-POST   …/connectivity-service
 GET    …/connectivity-service={uuid}
 PUT    …/connectivity-service={uuid}
 PATCH  …/connectivity-service={uuid}
@@ -11,16 +11,20 @@ DELETE …/connectivity-service={uuid}
 ``tapi-connectivity`` augments ``/tapi-common:context`` with
 ``connectivity-context``, so RFC 8040 §3.5.3 puts its data resource under
 the context, beside the topology, OAM and stream contexts.
+
+A service is created by POST on the container, its parent, as RFC 8040
+§4.4.1 specifies; the list path takes no POST.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import ValidationError
 
 from twinlight.algorithms.path_constraints import ConstraintError
+from twinlight.api.restconf import created_location
 from twinlight.models.common import Direction, ForwardingDirection, LayerProtocolName
 from twinlight.models.connectivity import (
     MCG_CSEP_SPEC,
@@ -240,12 +244,17 @@ def _parse_service(body: dict) -> ConnectivityService:
     return svc
 
 
-@router.post(
-    "/connectivity-service",
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_service(body: dict, request: Request) -> dict:
-    """Create a new connectivity service between two SIPs."""
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_service(body: dict, request: Request, response: Response) -> dict:
+    """Create a new connectivity service between two SIPs.
+
+    RFC 8040 §4.4.1: the target of a creating POST is the new resource's
+    parent, here the connectivity-context, with the new
+    ``connectivity-service`` entry in the body. The 201 carries a
+    ``Location`` naming the entry; it also carries the entry itself (with
+    the spectrum and format admission chose), where the RFC sends no body.
+    docs/TAPI_COMPLIANCE.md records that deviation.
+    """
     ctx = request.app.state.context
 
     svc = _parse_service(body)
@@ -296,6 +305,9 @@ async def create_service(body: dict, request: Request) -> dict:
             detail=str(e),
         ) from e
 
+    response.headers["Location"] = created_location(
+        request, PREFIX, "connectivity-service", svc.uuid
+    )
     return {
         "tapi-connectivity:connectivity-service": _connectivity_service_payload(
             ctx, svc
@@ -326,10 +338,10 @@ def _connectivity_service_payload(ctx, svc) -> dict:
 async def connectivity_context_payload(ctx) -> dict:
     """The ``tapi-connectivity:connectivity-context`` container.
 
-    One function for both views of it, this module's list GET and the full
-    context GET (``api/common.py``), so the two cannot disagree. Assembled
-    per request: each service carries live spectrum and an
-    operational-state that follows the current QoT.
+    One function for every view of it, this module's container and list
+    GETs and the full context GET (``api/common.py``), so they cannot
+    disagree. Assembled per request: each service carries live spectrum and
+    an operational-state that follows the current QoT.
     """
     # operational-state follows the current QoT: re-evaluate what a change
     # (a parameter write, a failure, a neighbour) invalidated.
@@ -354,11 +366,13 @@ async def get_connectivity_context(request: Request) -> dict:
 async def get_services(request: Request) -> dict:
     """Return all connectivity services, with assigned spectrum when held.
 
-    Answers with the container's envelope, the same body as the container
-    GET, as it always has: the UI, the client library and the ONOS adapter
-    read it that way.
+    RFC 8040 §4.3 and RFC 7951 §4: the target list is the body's one
+    top-level member, named with its module. The entries are the container
+    GET's, which still answers with the whole connectivity context.
     """
-    return await get_connectivity_context(request)
+    ctx = request.app.state.context
+    payload = await connectivity_context_payload(ctx)
+    return {"tapi-connectivity:connectivity-service": payload["connectivity-service"]}
 
 
 @router.get("/connectivity-service={uuid}")

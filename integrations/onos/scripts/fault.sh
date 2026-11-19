@@ -17,7 +17,7 @@
 
 usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
-failed_links() { curl -sS "${TWIN_URL}/config/get" | python3 -c "
+failed_links() { twin_curl -sS "${TWIN_URL}/config/get" | python3 -c "
 import json, sys
 print('\n'.join(json.load(sys.stdin).get('failed_links', [])))
 "; }
@@ -35,7 +35,7 @@ set_failed() {
 import json, sys
 print(json.dumps({'devices': {sys.argv[1]: {'failed': sys.argv[2] == 'true'}}}))
 " "${uid}" "${state}")"
-  curl -sS -X POST -H 'Content-Type: application/json' -d "${body}" \
+  twin_curl -sS -X POST -H 'Content-Type: application/json' -d "${body}" \
     "${TWIN_URL}/config/set" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
@@ -64,15 +64,17 @@ cmd_cut_path() {
   # by matching each consecutive ROADM pair against the fiber inventory, whose
   # UIDs are of the form "fiber (Austin -> San_Antonio)-...".
   uid="$(python3 -c "
-import json, urllib.request, sys
+import json, sys
+sys.path.insert(0, '${SCRIPT_DIR}')
+from tapi_fields import twin_urlopen
 
-svc = json.load(urllib.request.urlopen('${TWIN_URL}/internal/services/' + sys.argv[1]))
+svc = json.load(twin_urlopen('${TWIN_URL}/internal/services/' + sys.argv[1]))
 hops = [h['uid'] for h in (svc.get('hops') or []) if h.get('type') == 'Roadm']
 if len(hops) < 2:
     sys.exit('service path has fewer than two ROADMs')
 
 cities = [h.replace('roadm ', '') for h in hops]
-devices = json.load(urllib.request.urlopen('${TWIN_URL}/config/get'))['devices']
+devices = json.load(twin_urlopen('${TWIN_URL}/config/get'))['devices']
 fibers = [d['uid'] for d in devices if d.get('type') == 'Fiber']
 
 def find(a, b):
@@ -120,13 +122,15 @@ cmd_heal_all() {
 show_impact() {
   say "Twin OPM for ONOS-created lightpaths"
   curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c "
-import json, sys, urllib.request
+import json, sys
+sys.path.insert(0, '${SCRIPT_DIR}')
+from tapi_fields import twin_urlopen
 uuids = list(json.load(sys.stdin)['onos-created-services'])
 if not uuids:
     print('    (no ONOS-created lightpaths)')
 for u in uuids:
     try:
-        opm = json.load(urllib.request.urlopen('${TWIN_URL}/internal/opm/' + u))
+        opm = json.load(twin_urlopen('${TWIN_URL}/internal/opm/' + u))
     except Exception as exc:
         print('    %s: %s' % (u[:8], exc)); continue
     m = opm['measurements']
@@ -145,6 +149,9 @@ d = json.load(sys.stdin)
 print('    %s available=%s' % (d['id'], d['available']))
 " 2>/dev/null || printf '    (ONOS not reachable)\n'
 }
+
+# A refused token would otherwise read as "no fibers cut", or a bare traceback.
+if [ -n "${1:-}" ]; then why="$(twin_auth_problem)" || die "${why}"; fi
 
 case "${1:-}" in
   list)     shift; cmd_list "$@" ;;
