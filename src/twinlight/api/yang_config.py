@@ -12,7 +12,10 @@ TAPI v2.6.0 YANG modules (tapi-common, -topology, -connectivity,
 Foundation ONMI project, distributed under the Apache License 2.0,
 https://github.com/Open-Network-Models-and-Interfaces-ONMI/TAPI/tree/v2.6.0/YANG),
 with every augment applied in place. It holds every node under
-``/tapi-common:context``: the YANG modules themselves are not part of this
+``/tapi-common:context`` that exists on this server: an augment under a
+feature the twin's YANG library does not advertise is left out
+(``tapi-streaming:stream-admin-context``, under ``tapi-streaming-admin``;
+RFC 7950 §7.20.2). The YANG modules themselves are not part of this
 repository. Format, one data node per line, two spaces of indentation per
 level:
 
@@ -886,11 +889,6 @@ tapi-common:context
       ; path
       name [value-name]
         = value-name value
-  tapi-streaming:stream-admin-context
-    = uuid
-    ; stream-monitor
-    name [value-name]
-      = value-name value
   tapi-streaming:stream-context
     ; available-stream supported-stream-type
   tapi-topology:topology-context
