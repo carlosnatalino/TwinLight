@@ -33,7 +33,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from twinlight import auth as _auth
 from twinlight.auth import ApiToken
 
 
@@ -68,13 +70,123 @@ class GnpyConfig(BaseModel):
 
 # -- Server section ---------------------------------------------------------
 
+#: The variable that replaces ``server.cors_origins``: a comma-separated list.
+CORS_ORIGINS_ENV_VAR = "TWINLIGHT_CORS_ORIGINS"
+
+# scheme "://" host [":" port], nothing after: RFC 3986 §3.1 scheme, a
+# reg-name or IPv4 address, or an IP literal in brackets (§3.2.2).
+_ORIGIN_RE = re.compile(
+    r"([A-Za-z][A-Za-z0-9+.-]*)://"
+    r"([A-Za-z0-9._~!$&'()*+,;=%-]+|\[[0-9A-Fa-f:.]+\])"
+    r"(?::([0-9]{1,5}))?"
+)
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def check_origin(origin: str) -> str:
+    """``origin`` if a browser can send it as an ``Origin``, else ValueError.
+
+    CORS compares the ``Origin`` request header with each allowed origin as
+    a string, and a browser sends the ASCII serialisation of RFC 6454
+    §6.2: ``scheme://host[:port]``, scheme and host in lowercase, the port
+    left out when it is the scheme's default, and no path, not even a
+    trailing slash. An entry in any other form would never match, so it is
+    refused here rather than ignored. ``*`` allows every origin: the
+    middleware sends no ``Access-Control-Allow-Credentials``, which is what
+    the Fetch standard forbids ``*`` with (the bearer token travels in an
+    ``Authorization`` header the page sets, not as a browser credential).
+    """
+    if origin == "*":
+        return origin
+    match = _ORIGIN_RE.fullmatch(origin)
+    if match is None:
+        raise ValueError(
+            f"{origin!r} is not an origin: write scheme://host[:port], "
+            "with no path, query or trailing slash"
+        )
+    scheme, host, port = match.groups()
+    serialised = f"{scheme.lower()}://{host.lower()}"
+    if port is not None:
+        if not 0 < int(port) <= 65535:
+            raise ValueError(f"{origin!r}: port {port} is outside 1-65535")
+        if int(port) != _DEFAULT_PORTS.get(scheme.lower()):
+            serialised += f":{int(port)}"
+    if serialised != origin:
+        raise ValueError(
+            f"{origin!r}: a browser sends this origin as {serialised!r} "
+            "(RFC 6454 §6.2), and CORS compares the two as strings; write that"
+        )
+    return origin
+
+
+def parse_cors_origins(value: str) -> list[str]:
+    """The origins of a ``TWINLIGHT_CORS_ORIGINS`` value.
+
+    Comma-separated; whitespace around an entry is trimmed and empty entries
+    are skipped. Every entry must pass :func:`check_origin`, and at least
+    one must be given: the variable replaces the configured list, so one
+    that names nothing would quietly block the web UI.
+    """
+    origins = [entry.strip() for entry in value.split(",") if entry.strip()]
+    if not origins:
+        raise ValueError(
+            f"{CORS_ORIGINS_ENV_VAR} names no origin; unset it to use "
+            "server.cors_origins from the config file"
+        )
+    errors = []
+    for origin in origins:
+        try:
+            check_origin(origin)
+        except ValueError as exc:
+            errors.append(str(exc))
+    if errors:
+        raise ValueError(f"Invalid {CORS_ORIGINS_ENV_VAR}:\n  " + "\n  ".join(errors))
+    return origins
+
+
+class _ServerSettings(BaseSettings):
+    """Environment-and-dotenv source of ``TWINLIGHT_CORS_ORIGINS``.
+
+    The same precedence as the API tokens (``twinlight.auth``): the process
+    environment over the dotenv file, an empty variable treated as unset.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="TWINLIGHT_",
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
+
+    cors_origins: str | None = None
+
+
+def load_cors_origins(env_file: Path | None = None) -> list[str] | None:
+    """``TWINLIGHT_CORS_ORIGINS`` from the environment or ``env_file``, parsed.
+
+    None when it is unset (or empty): the config file's list then applies.
+    ``env_file`` defaults to ``./.env``.
+    """
+    # The default file is looked up per call, as twinlight.auth does, so
+    # the test suite can point it away from a developer's own.
+    settings = _ServerSettings(_env_file=env_file or _auth.DEFAULT_ENV_FILE)
+    raw = settings.cors_origins
+    return None if raw is None else parse_cors_origins(raw)
+
+
 class ServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rest_host: str = "0.0.0.0"
     rest_port: int = 8080
     grpc_port: int = 50051
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000"],
+        description=(
+            "Origins a browser page may call the REST API from (CORS), each "
+            "scheme://host[:port]. TWINLIGHT_CORS_ORIGINS replaces the list."
+        ),
+    )
     restconf_root: str = Field(
         default="/restconf",
         description=(
@@ -87,6 +199,20 @@ class ServerConfig(BaseModel):
             "path is empty."
         ),
     )
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _check_cors_origins(cls, value: list[str]) -> list[str]:
+        """Each origin as a browser sends it (see :func:`check_origin`)."""
+        errors = []
+        for origin in value:
+            try:
+                check_origin(origin)
+            except ValueError as exc:
+                errors.append(str(exc))
+        if errors:
+            raise ValueError("; ".join(errors))
+        return value
 
     @field_validator("restconf_root")
     @classmethod

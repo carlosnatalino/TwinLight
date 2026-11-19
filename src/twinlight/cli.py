@@ -26,7 +26,7 @@ from twinlight.auth import (
     TOKENS_ENV_VAR,
     load_tokens,
 )
-from twinlight.config import TwinConfig
+from twinlight.config import CORS_ORIGINS_ENV_VAR, TwinConfig, load_cors_origins
 
 _logger = logging.getLogger(__name__)
 
@@ -98,6 +98,8 @@ def build_parser() -> argparse.ArgumentParser:
     server_group.add_argument("--rest-host", type=str, default=None)
     server_group.add_argument("--rest-port", type=int, default=None)
     server_group.add_argument("--grpc-port", type=int, default=None)
+    # No flag for server.cors_origins: the environment carries it, so a
+    # Compose file can derive it from the UI's published port.
 
     # -- Authentication ---------------------------------------------------
     auth_group = parser.add_argument_group(
@@ -108,9 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auth_group.add_argument(
         "--env-file", type=Path, default=None, metavar="FILE",
-        help=f"Dotenv file to read {TOKENS_ENV_VAR} from, instead of "
-             f"./{DEFAULT_ENV_FILE}. A variable already set in the "
-             "environment takes precedence over the file.",
+        help=f"Dotenv file to read {TOKENS_ENV_VAR} and "
+             f"{CORS_ORIGINS_ENV_VAR} from, instead of ./{DEFAULT_ENV_FILE}. "
+             "A variable already set in the environment takes precedence "
+             "over the file.",
     )
 
     # -- Simulation -------------------------------------------------------
@@ -371,7 +374,10 @@ def load_config(argv: list[str] | None = None) -> TwinConfig:
     # Step 5: Load the API tokens — from the environment, never the YAML
     _load_api_tokens(merged, args, parser)
 
-    # Step 6: Validate with Pydantic
+    # Step 6: The CORS origins from the environment replace the YAML's
+    _load_cors_origins(merged, args, parser)
+
+    # Step 7: Validate with Pydantic
     try:
         config = TwinConfig(**merged)
     except ValidationError as e:
@@ -407,6 +413,32 @@ def _load_api_tokens(
         parser.error(f"Could not read {env_file or DEFAULT_ENV_FILE}: {exc}")
     except ValueError as exc:  # parse_tokens' message never echoes a secret
         parser.error(str(exc))
+
+
+def _load_cors_origins(
+    merged: dict[str, Any],
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Replace ``server.cors_origins`` with ``TWINLIGHT_CORS_ORIGINS`` when set.
+
+    Read like the tokens: the process environment, then the dotenv file; an
+    empty variable counts as unset. The variable replaces the file's list
+    rather than adding to it, as every other override does (a CLI flag
+    replaces its YAML value): the allowed origins are then exactly the ones
+    written in one place, and one can be taken away without editing the
+    file. An invalid entry stops the start-up with the reason.
+    """
+    env_file: Path | None = args.env_file  # checked by _load_api_tokens
+    try:
+        origins = load_cors_origins(env_file)
+    except OSError as exc:
+        parser.error(f"Could not read {env_file or DEFAULT_ENV_FILE}: {exc}")
+    except ValueError as exc:
+        parser.error(str(exc))
+    if origins is not None:
+        merged.setdefault("server", {})["cors_origins"] = origins
+        _logger.info("CORS origins from %s: %s", CORS_ORIGINS_ENV_VAR, ", ".join(origins))
 
 
 def _snapshot_dir_of(merged: dict[str, Any]) -> Path:
