@@ -548,6 +548,7 @@ set_twin_margin() {
 pending_add_flows() {
   onos_rest_flows | awk '$4 == "PENDING_ADD"' | wc -l | tr -d ' '
 }
+no_pending_add_flows() { [ "$(pending_add_flows)" = 0 ]; }
 check_seed_refusals() {
   local margin raised out rc=0 refused removed
   margin="$(twin_margin)"
@@ -566,8 +567,11 @@ check_seed_refusals() {
   [ "${removed}" = "${refused}" ] || { echo "${refused} refused but ${removed} flow(s) removed"; return 1; }
   until_true 60 flows_match_services \
     || { echo "ONOS holds $(onos_rest_flows | wc -l | tr -d ' ') REST flows, the adapter $(adapter_service_count) services"; return 1; }
-  [ "$(pending_add_flows)" = 0 ] || { echo "$(pending_add_flows) flow(s) left in PENDING_ADD"; return 1; }
-  echo "${refused} refused, each flow removed; no flow in PENDING_ADD; ONOS flows and twin services agree"
+  # An admitted flow is PENDING_ADD until ONOS's next reconciliation poll,
+  # about a minute; one whose create was refused would stay there.
+  until_true 150 no_pending_add_flows \
+    || { echo "$(pending_add_flows) flow(s) still PENDING_ADD 150 s after seeding"; return 1; }
+  echo "${refused} refused, each flow removed; ONOS flows and twin services agree, and every flow reached ADDED"
 }
 check_resync() {
   local out
