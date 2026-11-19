@@ -42,17 +42,28 @@ say "Layer 1 — TwinLight digital twin"
 check "twin /health returns ok" \
   bash -c "curl -sSf '${TWIN_URL}/health' | grep -q '\"status\":\"ok\"'"
 
-# Empty when the twin is unreachable; the check below then fails.
+# Empty when the twin is unreachable or refuses our token; the check below
+# then fails, saying which.
 TWIN_DATA="$(twin_data 2>/dev/null || true)"
 check "twin serves T-API v2.6.0 SIPs at its RESTCONF root" \
-  bash -c "curl -sSf '${TWIN_DATA}/tapi-common:context/service-interface-point' \
+  bash -c "$(declare -f twin_curl twin_auth_problem)
+    SCRIPT_DIR='${SCRIPT_DIR}'; TWIN_URL='${TWIN_URL}'
+    twin_auth_problem || exit 1
+    twin_curl -sSf '${TWIN_DATA}/tapi-common:context/service-interface-point' \
     | python3 -c 'import json,sys; n=len(json.load(sys.stdin)[\"tapi-common:context\"][\"service-interface-point\"]); assert n>0, \"no SIPs\"; print(n)'"
 
 # --- Layer 2: the adapter --------------------------------------------------
 say "Layer 2 — T-API 2.6 to 2.1 adapter"
 
-check "adapter /health reports the twin reachable" \
-  bash -c "curl -sSf '${ADAPTER_URL}/health' | grep -q '\"twin-reachable\":true'"
+# Reachable is not enough: the twin's /health is public, so a twin that
+# refuses the adapter's token still looks up from there.
+check "adapter /health reports the twin reachable and accepting its token" \
+  bash -c "curl -sSf '${ADAPTER_URL}/health' | python3 -c '
+import json, sys
+health = json.load(sys.stdin)
+assert health[\"twin-reachable\"], \"the adapter cannot reach the twin\"
+assert health.get(\"twin-authorized\") is not False, health[\"twin-auth-error\"]
+'"
 
 check "adapter serves /restconf/data/tapi-common:context" \
   bash -c "curl -sSf '${ADAPTER_URL}/restconf/data/tapi-common:context' >/dev/null"
@@ -194,9 +205,9 @@ check "DP-QPSK: ONOS flow rule becomes a lightpath on the twin" \
 
 check "the lightpath carries the T-API spectrum augment and live OPM" \
   bash -c "curl -sSf '${ADAPTER_URL}/adapter/status' | python3 -c '
-import json, sys, urllib.request
+import json, sys
 sys.path.insert(0, \"${SCRIPT_DIR}\")
-from tapi_fields import spectrum_of
+from tapi_fields import spectrum_of, twin_urlopen
 svcs = json.load(sys.stdin)[\"onos-created-services\"]
 assert svcs, \"no ONOS-created services\"
 uuid, payload = next(iter(svcs.items()))
@@ -205,7 +216,7 @@ svc = payload[\"tapi-connectivity:connectivity-service\"]
 assert \"frequency-slot\" not in svc, \"non-standard frequency-slot key is back\"
 band = spectrum_of(svc)
 assert band, \"no spectrum allocated\"
-opm = json.load(urllib.request.urlopen(\"${TWIN_URL}/internal/opm/\" + uuid))[\"measurements\"]
+opm = json.load(twin_urlopen(\"${TWIN_URL}/internal/opm/\" + uuid))[\"measurements\"]
 assert \"gsnr-db\" in opm and \"pre-fec-ber\" in opm, opm
 print(\"%s at %.4f THz / %.2f GHz, GSNR %.2f dB\" % (uuid[:8], band[0], band[1], opm[\"gsnr-db\"]))
 '"
