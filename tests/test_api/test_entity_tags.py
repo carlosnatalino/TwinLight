@@ -6,10 +6,10 @@ and §3.5.1–§3.5.2 the timestamp and the data resources, which use the
 datastore's. RFC 9110 §13 evaluates If-Match, If-None-Match,
 If-Modified-Since and If-Unmodified-Since against them.
 
-The rule (docs/API.md § Entity-tags): every representation carries the
-full validator, which every change a T-API body shows moves; a write's
-If-Match may also name the configuration validator, which only a
-config-true change moves. A validator never lies: each kind of change is made
+The rule (docs/API.md § Entity-tags): ``content=config`` carries the
+configuration validator, which only a config-true change moves; the default
+view and ``content=nonconfig`` carry the full one, which every change a
+T-API body shows moves. A validator never lies: each kind of change is made
 here and the tag checked. Driven by the OpenAPI schema, under three roots and
 both backends; with tokens, a 401 comes first.
 """
@@ -52,7 +52,7 @@ def mesh(tmp_path: Path) -> tuple[TestClient, str]:
 
 def _tags(client: TestClient, root: str) -> tuple[str, str]:
     """(configuration tag, full tag) of the datastore."""
-    return (client.app.state.context.datastore_revision.etag("config"),
+    return (client.get(f"{root}/data?content=config").headers["etag"],
             client.get(f"{root}/data").headers["etag"])
 
 
@@ -187,6 +187,10 @@ class TestWhatMovesTheTags:
         # The old full tag no longer validates the default view ...
         resp = client.get(f"{root}/data", headers={"If-None-Match": before_full})
         assert resp.status_code == 200 and resp.headers["etag"] == after_full
+        # ... nor the old configuration tag the config view, if it moved.
+        resp = client.get(f"{root}/data?content=config",
+                          headers={"If-None-Match": before_config})
+        assert resp.status_code == (200 if config else 304), kind
         assert client.get(f"{root}/data", headers={
             "If-Modified-Since": modified}).status_code == 200
         del before
@@ -198,6 +202,9 @@ class TestWhatMovesTheTags:
         client.post("/config/set", json={"devices": {"fiber (A → B)": {"failed": True}}})
         new = client.get(topology, headers={"If-None-Match": old.headers["etag"]})
         assert new.status_code == 200 and new.json() != old.json()
+        # The configuration of the topology did not change: same config tag.
+        assert client.get(f"{topology}?content=config").headers["etag"] == _tags(
+            client, root)[0]
 
     def test_reads_move_nothing(self, twin) -> None:
         client, root = twin
@@ -249,6 +256,16 @@ class TestConditionalReads:
                 "If-None-Match": value}).status_code == 304, value
         # If-Match compares strongly: a weak tag never matches.
         assert app.get("/restconf/data", headers={"If-Match": f"W/{tag}"}).status_code == 412
+
+    def test_a_filtered_view_carries_its_own_tag(self, app: TestClient) -> None:
+        config = app.get("/restconf/data?content=config").headers["etag"]
+        full = app.get("/restconf/data").headers["etag"]
+        assert config != full
+        assert app.get("/restconf/data?content=nonconfig").headers["etag"] == full
+        assert app.get("/restconf/data?content=config", headers={
+            "If-None-Match": full}).status_code == 200
+        assert app.get("/restconf/data?content=config", headers={
+            "If-None-Match": config}).status_code == 304
 
     def test_a_404_ignores_preconditions(self, app: TestClient) -> None:
         url = f"/restconf{_CONNECTIVITY}/connectivity-service=missing"

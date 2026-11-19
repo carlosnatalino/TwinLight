@@ -1,5 +1,5 @@
-"""Entity-tags, Last-Modified and conditional requests on the RESTCONF
-datastore and data resources.
+"""Entity-tags, Last-Modified, conditional requests and ``content`` on the
+RESTCONF datastore and data resources.
 
 RFC 8040 §3.4.1.2: "The server MUST maintain a unique opaque entity-tag for
 the datastore resource and MUST return it in the 'ETag' ... header in the
@@ -9,16 +9,20 @@ resource entity-tag for the datastore MUST be used instead". Once a server
 has validators, RFC 9110 §13 says how ``If-Match``, ``If-None-Match``,
 ``If-Modified-Since`` and ``If-Unmodified-Since`` are evaluated.
 
-Every representation carries the full validator (``state/revision.py``),
-which every change a T-API body can show moves: the bodies carry
-operational states, spectrum and stream state besides configuration, and a
-tag that only configuration moved would let a ``304`` hide a link failure.
+Which validator a representation carries (``state/revision.py``):
 
-A write's ``If-Match`` passes when it names the current full tag or the
-current configuration tag (RFC 8040's datastore entity-tag, which only a
-change of a ``config true`` node moves), and ``If-Unmodified-Since`` is
-compared with the configuration's time: edit collision prevention concerns
-configuration (§3.4.1). No validator is sent on a write's response: RFC 9110 §9.3.4 forbids
+- ``content=config``: the configuration validator, RFC 8040's datastore
+  entity-tag, which only a change of a ``config true`` node moves.
+- ``content=all`` (the default) and ``content=nonconfig``: the full
+  validator, which every change a T-API body can show moves. RFC 8040
+  §3.4.1.2: "each representation ... requires a different entity-tag"; the
+  configuration tag on a body carrying operational state would let a
+  ``304`` hide a link failure.
+
+A write's ``If-Match`` passes when it names the current tag of either
+representation, and ``If-Unmodified-Since`` is compared with the
+configuration's time: edit collision prevention concerns configuration
+(§3.4.1). No validator is sent on a write's response: RFC 9110 §9.3.4 forbids
 one on a PUT whose body the server transformed, which admission always does.
 
 The middleware is route-agnostic, so a resource or write route added later
@@ -50,12 +54,14 @@ import re
 from datetime import UTC, datetime
 from email.utils import format_datetime, parsedate_to_datetime
 from typing import Any
+from urllib.parse import parse_qsl
 
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from twinlight.api.middleware import RESTCONF_MEDIA_TYPE, routed_methods
 from twinlight.api.restconf import is_data_path
+from twinlight.api.restconf_content import filter_body, target_of
 
 UNSAFE = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -120,6 +126,25 @@ def _precondition_failed(message: str, headers: dict[str, str]) -> Response:
         content=json.dumps(body), status_code=412, media_type=RESTCONF_MEDIA_TYPE,
         headers=headers,
     )
+
+
+def _not_found(message: str) -> Response:
+    body = {"ietf-restconf:errors": {"error": [{
+        "error-type": "application", "error-tag": "invalid-value", "error-message": message,
+    }]}}
+    return Response(content=json.dumps(body), status_code=404, media_type=RESTCONF_MEDIA_TYPE)
+
+
+def _content(scope: Scope) -> str:
+    for name, value in parse_qsl(scope.get("query_string", b"").decode("latin-1")):
+        if name == "content":
+            return value
+    return "all"
+
+
+def _raw_path(scope: Scope) -> str:
+    raw = scope.get("raw_path")
+    return raw.decode("latin-1") if isinstance(raw, bytes) else scope["path"]
 
 
 class ConditionalRequestMiddleware:
@@ -230,16 +255,27 @@ class ConditionalRequestMiddleware:
     # -- reads ----------------------------------------------------------------
 
     async def _read(self, scope: Scope, receive: Receive, send: Send, ctx: Any) -> None:
+        mode = _content(scope)
+        target = target_of(_raw_path(scope), f"{self._root}/data")
+        if mode == "config" and (target is None or not target.node.config):
+            await _not_found(
+                "content=config: the target is config false, so it has no "
+                "configuration data; use content=nonconfig or content=all",
+            )(scope, receive, send)
+            return
         rev = ctx.datastore_revision
-        kind = "full"
+        kind = "config" if mode == "config" else "full"
         validator = rev.validator(kind)
         start, etag, modified = validator.revision, rev.etag(kind), validator.modified
+        filtering = mode != "all" and target is not None
         # "pass": send the handler's messages on; "drop": a 304 or 412 was
-        # sent instead.
+        # sent instead; "buffer": collect the body to filter it.
         route = "pass"
+        held: Message = {}
+        chunks: list[bytes] = []
 
         async def send_wrapper(message: Message) -> None:
-            nonlocal route
+            nonlocal route, held
             if message["type"] == "http.response.start":
                 if not 200 <= message["status"] < 300:
                     route = "pass"
@@ -256,11 +292,26 @@ class ConditionalRequestMiddleware:
                 ]
                 headers.append((b"etag", etag.encode()))
                 headers.append((b"last-modified", _http_date(modified).encode()))
-                await send({**message, "headers": headers})
+                held = {**message, "headers": headers}
+                route = "buffer" if filtering else "pass"
+                if route == "pass":
+                    await send(held)
                 return
-            if message["type"] == "http.response.body" and route == "drop":
+            if message["type"] != "http.response.body" or route == "pass":
+                await send(message)
                 return
-            await send(message)
+            if route == "drop":
+                return
+            chunks.append(message.get("body", b""))
+            if message.get("more_body", False):
+                return
+            assert target is not None
+            body = filter_body(target, json.loads(b"".join(chunks)), mode)
+            content = json.dumps(body).encode()
+            headers = [(k, v) for k, v in held["headers"] if k.lower() != b"content-length"]
+            headers.append((b"content-length", str(len(content)).encode()))
+            await send({**held, "headers": headers})
+            await send({"type": "http.response.body", "body": content, "more_body": False})
 
         await self.app(scope, receive, send_wrapper)
 

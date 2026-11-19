@@ -244,8 +244,8 @@ def create_app(config: TwinConfig) -> FastAPI:
     # stamps Content-Type and Cache-Control on every RESTCONF response, a
     # 401 included. ConditionalRequestMiddleware, just inside
     # RestconfRequestMiddleware, sends the validators, evaluates the
-    # conditional headers and holds the write gate (RFC 8040 §3.4.1; RFC
-    # 9110 §13).
+    # conditional headers, applies content= and holds the write gate (RFC
+    # 8040 §3.4.1, §4.8.1; RFC 9110 §13).
     refusals = (transparent.refused_methods,)
     app.add_middleware(AllowHeaderMiddleware, refusals=refusals)
     app.add_middleware(
