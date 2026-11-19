@@ -323,7 +323,13 @@ describe("RESTCONF root discovery", () => {
     expect(headers.Authorization).toBe("Bearer tok-123");
   });
 
-  it("uses /data when the twin serves no host-meta", async () => {
+  it("discovers an empty root from host-meta", async () => {
+    hostMeta = () => hostMetaResponse("http://dt");
+    await new TapiApiClient("http://dt").getContext();
+    expect(urls()[1]).toBe(`http://dt${CONTEXT}`);
+  });
+
+  it("uses /data when an older twin serves no host-meta", async () => {
     hostMeta = () => makeResponse({}, 404);
     await new TapiApiClient("http://dt").getContext();
     expect(urls()[1]).toBe(`http://dt${CONTEXT}`);
@@ -366,6 +372,12 @@ describe("parseRestconfRoot", () => {
 
   it("reduces an absolute href to its path", () => {
     expect(parseRestconfRoot(xrd("http://twin:8080/top/restconf"))).toBe("/top/restconf");
+  });
+
+  it("reads an absolute href with an empty path as the empty root", () => {
+    // What a twin with restconf_root "" advertises (RFC 3986 §3.3).
+    expect(parseRestconfRoot(xrd("http://twin:8080"))).toBe("");
+    expect(parseRestconfRoot(xrd("https://twin.example"))).toBe("");
   });
 
   it("accepts either attribute order and quote style", () => {

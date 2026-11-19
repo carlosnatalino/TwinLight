@@ -550,7 +550,7 @@ Introspection, safe to call any time:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `TWIN_BASE_URL` | `http://twin:8080` | |
-| `TWIN_DATA_ROOT` | *(discovered)* | The twin's T-API data resource, e.g. `/restconf/data`. Unset, the adapter reads the twin's RESTCONF root from `/.well-known/host-meta` on its first call (a `404` there means `/data`); set it to pin the root and skip discovery |
+| `TWIN_DATA_ROOT` | *(discovered)* | The twin's T-API data resource, e.g. `/restconf/data`. Unset, the adapter reads the twin's RESTCONF root from `/.well-known/host-meta` on its first call (an empty root, advertised as the twin's own URL, and a `404` from an older twin both mean `/data`); set it to pin the root and skip discovery |
 | `ADAPTER_MODULATION` | `DP-QPSK` | Requested format; runtime-switchable |
 | `ADAPTER_GRID_GRANULARITY` | `G_50GHZ` | **Only `G_50GHZ` and `G_25GHZ` are safe** — ONOS's `getChannelSpacing()` has trailing spaces in its other case labels (`"G_100GHZ "`, `"G_12_5GHZ "`), so those fall through to `CHL_0GHZ` and then divide by zero in `getOchSignal()` |
 | `ADAPTER_EXPOSE_TWIN_SERVICES` | `false` | See below |

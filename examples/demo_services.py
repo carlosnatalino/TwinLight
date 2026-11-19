@@ -95,8 +95,9 @@ def _end_point(local_id: str, sip_uuid: str, modulation: str) -> dict:
 def _restconf_root(base: str) -> str:
     """The twin's RESTCONF root, from /.well-known/host-meta (RFC 8040 §3.1).
 
-    T-API is served under ``{root}/data``. A twin without host-meta (404)
-    runs with an empty root or predates it, and serves T-API at ``/data``.
+    T-API is served under ``{root}/data``. A twin with an empty root
+    advertises ``http://host:port``, whose path is empty; an older twin
+    without host-meta (404) serves T-API at ``/data`` too.
     The same rule as ``twinlight_client.restconf``, which this stdlib-only
     script cannot import.
     """

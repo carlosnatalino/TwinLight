@@ -98,7 +98,8 @@ export function setTokenProvider(provider: () => string | undefined): void {
  * The RESTCONF root advertised in an RFC 6415 host-meta document (RFC 8040
  * §3.1), without a trailing slash: "/restconf" for the default twin, "" when
  * the root is the server root or no root is advertised. An absolute href is
- * reduced to its path, since requests go to the configured base URL.
+ * reduced to its path, since requests go to the configured base URL: a twin
+ * with an empty root advertises "http://host:port", whose path is "".
  */
 export function parseRestconfRoot(xrd: string): string {
   for (const tag of xrd.match(/<Link\b[^>]*>/gi) ?? []) {
@@ -165,8 +166,9 @@ export class TapiApiClient {
   /**
    * Where the T-API data resources are: `{root}/data`, the root discovered
    * from /.well-known/host-meta (RFC 8040 §3.1), which needs the token on a
-   * twin with authentication on. A twin without host-meta (404) predates the
-   * RESTCONF root or runs with an empty one, and serves T-API at /data.
+   * twin with authentication on. A twin with an empty root advertises it as
+   * its own absolute URL, whose path is empty; an older twin without
+   * host-meta (404) serves T-API at /data too.
    */
   private dataRoot(): Promise<string> {
     let root = restconfRoots.get(this.baseUrl);

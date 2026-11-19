@@ -81,8 +81,10 @@ class ServerConfig(BaseModel):
             "RESTCONF root resource (RFC 8040 §3.1). The T-API modules are "
             "served under {restconf_root}/data/... only, and the root is "
             "advertised at /.well-known/host-meta for clients to discover. "
-            "An empty string puts the data resource at /data/... and serves "
-            "no host-meta; clients then fall back to /data."
+            "An empty string puts the API resource at / and the data "
+            "resource at /data/...; host-meta then names the root as the "
+            "absolute URI the request reached (http://host:port), whose "
+            "path is empty."
         ),
     )
 

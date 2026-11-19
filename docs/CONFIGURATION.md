@@ -81,10 +81,11 @@ by `GET /.well-known/host-meta`. It must be absolute; a trailing slash is
 trimmed. Changing it moves T-API: the bundled clients (web UI, client library,
 CLIs, examples, ONOS adapter) read it from host-meta, but a client that
 hard-codes `/restconf` will not find the new location. Set it to `""` to put the
-data resource at `/data/…`; the twin then serves no root resource and no
-`host-meta`, and the bundled clients read that `404` as "T-API is at `/data/…`"
-(see [API.md](API.md#finding-the-restconf-root)). RFC 8040 §3.1 requires
-host-meta, so that mode does not conform; see
+data resource at `/data/…` and the API resource at `/`; host-meta then names
+the root as the absolute URI the request reached (`http://host:port`, an
+empty path), which the bundled clients read as the empty root (see
+[API.md](API.md#finding-the-restconf-root)). That mode is as discoverable as
+any other root (RFC 8040 §3.1, §3.3); see
 [TAPI_COMPLIANCE.md § 2.7](TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix).
 
 ## Authentication — API tokens

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from xml.sax.saxutils import escape
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -123,6 +124,24 @@ def _http_status_to_error_tag(status_code: int) -> str:
 _YANG_LIBRARY_VERSION = YANG_LIBRARY_REVISION
 
 
+def restconf_href(root: str, request: Request) -> str:
+    """The ``href`` of host-meta's ``restconf`` link for ``root``.
+
+    A root is a path-absolute reference, ``/restconf`` (RFC 8040 §3.1's own
+    example). An empty root cannot be written that way: XRD 1.0 §1.5.2 says
+    every URI in an XRD "MUST consist of at least one non-whitespace
+    character", and the candidates that would satisfy it as a path go
+    wrong for a client that follows §3.1 ("use this value as the initial
+    part of the path in the request URI"): ``/`` makes ``{+restconf}/data``
+    the network-path reference ``//data`` (RFC 3986 §4.2), an authority
+    called ``data``. So an empty root is advertised as the absolute URI the
+    request reached, ``http://host:port``, whose path is empty (RFC 3986
+    §3.3): resolved against host-meta (RFC 3986 §5.2) it is itself, and
+    ``{+restconf}/data`` expands to ``http://host:port/data``.
+    """
+    return root or str(request.base_url).rstrip("/")
+
+
 def _add_restconf_root_resources(app: FastAPI, root: str) -> None:
     """Serve the RFC 8040 root resource and its discovery document.
 
@@ -130,22 +149,26 @@ def _add_restconf_root_resources(app: FastAPI, root: str) -> None:
     ``/.well-known/host-meta`` rather than assuming a path, so a client
     that knows only the host can find the twin. The conventional root is
     ``/restconf``, which is what ONOS and most RESTCONF clients hard-code.
+    An empty root is as discoverable: host-meta names it (see
+    :func:`restconf_href`), and the API resource ``{+restconf}`` is ``/``,
+    since an empty path is ``/`` (RFC 9110 §4.2.3).
     """
 
     @app.get("/.well-known/host-meta", include_in_schema=False)
-    async def host_meta() -> Response:
+    async def host_meta(request: Request) -> Response:
         # XRD, per RFC 6415 — deliberately XML: RFC 8040 §3.1 specifies
         # this document's format, and a JSON variant would not be found
         # by a conforming client.
+        href = escape(restconf_href(root, request), {"'": "&apos;"})
         xrd = (
             "<?xml version='1.0' encoding='UTF-8'?>\n"
             "<XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>\n"
-            f"    <Link rel='restconf' href='{root}'/>\n"
+            f"    <Link rel='restconf' href='{href}'/>\n"
             "</XRD>\n"
         )
         return Response(content=xrd, media_type="application/xrd+xml")
 
-    @app.get(root, tags=["restconf"])
+    @app.get(root or "/", tags=["restconf"])
     async def restconf_root() -> dict:
         return {
             "ietf-restconf:restconf": {
@@ -312,9 +335,8 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.include_router(metrics_api.router)
     app.include_router(auth.router)
 
-    if root:
-        _add_restconf_root_resources(app, root)
-        app.include_router(restconf_resources.operations_router, prefix=root)
+    _add_restconf_root_resources(app, root)
+    app.include_router(restconf_resources.operations_router, prefix=root)
 
     if authenticator.enabled:
         _document_bearer_auth(app, PUBLIC_PATHS)
