@@ -48,7 +48,7 @@ class TestModulationIsATapiAugment:
     def test_augment_present_on_every_end_point(self, app: TestClient) -> None:
         sip_a, sip_z = _get_two_sip_uuids(app)
         resp = app.post(
-            f"{_BASE}/connectivity-service",
+            _BASE,
             json=_create_service_payload(sip_a, sip_z, "DP-64QAM"),
         )
         assert resp.status_code == 201
@@ -72,7 +72,7 @@ class TestModulationIsATapiAugment:
         payload["tapi-connectivity:connectivity-service"][
             "modulation-format"
         ] = "DP-16QAM"
-        resp = app.post(f"{_BASE}/connectivity-service", json=payload)
+        resp = app.post(_BASE, json=payload)
         assert resp.status_code == 422
         assert "modulation-format" in resp.text
 
@@ -89,7 +89,7 @@ class TestModulationIsATapiAugment:
         cfg["modulation"]["standard-modulation-technique"] = (
             "tapi-photonic-media:MT_DP-QAM16"
         )
-        resp = app.post(f"{_BASE}/connectivity-service", json=payload)
+        resp = app.post(_BASE, json=payload)
         assert resp.status_code == 201
         # Echoed back in the canonical bare form.
         svc = resp.json()["tapi-connectivity:connectivity-service"]
@@ -105,7 +105,7 @@ class TestModulationIsATapiAugment:
             "otsi-config"
         ][0]
         cfg["modulation"]["standard-modulation-technique"] = "MT_DP-QAM32"
-        resp = app.post(f"{_BASE}/connectivity-service", json=payload)
+        resp = app.post(_BASE, json=payload)
         assert resp.status_code == 422
 
 
@@ -125,7 +125,7 @@ class TestListEncodedBody:
                 payload["tapi-connectivity:connectivity-service"]
             ]
         }
-        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = app.post(_BASE, json=body)
         assert resp.status_code == 201
 
     def test_array_of_several_is_refused(self, app: TestClient) -> None:
@@ -134,7 +134,7 @@ class TestListEncodedBody:
             "tapi-connectivity:connectivity-service"
         ]
         body = {"tapi-connectivity:connectivity-service": [one, dict(one)]}
-        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = app.post(_BASE, json=body)
         assert resp.status_code == 400
 
 
@@ -144,7 +144,7 @@ class TestCreateConnectivityService:
     def test_create_returns_201(self, app: TestClient) -> None:
         sip_a, sip_z = _get_two_sip_uuids(app)
         payload = _create_service_payload(sip_a, sip_z)
-        resp = app.post(f"{_BASE}/connectivity-service", json=payload)
+        resp = app.post(_BASE, json=payload)
         assert resp.status_code == 201
         data = resp.json()
         assert "tapi-connectivity:connectivity-service" in data
@@ -163,9 +163,9 @@ class TestCreateConnectivityService:
         p2["tapi-connectivity:connectivity-service"]["name"] = [
             {"value-name": "service-name", "value": "test-link-2"}
         ]
-        r1 = app.post(f"{_BASE}/connectivity-service", json=p1)
+        r1 = app.post(_BASE, json=p1)
         assert r1.status_code == 201
-        r2 = app.post(f"{_BASE}/connectivity-service", json=p2)
+        r2 = app.post(_BASE, json=p2)
         assert r2.status_code == 201
         # Both exist
         list_resp = app.get(f"{_BASE}/connectivity-service")
@@ -176,7 +176,7 @@ class TestCreateConnectivityService:
     def test_422_when_sip_not_found(self, app: TestClient) -> None:
         sip_a, _ = _get_two_sip_uuids(app)
         payload = _create_service_payload(sip_a, "00000000-0000-0000-0000-000000000000")
-        resp = app.post(f"{_BASE}/connectivity-service", json=payload)
+        resp = app.post(_BASE, json=payload)
         assert resp.status_code == 422
 
 
@@ -185,7 +185,7 @@ class TestGetAndDeleteConnectivityService:
         """GET connectivity-service={uuid} round-trips the modulation augment."""
         sip_a, sip_z = _get_two_sip_uuids(app)
         payload = _create_service_payload(sip_a, sip_z, "DP-16QAM")
-        create = app.post(f"{_BASE}/connectivity-service", json=payload)
+        create = app.post(_BASE, json=payload)
         assert create.status_code == 201
         uuid = create.json()["tapi-connectivity:connectivity-service"]["uuid"]
         get_one = app.get(f"{_BASE}/connectivity-service={uuid}")
@@ -204,7 +204,7 @@ class TestGetAndDeleteConnectivityService:
         """
         sip_a, sip_z = _get_two_sip_uuids(app)
         create = app.post(
-            f"{_BASE}/connectivity-service",
+            _BASE,
             json=_create_service_payload(sip_a, sip_z),
         )
         assert create.status_code == 201
@@ -233,7 +233,7 @@ class TestGetAndDeleteConnectivityService:
         """A service with no allocation says nothing, rather than zeroes."""
         sip_a, sip_z = _get_two_sip_uuids(app)
         create = app.post(
-            f"{_BASE}/connectivity-service",
+            _BASE,
             json=_create_service_payload(sip_a, sip_z),
         )
         uuid = create.json()["tapi-connectivity:connectivity-service"]["uuid"]
@@ -248,7 +248,7 @@ class TestGetAndDeleteConnectivityService:
 
     def test_get_services_includes_created(self, app: TestClient) -> None:
         sip_a, sip_z = _get_two_sip_uuids(app)
-        app.post(f"{_BASE}/connectivity-service", json=_create_service_payload(sip_a, sip_z))
+        app.post(_BASE, json=_create_service_payload(sip_a, sip_z))
         resp = app.get(f"{_BASE}/connectivity-service")
         assert resp.status_code == 200
         services = resp.json()["tapi-connectivity:connectivity-context"]["connectivity-service"]
@@ -258,19 +258,19 @@ class TestGetAndDeleteConnectivityService:
         """Delete frees slots; creating another service on same path should succeed."""
         sip_a, sip_z = _get_two_sip_uuids(app)
         payload = _create_service_payload(sip_a, sip_z)
-        r1 = app.post(f"{_BASE}/connectivity-service", json=payload)
+        r1 = app.post(_BASE, json=payload)
         assert r1.status_code == 201
         uuid1 = r1.json()["tapi-connectivity:connectivity-service"]["uuid"]
         app.delete(f"{_BASE}/connectivity-service={uuid1}")
         # Create again on same path
-        r2 = app.post(f"{_BASE}/connectivity-service", json=payload)
+        r2 = app.post(_BASE, json=payload)
         assert r2.status_code == 201
 
     def test_put_replace_connectivity_service(self, app: TestClient) -> None:
         """PUT replaces service by UUID; body UUID must match path."""
         sip_a, sip_z = _get_two_sip_uuids(app)
         create = app.post(
-            f"{_BASE}/connectivity-service",
+            _BASE,
             json=_create_service_payload(sip_a, sip_z),
         )
         assert create.status_code == 201
@@ -304,7 +304,7 @@ class TestGetAndDeleteConnectivityService:
 
         sip_a, sip_z = _get_two_sip_uuids(app)
         create = app.post(
-            f"{_BASE}/connectivity-service",
+            _BASE,
             json=_create_service_payload(sip_a, sip_z),
         )
         assert create.status_code == 201
@@ -350,7 +350,7 @@ class TestConstraints:
             "end-point": [tapi_end_point("a", sips[0]), tapi_end_point("z", sips[1])],
             "routing-constraint": {"diversity-policy": "SRLG"},
         }]}
-        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = app.post(_BASE, json=body)
         assert resp.status_code == 422
         assert "diversity-policy" in resp.text
 
@@ -366,7 +366,7 @@ class TestConstraints:
             ],
             "topology-constraint": constraint,
         }]}
-        resp = mesh_app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = mesh_app.post(_BASE, json=body)
         assert resp.status_code == 201, resp.text
         service = resp.json()["tapi-connectivity:connectivity-service"]
         assert service["topology-constraint"] == constraint
@@ -380,7 +380,7 @@ class TestConstraints:
             tapi_end_point("a", refs.sip("trx A")), tapi_end_point("z", refs.sip("trx C")),
         ], "topology-constraint": [{"exclude-link": [
             {"topology-uuid": "x", "link-uuid": "y"}]}]}
-        resp = mesh_app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = mesh_app.post(_BASE, json=body)
         assert resp.status_code == 422
         assert "not found" in resp.text
 
@@ -402,7 +402,7 @@ class TestUnimplementedLeaves:
         }]}
 
     def _refusal(self, app: TestClient, body: dict) -> str:
-        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = app.post(_BASE, json=body)
         assert resp.status_code == 501, resp.text
         error = resp.json()["ietf-restconf:errors"]["error"][0]
         assert error["error-tag"] == "operation-not-supported"
@@ -469,7 +469,7 @@ class TestUnimplementedLeaves:
             assert part in message
 
     def test_replace_is_refused_and_keeps_the_service(self, app: TestClient) -> None:
-        created = app.post(f"{_BASE}/connectivity-service", json=self._body(app))
+        created = app.post(_BASE, json=self._body(app))
         service = created.json()["tapi-connectivity:connectivity-service"]
         replacement = {**service, "resilience-constraint": {}}
         resp = app.put(f"{_BASE}/connectivity-service={service['uuid']}",
@@ -480,7 +480,7 @@ class TestUnimplementedLeaves:
     def test_a_get_body_is_accepted_back(self, app: TestClient) -> None:
         """Every fixed leaf is reported at its supported value, so a client
         that replaces a service with what it read gets no 501."""
-        created = app.post(f"{_BASE}/connectivity-service", json=self._body(app))
+        created = app.post(_BASE, json=self._body(app))
         service = created.json()["tapi-connectivity:connectivity-service"]
         assert service["direction"] == "UNIDIRECTIONAL"
         assert service["layer-protocol-name"] == "PHOTONIC_MEDIA"
@@ -495,7 +495,7 @@ class TestEndPointDirection:
     a direction, from the first end-point to the second."""
 
     def _create(self, app: TestClient, a: dict, z: dict):
-        return app.post(f"{_BASE}/connectivity-service",
+        return app.post(_BASE,
                         json={"tapi-connectivity:connectivity-service": [{"end-point": [a, z]}]})
 
     def test_source_is_where_the_route_starts(self, mesh_app: TestClient) -> None:
@@ -566,7 +566,7 @@ class TestRequestValidation:
 
     def test_the_full_body_is_admitted(self, tmp_path) -> None:
         app = self._egn_app(tmp_path)
-        resp = app.post(f"{_BASE}/connectivity-service", json=self._full_body(app))
+        resp = app.post(_BASE, json=self._full_body(app))
         assert resp.status_code == 201, resp.text
 
     def test_no_malformed_node_is_a_500(self, tmp_path) -> None:
@@ -591,7 +591,7 @@ class TestRequestValidation:
                 for key in path[:-1]:
                     parent = parent[key]
                 parent[path[-1]] = bad
-                resp = app.post(f"{_BASE}/connectivity-service", json=mutated)
+                resp = app.post(_BASE, json=mutated)
                 assert resp.status_code < 500, (path, bad, resp.text)
                 if resp.status_code == 201:
                     uuid = resp.json()["tapi-connectivity:connectivity-service"]["uuid"]
@@ -600,7 +600,7 @@ class TestRequestValidation:
     def test_posting_an_existing_uuid_is_409_and_leaks_nothing(self, app: TestClient) -> None:
         sip_a, sip_z = _get_two_sip_uuids(app)
         body = _create_service_payload(sip_a, sip_z)
-        created = app.post(f"{_BASE}/connectivity-service", json=body).json()
+        created = app.post(_BASE, json=body).json()
         uuid = created["tapi-connectivity:connectivity-service"]["uuid"]
         ctx = app.app.state.context
         allocation = ctx._service_allocation[uuid]
@@ -608,7 +608,7 @@ class TestRequestValidation:
 
         body["tapi-connectivity:connectivity-service"]["uuid"] = uuid
         for _ in range(3):
-            resp = app.post(f"{_BASE}/connectivity-service", json=body)
+            resp = app.post(_BASE, json=body)
             assert resp.status_code == 409
             error = resp.json()["ietf-restconf:errors"]["error"][0]
             assert error["error-tag"] == "resource-denied"
@@ -617,7 +617,7 @@ class TestRequestValidation:
         assert ctx._spectrum_state.to_dict() == spectrum
         assert app.delete(f"{_BASE}/connectivity-service={uuid}").status_code == 204
         # Every block came back: the next service gets the first slot again.
-        again = app.post(f"{_BASE}/connectivity-service", json=_create_service_payload(sip_a, sip_z))
+        again = app.post(_BASE, json=_create_service_payload(sip_a, sip_z))
         start = ctx._service_allocation[
             again.json()["tapi-connectivity:connectivity-service"]["uuid"]][1]
         assert start == allocation[1]
@@ -629,7 +629,7 @@ class TestRequestValidation:
         body = {"tapi-connectivity:connectivity-service": [{
             "end-point": [tapi_end_point(f"e{i}", sips[i % len(sips)]) for i in range(count)],
         }]}
-        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = app.post(_BASE, json=body)
         assert resp.status_code == 422
         assert "exactly two end-points" in resp.text
 
@@ -639,7 +639,7 @@ class TestRequestValidation:
         for ep in body["tapi-connectivity:connectivity-service"]["end-point"]:
             ep["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0][
                 "modulation"] = None
-        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = app.post(_BASE, json=body)
         assert resp.status_code == 422
         assert "modulation must be an object" in resp.text
 
@@ -655,7 +655,7 @@ class TestRequestValidation:
             del cfg["modulation"]
             cfg["channel-output-power"] = 150
             cfg["central-frequency"] = (lower + upper) // 2
-        resp = mesh_app.post(f"{_BASE}/connectivity-service",
+        resp = mesh_app.post(_BASE,
                              json={"tapi-connectivity:connectivity-service": [{"end-point": end_points}]})
         assert resp.status_code == 201, resp.text
         service = resp.json()["tapi-connectivity:connectivity-service"]
@@ -674,7 +674,7 @@ class TestRequestValidation:
         for ep in body["tapi-connectivity:connectivity-service"]["end-point"]:
             ep["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0][
                 "channel-output-power"] = centi_dbm
-        resp = app.post(f"{_BASE}/connectivity-service", json=body)
+        resp = app.post(_BASE, json=body)
         assert resp.status_code == 422, resp.text
         assert "the twin models launch powers from -20 to 10 dBm" in resp.text
 
@@ -683,6 +683,6 @@ def test_a_client_cannot_set_operational_state(app: TestClient) -> None:
     sip_a, sip_z = _get_two_sip_uuids(app)
     body = _create_service_payload(sip_a, sip_z)
     body["tapi-connectivity:connectivity-service"]["operational-state"] = "DISABLED"
-    resp = app.post(f"{_BASE}/connectivity-service", json=body)
+    resp = app.post(_BASE, json=body)
     assert resp.status_code == 201
     assert resp.json()["tapi-connectivity:connectivity-service"]["operational-state"] == "ENABLED"

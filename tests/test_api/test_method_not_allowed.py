@@ -106,6 +106,8 @@ class TestMultiRoutePaths:
 
     @pytest.mark.parametrize("root", ["/restconf", "/api", ""])
     @pytest.mark.parametrize("container", [
+        "tapi-connectivity:connectivity-context",
+        "tapi-path-computation:path-computation-context",
         "tapi-connectivity:connectivity-context/connectivity-service",
         "tapi-connectivity:connectivity-context/connectivity-service={uuid}",
         "tapi-path-computation:path-computation-context/path-comp-service",
@@ -128,7 +130,7 @@ class TestMultiRoutePaths:
         cc = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
         paths = app.get("/openapi.json").json()["paths"]
         for path, method in [
-            (f"{cc}/connectivity-service", "PATCH"),
+            (cc, "PATCH"),
             (f"{cc}/connectivity-service={{uuid}}", "POST"),
         ]:
             documented = {m.upper() for m in paths.get(path, {})}

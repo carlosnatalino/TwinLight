@@ -200,7 +200,9 @@ src/twinlight_client/    Companion client library and CLI
 
 ### Creating a connectivity service
 
-`POST /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service`
+`POST /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context`
+(RFC 8040 §4.4.1: a list entry is created on its parent; the answer is a `201`
+with a `Location` naming the new `connectivity-service={uuid}`)
 
 1. Resolve both endpoint SIP UUIDs to GNPy element UIDs via
    `TapiContext._sip_to_gnpy_uid` (populated at build time — `TapiBuilder`

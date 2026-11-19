@@ -157,9 +157,13 @@ class TwinStub:
                 200,
                 json={"tapi-common:context": {"service-interface-point": self.sips}},
             )
-        if path.endswith("/connectivity-service") and request.method == "POST":
+        # Like the twin: created by POST on the container (RFC 8040 §4.4.1);
+        # the list path serves GET only.
+        if path.endswith("/tapi-connectivity:connectivity-context") and request.method == "POST":
             self.posted.append(json.loads(request.content))
             return httpx.Response(self.create_status, json=self.create_body)
+        if path.endswith("/connectivity-service") and request.method == "POST":
+            return httpx.Response(405)
         if path.endswith("/connectivity-service") and request.method == "GET":
             return httpx.Response(
                 200,
@@ -705,6 +709,33 @@ def test_upstream_calls_use_the_discovered_root(client, twin):
     assert _twin_paths(twin)
     assert all(
         p.startswith("/restconf/data/tapi-common:context/") for p in _twin_paths(twin)
+    )
+
+
+def test_services_are_created_on_the_twins_connectivity_context(client, twin):
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    r = client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    assert r.status_code == 201, r.text
+    assert len(twin.posted) == 1
+    assert _twin_paths(twin)[-1] == (
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+    )
+
+
+def test_a_custom_root_is_followed_on_create(twin):
+    twin.restconf_root = "/api"
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    with _client_for(twin) as c:
+        r = c.post(
+            "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
+            json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+        )
+        assert r.status_code == 201, r.text
+    assert _twin_paths(twin)[-1] == (
+        "/api/data/tapi-common:context/tapi-connectivity:connectivity-context"
     )
 
 

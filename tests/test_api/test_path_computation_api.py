@@ -38,7 +38,7 @@ class TestContext:
 class TestPathCompService:
     def test_create_get_delete(self, app: TestClient) -> None:
         sip_a, sip_z = _two_sips(app)
-        resp = app.post(_SVC, json={_SVC_KEY: [{"end-point": _end_points(sip_a, sip_z)}]})
+        resp = app.post(_BASE, json={_SVC_KEY: [{"end-point": _end_points(sip_a, sip_z)}]})
         assert resp.status_code == 201, resp.text
         service = resp.json()[_SVC_KEY]
         assert service["direction"] == "UNIDIRECTIONAL"
@@ -64,7 +64,7 @@ class TestPathCompService:
 
     def test_unknown_sip(self, app: TestClient) -> None:
         sip_a, _ = _two_sips(app)
-        resp = app.post(_SVC, json={"end-point": _end_points(sip_a, "nope")})
+        resp = app.post(_BASE, json={"end-point": _end_points(sip_a, "nope")})
         assert resp.status_code == 422
         assert "not found" in resp.json()["ietf-restconf:errors"]["error"][0]["error-message"]
 
@@ -81,7 +81,7 @@ class TestPathCompService:
         self, app: TestClient, extra: dict, named: str,
     ) -> None:
         sip_a, sip_z = _two_sips(app)
-        resp = app.post(_SVC, json={"end-point": _end_points(sip_a, sip_z), **extra})
+        resp = app.post(_BASE, json={"end-point": _end_points(sip_a, sip_z), **extra})
         assert resp.status_code == 422
         assert named in resp.json()["ietf-restconf:errors"]["error"][0]["error-message"]
 
@@ -89,7 +89,7 @@ class TestPathCompService:
         sip_a, sip_z = _two_sips(app)
         eps = _end_points(sip_a, sip_z)
         eps[0]["capacity"] = {}
-        resp = app.post(_SVC, json={"end-point": eps})
+        resp = app.post(_BASE, json={"end-point": eps})
         assert resp.status_code == 422
         assert "capacity" in resp.text
 
@@ -102,7 +102,7 @@ class TestOnTheMesh:
             "routing-constraint": {"route-objective-function": "MIN_WORK_ROUTE_LATENCY"},
             "topology-constraint": [{"local-id": "1", "exclude-node": [refs.node("roadm B")]}],
         }
-        service = mesh_app.post(_SVC, json=body).json()[_SVC_KEY]
+        service = mesh_app.post(_BASE, json=body).json()[_SVC_KEY]
         assert service["topology-constraint"] == body["topology-constraint"]
         assert len(service["path"]) >= 2
         b_node = refs.node("roadm B")["node-uuid"]
@@ -119,7 +119,7 @@ class TestOnTheMesh:
                 "include-node": [refs.node("roadm D")], "explicit-route": True,
             }],
         }
-        resp = mesh_app.post(_SVC, json=body)
+        resp = mesh_app.post(_BASE, json=body)
         assert resp.status_code == 409
         assert mesh_app.get(_SVC).json()[_SVC_KEY] == []
 

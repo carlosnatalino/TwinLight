@@ -800,10 +800,12 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
         MODULATION_FORMAT,
     )
 
+    # Created where ONOS asked for it, on the connectivity-context: RFC 8040
+    # §4.4.1 creates a list entry by POST on its parent, and so does the twin.
     try:
         response = await request.app.state.client.post(
             f"{await _twin_data(request)}/tapi-common:context"
-            "/tapi-connectivity:connectivity-context/connectivity-service",
+            "/tapi-connectivity:connectivity-context",
             json=twin_body,
         )
     except (httpx.HTTPError, TwinUnavailableError) as exc:

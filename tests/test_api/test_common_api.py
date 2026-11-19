@@ -9,12 +9,9 @@ from tests.conftest import MeshRefs, _mesh_config, tapi_end_point
 from twinlight.app import create_app
 from twinlight.models.connectivity import MCG_CSEP_SPEC
 
-_SVC = (
-    "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
-)
-_PATH_COMP_SVC = (
+_CONNECTIVITY = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_PATH_COMPUTATION = (
     "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
-    "/path-comp-service"
 )
 
 
@@ -119,9 +116,9 @@ def admitted(request: pytest.FixtureRequest, tmp_path: Path) -> TestClient:
     for a in ("trx A", "trx B"):
         body = {"end-point": [tapi_end_point("a", refs.sip(a)),
                               tapi_end_point("z", refs.sip("trx C"))]}
-        resp = client.post(_SVC, json={"tapi-connectivity:connectivity-service": [body]})
+        resp = client.post(_CONNECTIVITY, json={"tapi-connectivity:connectivity-service": [body]})
         assert resp.status_code == 201, resp.text
-    resp = client.post(_PATH_COMP_SVC, json={
+    resp = client.post(_PATH_COMPUTATION, json={
         "tapi-path-computation:path-comp-service": [{"end-point": [
             {"local-id": "a",
              "service-interface-point": {"service-interface-point-uuid": refs.sip("trx A")}},

@@ -28,7 +28,7 @@ def _create_service(app: TestClient, sip_a: str, sip_z: str) -> str:
             ],
         }
     }
-    r = app.post(f"{_BASE}/connectivity-service", json=payload)
+    r = app.post(_BASE, json=payload)
     assert r.status_code == 201
     return r.json()["tapi-connectivity:connectivity-service"]["uuid"]
 

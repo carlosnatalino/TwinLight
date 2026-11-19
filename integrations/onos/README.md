@@ -236,7 +236,8 @@ What happens:
 1. The script pushes an **ONOS flow rule** on the OLS device (in-port 1 →
    out-port 4). Nothing here touches the twin's API.
 2. ONOS's `TapiFlowRuleProgrammable` turns that into a T-API
-   **connectivity-service POST**.
+   **connectivity-service POST** on the connectivity-context, which the
+   adapter translates and forwards to the twin's connectivity-context.
 3. The twin routes it (k-shortest paths over 2149 km, 9 hops), first-fits
    spectrum, runs GNPy split-step propagation, and checks GSNR against the
    DP-QPSK threshold plus the configured margin.

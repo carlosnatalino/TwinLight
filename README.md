@@ -243,12 +243,13 @@ arguments always win over the configuration file.
 
 ### Create a connectivity service
 
-Services are created through the standard T-API connectivity endpoint. Pick two
-service-interface-point (SIP) UUIDs from
+Services are created through the standard T-API connectivity endpoint: a
+`POST` on the `connectivity-context`, the parent of the new service, as RFC 8040
+§4.4.1 specifies. Pick two service-interface-point (SIP) UUIDs from
 `GET /restconf/data/tapi-common:context/service-interface-point`, then:
 
 ```bash
-curl -X POST http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service \
+curl -X POST http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context \
   -H "Content-Type: application/json" \
   -d '{
     "tapi-connectivity:connectivity-service": {
@@ -279,7 +280,9 @@ rejected with a `422` that names the standard location.
 The twin computes candidate paths, assigns the requested spectrum or else
 first-fit inside the amplifier band, and admits the request only if the
 propagated GSNR clears the format's required GSNR plus the configured system
-margin.
+margin. An admitted service answers `201` with a `Location` header naming it
+(`…/connectivity-context/connectivity-service=<uuid>`) and the service itself,
+with its UUID, format and assigned spectrum.
 
 ### Populate the twin with demo services
 

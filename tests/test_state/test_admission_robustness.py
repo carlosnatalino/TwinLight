@@ -22,7 +22,8 @@ from twinlight.models.connectivity import OTSIA_CSEP_SPEC, ConnectivityService
 from twinlight.physics.backend import PropagationError
 from twinlight.state.context import InsufficientQoTError, TapiContext
 
-_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_CONTAINER = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_SVC = f"{_CONTAINER}/connectivity-service"
 
 
 def _service(ctx: TapiContext, a: str = "trx A", z: str = "trx C", fmt: str | None = None):
@@ -98,7 +99,7 @@ class TestRefusedPutKeepsTheService:
     @staticmethod
     def _create(client: TestClient) -> dict:
         refs = MeshRefs(client.app.state.context)
-        resp = client.post(_SVC, json={"tapi-connectivity:connectivity-service": [{
+        resp = client.post(_CONTAINER, json={"tapi-connectivity:connectivity-service": [{
             "end-point": [tapi_end_point("a", refs.sip("trx A")),
                           tapi_end_point("z", refs.sip("trx C"))],
         }]})
@@ -174,10 +175,10 @@ def test_creating_after_a_restore_under_egn(tmp_path: Path) -> None:
     refs = MeshRefs(ctx)
     body = {"tapi-connectivity:connectivity-service": [{"end-point": [
         tapi_end_point("a", refs.sip("trx A")), tapi_end_point("z", refs.sip("trx C"))]}]}
-    assert client.post(_SVC, json=body).status_code == 201
+    assert client.post(_CONTAINER, json=body).status_code == 201
     snapshot = ctx.snapshot(tmp_path / "s.json")
-    assert client.post(_SVC, json=body).status_code == 201
+    assert client.post(_CONTAINER, json=body).status_code == 201
     ctx.restore_from(snapshot)
-    resp = client.post(_SVC, json=body)
+    resp = client.post(_CONTAINER, json=body)
     assert resp.status_code == 201, resp.text
     assert len(ctx.get_services()) == 2
