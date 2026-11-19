@@ -1,4 +1,4 @@
-"""HTTP middleware: RESTCONF content type, path decoding, token authentication.
+"""HTTP middleware: RESTCONF content type, path decoding, token authentication, Allow.
 
 TAPI uses RESTCONF convention: ``application/yang-data+json``.
 ``RestconfContentTypeMiddleware`` sets the correct Content-Type on /data/
@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 from urllib.parse import unquote
 
 from starlette.authentication import AuthCredentials, SimpleUser
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.routing import Match
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from twinlight.auth import TokenAuthenticator, bearer_token
 
@@ -167,3 +169,86 @@ class RestconfContentTypeMiddleware(BaseHTTPMiddleware):
         if "json" in ct and request.url.path.startswith(self._prefix):
             response.headers["Content-Type"] = RESTCONF_MEDIA_TYPE
         return response
+
+
+#: The methods a route can serve, in the order an ``Allow`` header lists them.
+ALLOW_CANDIDATES = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE")
+
+#: Maps a route path to the methods its handler answers with 405 although a
+#: route serves them there (see ``AllowHeaderMiddleware``).
+MethodRefusal = Callable[[str], Iterable[str]]
+
+
+def routed_methods(app: Any, path: str, root_path: str = "") -> list[str]:
+    """The methods some route of ``app`` fully matches at ``path``.
+
+    Asks each top-level route, the way the router does, whether it would
+    take a request with that method. Top-level routes include the routers
+    this FastAPI version includes lazily (``app.routes`` does not list
+    their routes), which answer for everything below them, so the result
+    covers every route, whatever the prefix, without walking the table.
+    """
+    methods = []
+    for method in ALLOW_CANDIDATES:
+        probe: Scope = {
+            "type": "http", "method": method, "path": path,
+            "root_path": root_path, "headers": [], "query_string": b"",
+        }
+        if any(route.matches(dict(probe))[0] is Match.FULL for route in app.router.routes):
+            methods.append(method)
+    return methods
+
+
+class AllowHeaderMiddleware:
+    """Give every 405 an ``Allow`` header listing all the resource's methods.
+
+    RFC 9110 §15.5.6: a 405 MUST carry ``Allow`` naming the methods the
+    target resource supports. Starlette builds the header from the first
+    route that matches the path, and FastAPI registers one route per method,
+    so where several operations share a path the router named only one of
+    them (``PATCH …/connectivity-service`` answered ``Allow: POST``,
+    although GET is served there too). This rebuilds the header for every
+    405, from the router's own matching (``routed_methods``), so a route
+    added later is covered without anyone having to declare anything.
+
+    Two kinds of method are taken out: the request's own (it got a 405, so
+    whatever answered it does not support it), and those a ``refusals``
+    function reports for the path — methods a route serves only to refuse
+    for that resource, which routing cannot see (a write to a read-only
+    datastore). HEAD and OPTIONS are listed only where a route serves them;
+    CORS preflights are answered by ``CORSMiddleware`` before routing and do
+    not make OPTIONS a method of the resource.
+
+    Pure ASGI and innermost, so it sees the decoded path and the response
+    of the exception handler, and costs nothing on any other status.
+    """
+
+    def __init__(self, app: ASGIApp, refusals: Iterable[MethodRefusal] = ()) -> None:
+        self.app = app
+        self._refusals = tuple(refusals)
+
+    def allowed(self, app: Any, path: str, root_path: str, method: str) -> list[str]:
+        route_path = path[len(root_path):] if root_path and path.startswith(root_path) else path
+        refused = {method}
+        for refusal in self._refusals:
+            refused.update(refusal(route_path))
+        return [m for m in routed_methods(app, path, root_path) if m not in refused]
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        # Captured before routing, which may rewrite the scope.
+        path, root_path, method = scope["path"], scope.get("root_path", ""), scope["method"]
+
+        async def send_with_allow(message: Message) -> None:
+            if message["type"] == "http.response.start" and message["status"] == 405:
+                allow = ", ".join(self.allowed(scope["app"], path, root_path, method))
+                headers = [
+                    (k, v) for k, v in message.get("headers", []) if k.lower() != b"allow"
+                ]
+                headers.append((b"allow", allow.encode("latin-1")))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_allow)
