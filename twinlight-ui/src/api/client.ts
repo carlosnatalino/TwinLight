@@ -71,6 +71,17 @@ export function errorDetail(err: ApiError): string {
   return err.message;
 }
 
+/**
+ * The message to show for any error a request raised: an ApiError's
+ * `error-message` (see errorDetail), which every endpoint of the twin sends,
+ * the proprietary ones included, else the error's own message.
+ */
+export function errorText(err: unknown, fallback = "Unknown error"): string {
+  if (err instanceof ApiError) return errorDetail(err);
+  if (err instanceof Error) return err.message;
+  return err === undefined || err === null ? fallback : String(err);
+}
+
 async function apiErrorFrom(resp: Response): Promise<ApiError> {
   if (resp.status === 401 || resp.status === 403) {
     return new ApiError(

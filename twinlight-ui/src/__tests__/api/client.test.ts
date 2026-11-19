@@ -10,6 +10,7 @@ import {
   parseRestconfRoot,
   resetRestconfRoots,
   errorDetail,
+  errorText,
 } from "@/api/client";
 
 const mockFetch = vi.fn();
@@ -386,6 +387,25 @@ describe("parseRestconfRoot", () => {
 
   it("ignores other links and treats no restconf link as the server root", () => {
     expect(parseRestconfRoot("<XRD><Link rel='lrdd' href='/x'/></XRD>")).toBe("");
+  });
+});
+
+describe("errorText", () => {
+  it("shows the error-message of a proprietary endpoint's RFC 8040 error", () => {
+    const body = {
+      "ietf-restconf:errors": {
+        error: [{ "error-type": "application", "error-tag": "data-missing",
+                  "error-app-tag": "instance-required",
+                  "error-message": "SIP 'nope' not found" }],
+      },
+    };
+    expect(errorText(new ApiError(409, JSON.stringify(body)))).toBe("SIP 'nope' not found");
+  });
+
+  it("falls back to an error's message, then to the fallback", () => {
+    expect(errorText(new Error("Network down"))).toBe("Network down");
+    expect(errorText(undefined, "Failed to load")).toBe("Failed to load");
+    expect(errorText("odd")).toBe("odd");
   });
 });
 
