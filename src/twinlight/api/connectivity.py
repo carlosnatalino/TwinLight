@@ -2,6 +2,7 @@
 
 GET    {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
 POST   {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
+PUT    {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
 GET    …/connectivity-service
 GET    …/connectivity-service={uuid}
 PUT    …/connectivity-service={uuid}
@@ -19,6 +20,7 @@ A service is created by POST on the container, its parent, as RFC 8040
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -29,6 +31,7 @@ from twinlight.api.restconf import (
     RestconfError,
     created_location,
     refuse_unknown_members,
+    target_member,
     validation_error_tag,
 )
 from twinlight.models import tapi_schema
@@ -40,6 +43,7 @@ from twinlight.models.connectivity import (
     UpdateConnectivityServiceRequest,
 )
 from twinlight.state.context import (
+    EntryRefusedError,
     InsufficientQoTError,
     InsufficientSpectrumError,
     NoPathError,
@@ -529,6 +533,148 @@ async def replace_service(uuid: str, body: dict, request: Request) -> Response:
         status_code=status.HTTP_201_CREATED,
         headers={"Location": created_location(request, PREFIX, "connectivity-service", uuid)},
     )
+
+
+#: The container in the data-node tree, and its instance path.
+CONTAINER_PATH = "/tapi-common:context/tapi-connectivity:connectivity-context"
+CONTAINER_SCHEMA = tapi_schema.node(CONTAINER_PATH)
+
+
+def entry_key(entry: Any, list_name: str, path: str) -> str:
+    """The key of a list entry in a body that replaces the whole list.
+
+    RFC 7950 §7.8.2: a list's key leaves are what tell its entries apart,
+    so an entry without its key cannot say whether it replaces, keeps or
+    creates one (``missing-element``, 400 by RFC 8040 erratum 7311).
+
+    Raises:
+        RestconfError: 400, the entry is not an object or has no ``uuid``.
+    """
+    if not isinstance(entry, dict):
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "bad-element",
+            f"each {list_name} entry must be an object", error_path=path,
+        )
+    key = entry.get("uuid")
+    if not isinstance(key, str) or not key:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "missing-element",
+            f"each {list_name} entry must carry its key, uuid, in a PUT that "
+            "replaces the list", error_path=path, error_info={"bad-element": "uuid"},
+        )
+    return key
+
+
+def list_entries(container: Any, member: str, path: str) -> list[Any]:
+    """The entries of list ``member`` in a container's body: an array, a
+    lone object as one entry, or none when the member is absent."""
+    if not isinstance(container, dict):
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "bad-element",
+            "the container must be a JSON object", error_path=path,
+        )
+    entries = container.get(member, [])
+    entries = entries if isinstance(entries, list) else [entries]
+    keys = [entry_key(e, member, f"{path}/{member}") for e in entries]
+    duplicate = next((k for k in keys if keys.count(k) > 1), None)
+    if duplicate is not None:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value",
+            f"{member} {duplicate!r} appears more than once; a list's keys are unique",
+            error_path=f"{path}/{member}[uuid='{duplicate}']",
+        )
+    return entries
+
+
+def plan_connectivity_context(
+    ctx, container: Any,
+) -> tuple[list[ConnectivityService], set[str]]:
+    """What a connectivity-context PUT makes of the service list.
+
+    Returns the services to admit (new, or changed, each parsed and checked
+    as a POST's would be) and the UUIDs of the current services the body
+    repeats unchanged, which stay exactly as they are: re-admitting them
+    could move their spectrum for nothing. "Unchanged" compares the
+    configuration only (``tapi_schema.config_view``), so an entry sent back
+    as its GET returned it, operational-state and all, is unchanged.
+    Every other current service is deleted by the replacement.
+
+    Raises:
+        RestconfError: A member v2.6.0 does not define (400), a standard one
+            the twin does not implement (501: ``connection``), an entry
+            without its key, or an entry its POST would refuse.
+    """
+    refuse_unknown_members(container, CONTAINER_SCHEMA, CONTAINER_PATH, _HINTS)
+    refused = tapi_schema.unsupported_members(
+        container, CONTAINER_SCHEMA, {"connectivity-service": None},
+    )
+    if refused:
+        raise RestconfError(
+            status.HTTP_501_NOT_IMPLEMENTED, "operation-not-supported",
+            f"not implemented by this twin: {'; '.join(refused)}",
+        )
+    services: list[ConnectivityService] = []
+    keep: set[str] = set()
+    for entry in list_entries(container, "connectivity-service", CONTAINER_PATH):
+        current = ctx.get_service(entry["uuid"])
+        if current is not None and (
+            tapi_schema.config_view(entry, SERVICE_SCHEMA)
+            == tapi_schema.config_view(_connectivity_service_payload(ctx, current), SERVICE_SCHEMA)
+        ):
+            keep.add(current.uuid)
+            continue
+        svc = _parse_service({_SERVICE_KEY: [entry]})
+        _check_sips(ctx, svc)
+        services.append(svc)
+    return services, keep
+
+
+async def replace_lists(ctx, **lists: Any) -> None:
+    """``TapiContext.replace_lists``, with a refused entry turned into the
+    error its own POST would have got, ``error-path`` naming the entry."""
+    try:
+        await ctx.replace_lists(**lists)
+    except EntryRefusedError as exc:
+        cause = exc.cause
+        path = (
+            f"{SERVICE_PATH}[uuid='{exc.uuid}']" if exc.list_name == "connectivity-service"
+            else "/tapi-common:context/tapi-path-computation:path-computation-context"
+            f"/path-comp-service[uuid='{exc.uuid}']"
+        )
+        if isinstance(cause, (ConstraintError, SpectrumRequestError)):
+            error = constraint_error(cause)
+        elif isinstance(cause, KeyError):  # a path-comp-service's SIP
+            error = RestconfError(
+                status.HTTP_409_CONFLICT, "data-missing", str(cause.args[0]),
+                error_app_tag="instance-required",
+            )
+        else:  # no path, spectrum or QoT: admission refused it
+            error = RestconfError(status.HTTP_409_CONFLICT, "resource-denied", str(cause))
+        raise RestconfError(
+            error.status_code, error.error_tag,
+            f"{exc.list_name} {exc.uuid} was refused, so nothing was changed: {error.detail}",
+            error_app_tag=error.error_app_tag, error_path=error.error_path or path,
+        ) from exc
+
+
+@router.put("", status_code=status.HTTP_204_NO_CONTENT)
+async def replace_connectivity_context(body: dict, request: Request) -> Response:
+    """Replace the whole connectivity-service list (RFC 8040 §4.5).
+
+    The body is the container as its GET returns it,
+    ``{"tapi-connectivity:connectivity-context": {"connectivity-service":
+    [...]}}``, and it is the complete new list: a service absent from it is
+    deleted, a new one admitted as a POST would admit it, a changed one
+    replaced, one repeated unchanged kept as it is. All or nothing: if any
+    entry is refused, no service is created, replaced or deleted
+    (``TapiContext.replace_lists``). The container always exists, so the
+    answer is 204, never 201.
+    """
+    ctx = request.app.state.context
+    container = target_member(body, "tapi-connectivity:connectivity-context")
+    services, keep = plan_connectivity_context(ctx, container)
+    await replace_lists(ctx, services=services, keep_services=keep)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 #: What a plain patch may change on a connectivity-service. Every other

@@ -1,6 +1,7 @@
 """The RESTCONF protocol's own resources (RFC 8040 §3.3, §9, §10).
 
 GET {root}/data                                                 the datastore
+PUT {root}/data                                                 replace its contents
 GET {root}/data/ietf-yang-library:yang-library                  RFC 8525
 GET {root}/data/ietf-yang-library:modules-state                 RFC 7895, deprecated in RFC 8525
 GET {root}/data/ietf-restconf-monitoring:restconf-state         RFC 8040 §9
@@ -9,9 +10,9 @@ GET {root}/operations                                           RFC 8040 §3.3.2
 
 Not T-API, and not proprietary either: these are the IETF modules every
 RESTCONF server implements, which is why they live here rather than in the
-T-API routers (CLAUDE.md, hard constraint 1). Nothing here is writable; the
-datastore's POST, PUT and PATCH answer 405 (docs/TAPI_COMPLIANCE.md records
-it).
+T-API routers (CLAUDE.md, hard constraint 1). The datastore takes PUT, which
+replaces the T-API context in it; its POST and PATCH answer 405, and the IETF
+modules' data is state (docs/TAPI_COMPLIANCE.md records both).
 """
 
 from __future__ import annotations
@@ -20,9 +21,11 @@ import hashlib
 import json
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response, status
 
-from twinlight.api.common import get_context
+from twinlight.api.common import get_context, replace_context
+from twinlight.api.restconf import RestconfError, target_member
+from twinlight.models.tapi_schema_tree import MODULES
 
 router = APIRouter(tags=["restconf"])
 
@@ -145,6 +148,51 @@ async def get_datastore(request: Request) -> dict:
             "ietf-restconf-monitoring:restconf-state": restconf_state(),
         }
     }
+
+
+#: The datastore's top-level members besides the T-API context: config false
+#: in their modules (RFC 8525, RFC 7895, RFC 8040 §9), so a PUT ignores them.
+_IETF_STATE = frozenset({
+    "ietf-yang-library:yang-library",
+    "ietf-yang-library:modules-state",
+    "ietf-restconf-monitoring:restconf-state",
+})
+
+
+@router.put("/data", status_code=status.HTTP_204_NO_CONTENT)
+async def put_datastore(body: dict, request: Request) -> Response:
+    """Replace the datastore's contents (RFC 8040 §4.5: "A PUT on the
+    datastore resource is used to replace the entire contents of the
+    datastore"; Appendix B.2.4: "Any child nodes not present in the <data>
+    element but present in the server will be deleted").
+
+    Its one configuration is the T-API context, replaced as a PUT of
+    ``tapi-common:context`` replaces it (``common.replace_context``): the
+    services and path-comp-services the body lists, all or nothing, with the
+    configuration the twin derives repeated unchanged. A body without the
+    context would delete it, which the twin refuses (403). The IETF state
+    members a GET also returns are ignored.
+    """
+    data = target_member(body, "ietf-restconf:data")
+    if not isinstance(data, dict):
+        raise RestconfError(400, "bad-element", "ietf-restconf:data must be a JSON object",
+                            error_path="/")
+    for member in data:
+        if member == "tapi-common:context" or member in _IETF_STATE:
+            continue
+        prefix, _, _ = member.rpartition(":")
+        known = prefix in MODULES or prefix in ("ietf-yang-library", "ietf-restconf-monitoring")
+        raise RestconfError(
+            400, "unknown-element" if known or not prefix else "unknown-namespace",
+            f"{member!r} is not a top-level data node of this server",
+            error_path="/",
+            error_info=(
+                {"bad-element": member} if known or not prefix
+                else {"bad-element": member, "bad-namespace": prefix}
+            ),
+        )
+    await replace_context(request, data.get("tapi-common:context", {}))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/data/ietf-yang-library:yang-library")

@@ -2,8 +2,10 @@
 
 GET    {root}/data/tapi-common:context/tapi-path-computation:path-computation-context
 POST   {root}/data/tapi-common:context/tapi-path-computation:path-computation-context
+PUT    {root}/data/tapi-common:context/tapi-path-computation:path-computation-context
 GET    …/path-comp-service
 GET    …/path-comp-service={uuid}
+PUT    …/path-comp-service={uuid}
 DELETE …/path-comp-service={uuid}
 GET    …/path
 GET    …/path={uuid}
@@ -22,14 +24,16 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from twinlight.algorithms.path_constraints import ConstraintError
-from twinlight.api.connectivity import constraint_error
+from twinlight.api.connectivity import constraint_error, list_entries, replace_lists
 from twinlight.api.restconf import (
     RestconfError,
     created_location,
     refuse_unknown_members,
+    target_member,
     validation_error_tag,
 )
 from twinlight.models import tapi_schema
@@ -135,6 +139,60 @@ def _parse(body: dict) -> PathCompService:
         ) from exc
 
 
+CONTAINER_PATH = "/tapi-common:context/tapi-path-computation:path-computation-context"
+CONTAINER_SCHEMA = tapi_schema.node(CONTAINER_PATH)
+
+
+def plan_path_computation_context(
+    ctx, container: Any,
+) -> tuple[list[PathCompService], set[str]]:
+    """What a path-computation-context PUT makes of the path-comp-service list.
+
+    As ``connectivity.plan_connectivity_context``: the entries to compute
+    (new or changed) and the UUIDs of those repeated unchanged, which keep
+    their computed paths. ``path`` is config false (the server's results),
+    so it is ignored; ``path-set`` is a standard list the twin does not
+    implement (501).
+    """
+    refuse_unknown_members(container, CONTAINER_SCHEMA, CONTAINER_PATH)
+    refused = tapi_schema.unsupported_members(
+        container, CONTAINER_SCHEMA, {"path-comp-service": None},
+    )
+    if refused:
+        raise RestconfError(
+            status.HTTP_501_NOT_IMPLEMENTED, "operation-not-supported",
+            f"not implemented by this twin: {'; '.join(refused)}",
+        )
+    services: list[PathCompService] = []
+    keep: set[str] = set()
+    for entry in list_entries(container, "path-comp-service", CONTAINER_PATH):
+        current = ctx.get_path_comp_service(entry["uuid"])
+        if current is not None and (
+            tapi_schema.config_view(entry, SERVICE_SCHEMA)
+            == tapi_schema.config_view(_dump(current), SERVICE_SCHEMA)
+        ):
+            keep.add(current.uuid)
+            continue
+        services.append(_parse({_SERVICE_KEY: [entry]}))
+    return services, keep
+
+
+@router.put("", status_code=status.HTTP_204_NO_CONTENT)
+async def replace_path_computation_context(body: dict, request: Request) -> Response:
+    """Replace the whole path-comp-service list (RFC 8040 §4.5).
+
+    The body is the container as its GET returns it; a path-comp-service
+    absent from it is deleted with its paths, a new or changed one computed,
+    one repeated unchanged kept with its paths. All or nothing, as for the
+    connectivity-context. 204: the container always exists.
+    """
+    ctx = request.app.state.context
+    container = target_member(body, "tapi-path-computation:path-computation-context")
+    services, keep = plan_path_computation_context(ctx, container)
+    await replace_lists(ctx, path_comp_services=services, keep_path_comp_services=keep)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 def path_computation_context_payload(ctx) -> dict[str, Any]:
     """The ``tapi-path-computation:path-computation-context`` container.
 
@@ -213,6 +271,47 @@ async def get_path_comp_service(uuid: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=f"path-comp-service {uuid} not found")
     # A list entry is an array of one (RFC 7951 §5.4).
     return {_SERVICE_KEY: [_dump(service)]}
+
+
+@router.put(
+    "/path-comp-service={uuid}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={status.HTTP_201_CREATED: {"description": "Created"}},
+)
+async def replace_path_comp_service(uuid: str, body: dict, request: Request) -> Response:
+    """Create a path-comp-service, or replace it and compute its paths anew.
+
+    RFC 8040 §4.5: 201 with a ``Location`` when the PUT created the entry,
+    204 when it replaced one; the key in the body "MUST be the same as the
+    key leaf values in the request URI". Like the creating POST, a 201
+    carries the entry (the deviation docs/TAPI_COMPLIANCE.md records). A
+    replacement that computes no path leaves the old entry and its paths as
+    they were.
+    """
+    ctx = request.app.state.context
+    service = _parse(body)
+    if service.uuid != uuid:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value", "Body UUID must match path UUID",
+        )
+    try:
+        created = await ctx.put_path_comp_service(service)
+    except KeyError as exc:
+        raise RestconfError(
+            status.HTTP_409_CONFLICT, "data-missing", str(exc.args[0]),
+            error_app_tag="instance-required",
+        ) from exc
+    except ConstraintError as exc:
+        raise constraint_error(exc) from exc
+    except NoPathError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if not created:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return JSONResponse(
+        {_SERVICE_KEY: [_dump(service)]},
+        status_code=status.HTTP_201_CREATED,
+        headers={"Location": created_location(request, PREFIX, "path-comp-service", uuid)},
+    )
 
 
 @router.delete(

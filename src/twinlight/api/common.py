@@ -1,6 +1,7 @@
 """TAPI Common API endpoints.
 
 GET {root}/data/tapi-common:context
+PUT {root}/data/tapi-common:context
 GET {root}/data/tapi-common:context/service-interface-point
 GET {root}/data/tapi-common:context/service-interface-point={uuid}
 
@@ -10,13 +11,18 @@ mounts every T-API router under it, and only there.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from typing import Any
 
+from fastapi import APIRouter, HTTPException, Request, Response, status
+
+from twinlight.api import connectivity, path_computation
 from twinlight.api.connectivity import connectivity_context_payload
 from twinlight.api.equipment import physical_context_payload
 from twinlight.api.oam import oam_context_payload
 from twinlight.api.path_computation import path_computation_context_payload
+from twinlight.api.restconf import RestconfError, refuse_unknown_members, target_member
 from twinlight.api.streaming import stream_context_payload
+from twinlight.models import tapi_schema
 
 router = APIRouter(prefix="/data", tags=["tapi-common"])
 
@@ -74,6 +80,92 @@ async def get_context(request: Request) -> dict:
             "tapi-streaming:stream-context": stream_context_payload(request),
         }
     }
+
+
+CONTEXT_PATH = "/tapi-common:context"
+CONTEXT_SCHEMA = tapi_schema.node(CONTEXT_PATH)
+
+#: The context's configuration the twin derives rather than takes from a
+#: client: its uuid, the topologies (from the GNPy topology), the OAM jobs
+#: (one per service, made and removed with it) and the physical and stream
+#: contexts (config true containers that hold only state). The other config
+#: true members are the two lists a client writes.
+DERIVED = (
+    "uuid",
+    "name",
+    "tapi-topology:topology-context",
+    "tapi-oam:oam-context",
+    "tapi-equipment:physical-context",
+    "tapi-streaming:stream-context",
+)
+
+
+async def replace_context(request: Request, body: Any) -> None:
+    """Replace the context's configuration with ``body``, or change nothing.
+
+    The body is the complete new context (RFC 8040 §4.5). What a client
+    writes in it is the service and path-comp-service lists, replaced as a
+    PUT of their containers replaces them, both in one critical section
+    (``connectivity.replace_lists``). The configuration the twin derives
+    (``DERIVED``) may be repeated, and must be repeated unchanged: RFC 8040
+    §4.5 answers a client "not authorized to create or replace the target
+    resource" with 403 ``access-denied``, and RFC 8341 §3.4.5 decides what a
+    replace asks of each node — "unaltered data nodes are ignored by the
+    server and do not require any access rights", while one the operation
+    would modify or delete (an omitted one included) is ``access-denied``.
+    Configuration is compared without its state (``tapi_schema.config_view``),
+    so the context as its GET returned it passes; an OAM job made or removed
+    with a service the same PUT adds or deletes is not the client's write.
+    Config-false members (the SIPs, the computed paths, states) are ignored.
+
+    Raises:
+        RestconfError: 400 for a member v2.6.0 does not define, 403 for a
+            change to derived configuration, and whatever a PUT of either
+            list container would answer.
+    """
+    ctx = request.app.state.context
+    if not isinstance(body, dict):
+        raise RestconfError(400, "bad-element", "the context must be a JSON object",
+                            error_path=CONTEXT_PATH)
+    refuse_unknown_members(body, CONTEXT_SCHEMA, CONTEXT_PATH)
+    current = (await get_context(request))["tapi-common:context"]
+
+    def derived(context: dict) -> Any:
+        return tapi_schema.config_view(
+            {m: context[m] for m in DERIVED if m in context}, CONTEXT_SCHEMA,
+        )
+
+    sent, held = derived(body), derived(current)
+    if sent != held:
+        changed = [m for m in DERIVED if sent.get(m) != held.get(m)]
+        raise RestconfError(
+            403, "access-denied",
+            "a PUT may repeat the configuration the twin derives, unchanged, but "
+            f"not change or omit it: {', '.join(changed)} differ from what the twin "
+            "holds. Send them as a GET returns them, or PUT the "
+            "tapi-connectivity:connectivity-context or "
+            "tapi-path-computation:path-computation-context container instead",
+            error_path=f"{CONTEXT_PATH}/{changed[0]}",
+        )
+    services, keep = connectivity.plan_connectivity_context(
+        ctx, body.get("tapi-connectivity:connectivity-context", {}),
+    )
+    pcs, keep_pcs = path_computation.plan_path_computation_context(
+        ctx, body.get("tapi-path-computation:path-computation-context", {}),
+    )
+    await connectivity.replace_lists(
+        ctx, services=services, keep_services=keep,
+        path_comp_services=pcs, keep_path_comp_services=keep_pcs,
+    )
+
+
+@router.put("/tapi-common:context", status_code=status.HTTP_204_NO_CONTENT)
+async def put_context(body: dict, request: Request) -> Response:
+    """Replace the whole context (RFC 8040 §4.5): every connectivity-service
+    and path-comp-service, all or nothing (see :func:`replace_context`).
+    204: the context always exists."""
+    await replace_context(request, target_member(body, "tapi-common:context"))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 #: The SIP list's member name. RFC 8040 §4.3 returns the target resource

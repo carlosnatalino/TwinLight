@@ -44,14 +44,14 @@ SHORT = {
 #: what the app actually registers, so a route added later cannot be missed.
 ROUTES: dict[str, dict[str, set[str]]] = {
     "connectivity": {
-        "": {"GET", "POST"},
+        "": {"GET", "POST", "PUT"},
         "/connectivity-service": {"GET"},
         "/connectivity-service={uuid}": {"GET", "PUT", "PATCH", "DELETE"},
     },
     "path-computation": {
-        "": {"GET", "POST"},
+        "": {"GET", "POST", "PUT"},
         "/path-comp-service": {"GET"},
-        "/path-comp-service={uuid}": {"GET", "DELETE"},
+        "/path-comp-service={uuid}": {"GET", "PUT", "DELETE"},
         "/path": {"GET"},
         "/path={uuid}": {"GET"},
     },
@@ -360,10 +360,10 @@ class TestErrorsOnTheLongForm:
 
     @pytest.mark.parametrize("root", ROOTS)
     @pytest.mark.parametrize(("method", "module", "path"), [
-        ("PUT", "connectivity", ""),
+        ("PUT", "connectivity", "/connectivity-service"),
         ("DELETE", "connectivity", ""),
         ("PATCH", "connectivity", "/connectivity-service"),
-        ("PUT", "path-computation", "/path-comp-service=x"),
+        ("PUT", "path-computation", "/path-comp-service"),
         ("POST", "equipment", "/device"),
     ])
     def test_405_carries_allow(

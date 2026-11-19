@@ -160,3 +160,26 @@ def refuse_unknown_members(
         error_path=first.parent_path,
         error_info=info,
     )
+
+
+def target_member(body: Any, member: str) -> Any:
+    """The target resource of a ``PUT``, out of its body.
+
+    RFC 8040 §4.5: "A request message-body MUST be present, representing
+    the new data resource, or the server MUST return a '400 Bad Request'
+    status-line. The error-tag value 'invalid-value' is used in this case."
+    The representation is the target as its GET returns it: one member,
+    named with its module (RFC 7951 §4), so a body naming anything else, or
+    more, does not represent it.
+
+    Raises:
+        RestconfError: 400 ``invalid-value``.
+    """
+    if not isinstance(body, dict) or set(body) != {member}:
+        got = ", ".join(sorted(body)) if isinstance(body, dict) else type(body).__name__
+        raise RestconfError(
+            400, "invalid-value",
+            f"the body of a PUT here is the target resource, {member!r}, as its one "
+            f"member; got {got or 'an empty object'}",
+        )
+    return body[member]
