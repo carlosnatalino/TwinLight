@@ -190,7 +190,7 @@ fragment.
 | `PATCH` (plain) | merge: set what the body names |
 | `PATCH` + `application/yang-patch+json` (RFC 8072) | ordered edits (`merge`, `replace`, `remove`, `delete`) as one transaction; per-edit `yang-patch-status` |
 | `DELETE` | revert every config leaf under the target to its startup value |
-| `POST` (create) | `405` — the tree's lists mirror the network; create services through T-API |
+| `POST` (create) | `405` — the tree's lists mirror the network; create services through T-API. Its `Allow` header leaves `POST` out, as a read-only datastore's leaves out the writes (`Allow: GET`) |
 | Entity-tags (§3.4.1) | `ETag` and `Last-Modified` on every data response; `If-Match` on writes and `commit` (`412` when stale); `If-None-Match` on `GET` (`304`) |
 | Operations (`{+restconf}/operations`) | `GET /transparent/operations`; `POST /transparent/operations/<name>` with `{"input": {…}}`, answered with `{"twinlight-transparent:output": {…}}` |
 | Errors (§7.1) | `{"ietf-restconf:errors": {"error": [{error-type, error-tag, error-path, error-message}]}}`, one entry per offending leaf |

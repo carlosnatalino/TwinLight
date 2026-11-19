@@ -143,13 +143,15 @@ ok "${created} lightpath(s) admitted, ${refused} refused"
 
 say "Twin optical performance monitoring"
 curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c "
-import json, sys, urllib.request
+import json, sys
+sys.path.insert(0, '${SCRIPT_DIR}')
+from tapi_fields import twin_urlopen
 svcs = json.load(sys.stdin)['onos-created-services']
 rows = []
 for u in svcs:
     try:
-        opm = json.load(urllib.request.urlopen('${TWIN_URL}/internal/opm/' + u))
-        info = json.load(urllib.request.urlopen('${TWIN_URL}/internal/services/' + u))
+        opm = json.load(twin_urlopen('${TWIN_URL}/internal/opm/' + u))
+        info = json.load(twin_urlopen('${TWIN_URL}/internal/services/' + u))
     except Exception:
         continue
     m = opm['measurements']

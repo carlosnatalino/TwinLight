@@ -121,12 +121,26 @@ class TwinStub:
         # host-meta (an empty root, or a twin that predates it).
         self.restconf_root: str | None = "/restconf"
         self.paths: list[str] = []
+        # Tokens the twin accepts, as TWINLIGHT_API_TOKENS would set them;
+        # empty: an open twin. And what each request presented, in order.
+        self.tokens: set[str] = set()
+        self.authorization: list[tuple[str, str | None]] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         self.paths.append(path)
+        presented = request.headers.get("authorization")
+        self.authorization.append((path, presented))
         if path == "/health":
             return httpx.Response(200, json={"status": "ok"})
+        # Like the twin's middleware: everything but /health is protected,
+        # and checked before routing, so even an unknown path is a 401.
+        if self.tokens and presented not in {f"Bearer {t}" for t in self.tokens}:
+            return httpx.Response(
+                401,
+                headers={"WWW-Authenticate": 'Bearer realm="twinlight"'},
+                json={"ietf-restconf:errors": {"error": [{"error-tag": "access-denied"}]}},
+            )
         if path == "/.well-known/host-meta":
             if self.restconf_root is None:
                 return httpx.Response(404)
@@ -180,8 +194,8 @@ def client(twin: TwinStub):
     tapi_adapter._data_root = tapi_adapter.TWIN_DATA_ROOT
 
     with TestClient(app) as c:
-        c.app.state.client = httpx.AsyncClient(
-            transport=httpx.MockTransport(twin.handler), base_url="http://twin"
+        tapi_adapter.connect_twin(
+            c.app, None, transport=httpx.MockTransport(twin.handler), base_url="http://twin"
         )
         yield c
 
@@ -747,7 +761,7 @@ def test_twin_data_root_pins_the_root(twin, monkeypatch):
     assert "/.well-known/host-meta" not in twin.paths
 
 
-def _client_for(twin: TwinStub):
+def _client_for(twin: TwinStub, token: str | None = None, transport=None):
     tapi_adapter.catalogue = tapi_adapter.SipCatalogue()
     tapi_adapter.registry = tapi_adapter.OnosServiceRegistry()
     tapi_adapter._data_root = tapi_adapter.TWIN_DATA_ROOT
@@ -755,8 +769,11 @@ def _client_for(twin: TwinStub):
     class _Ctx:
         def __enter__(self):
             self.tc = TestClient(app).__enter__()
-            self.tc.app.state.client = httpx.AsyncClient(
-                transport=httpx.MockTransport(twin.handler), base_url="http://twin"
+            tapi_adapter.connect_twin(
+                self.tc.app,
+                token,
+                transport=transport or httpx.MockTransport(twin.handler),
+                base_url="http://twin",
             )
             return self.tc
 
@@ -764,3 +781,246 @@ def _client_for(twin: TwinStub):
             self.tc.__exit__(*exc)
 
     return _Ctx()
+
+
+# ---------------------------------------------------------------------------
+# The adapter's own token for a twin that requires one
+# ---------------------------------------------------------------------------
+#
+# ONOS knows nothing about it: it talks to the adapter without credentials,
+# and the adapter presents TWINLIGHT_API_TOKEN to the twin on every call.
+
+TOKEN = "onos-adapter-token-0123456789abcdef"
+WRONG = "not-the-twins-token-0123456789abcd"
+CONTEXT = "/restconf/data/tapi-common:context"
+CONNECTIVITY = f"{CONTEXT}/tapi-connectivity:connectivity-context/"
+
+
+def _drive_every_endpoint(c) -> list[httpx.Response]:
+    """One call to each adapter endpoint that reaches the twin, as ONOS
+    (and an operator) would make them; returns every response."""
+    responses = [
+        c.get("/health"),
+        c.get(CONTEXT),
+        c.get(f"{CONTEXT}/service-interface-point={TWIN_SIP_A}-1"),
+        c.get(CONNECTIVITY),
+        c.post(CONNECTIVITY, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2")),
+        c.delete(f"{CONNECTIVITY}connectivity-service=onos-uuid-1"),
+        c.get("/adapter/status"),
+        c.get("/adapter/ports"),
+    ]
+    return responses
+
+
+def test_the_token_is_read_from_the_client_variable(monkeypatch):
+    monkeypatch.setenv("TWINLIGHT_API_TOKEN", f"  {TOKEN}\n")
+    assert tapi_adapter._load_token() == TOKEN
+    monkeypatch.setenv("TWINLIGHT_API_TOKEN", "   ")
+    assert tapi_adapter._load_token() is None
+    monkeypatch.delenv("TWINLIGHT_API_TOKEN")
+    assert tapi_adapter._load_token() is None
+
+
+def test_start_up_loads_the_token_into_the_twin_client(monkeypatch):
+    monkeypatch.setenv("TWINLIGHT_API_TOKEN", TOKEN)
+    with TestClient(app) as c:
+        assert c.app.state.client.headers["authorization"] == f"Bearer {TOKEN}"
+        assert c.app.state.twin_auth.token_configured
+    monkeypatch.delenv("TWINLIGHT_API_TOKEN")
+    with TestClient(app) as c:
+        assert "authorization" not in c.app.state.client.headers
+        assert not c.app.state.twin_auth.token_configured
+
+
+def test_every_upstream_request_carries_the_token(twin):
+    twin.tokens = {TOKEN}
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    with _client_for(twin, token=TOKEN) as c:
+        responses = _drive_every_endpoint(c)
+    assert [r.status_code for r in responses] == [200, 200, 200, 200, 201, 204, 200, 200]
+    paths = {path for path, _ in twin.authorization}
+    assert "/.well-known/host-meta" in paths  # root discovery included
+    assert any(p.endswith("/connectivity-service") for p in paths)
+    assert any("connectivity-service=" in p for p in paths)
+    assert {presented for _, presented in twin.authorization} == {f"Bearer {TOKEN}"}
+
+
+def test_without_a_token_no_authorization_header_is_sent(twin):
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    with _client_for(twin) as c:
+        responses = _drive_every_endpoint(c)
+        health = c.get("/health").json()
+    assert all(r.status_code < 300 for r in responses)
+    assert twin.authorization
+    assert {presented for _, presented in twin.authorization} == {None}
+    assert health["status"] == "ok"
+    assert health["twin-authorized"] is True
+    assert health["token-configured"] is False
+
+
+def test_what_onos_sends_is_not_forwarded(twin):
+    """The adapter's credential is its own: an Authorization header on an
+    ONOS request neither reaches the twin nor replaces the adapter's."""
+    twin.tokens = {TOKEN}
+    with _client_for(twin, token=TOKEN) as c:
+        r = c.get(CONTEXT, headers={"Authorization": "Basic b25vczpyb2Nrcw=="})
+    assert r.status_code == 200
+    assert {presented for _, presented in twin.authorization} == {f"Bearer {TOKEN}"}
+
+
+@pytest.mark.parametrize(
+    ("token", "reason"),
+    [
+        (None, "the twin requires an API token (HTTP 401) and the adapter has none"),
+        (WRONG, "the twin rejected the adapter's token (HTTP 401)"),
+    ],
+)
+def test_a_refused_adapter_is_reported_not_mistaken_for_a_dead_twin(
+    twin, caplog, token, reason
+):
+    twin.tokens = {TOKEN}
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, token=token) as c:
+        health = c.get("/health").json()
+        status_body = c.get("/adapter/status")
+        polls = [c.get(CONTEXT) for _ in range(3)]
+        sip = c.get(f"{CONTEXT}/service-interface-point={TWIN_SIP_A}-1")
+        listing = c.get(CONNECTIVITY)
+        create = c.post(
+            CONNECTIVITY, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2")
+        )
+        delete = c.delete(f"{CONNECTIVITY}connectivity-service=onos-uuid-1")
+        ports = c.get("/adapter/ports")
+
+    # /health: the twin is up, and it is the token that is wrong.
+    assert health["status"] == "unauthorized"
+    assert health["twin-reachable"] is True
+    assert health["twin-authorized"] is False
+    assert health["twin-auth-error"].startswith(reason)
+    assert health["token-configured"] is (token is not None)
+
+    # /adapter/status still answers, with the reason next to the adapter's state.
+    assert status_body.status_code == 200
+    assert status_body.json()["twin-authorized"] is False
+    assert status_body.json()["twin-auth-error"].startswith(reason)
+
+    # ONOS gets a 502 naming the cause -- never the twin's 401, which would
+    # ask it for credentials it does not have and does not need.
+    for r in [*polls, sip, listing, create, delete, ports]:
+        assert r.status_code == 502, (r.request.url, r.status_code)
+        assert r.json()["detail"].startswith(reason)
+        assert "www-authenticate" not in r.headers
+
+    # Logged once, at ERROR, however many times ONOS polled.
+    refusals = [rec for rec in caplog.records if reason in rec.getMessage()]
+    assert len(refusals) == 1
+    assert refusals[0].levelname == "ERROR"
+    # And not misreported as the twin being unreachable.
+    assert not [rec for rec in caplog.records if "unreachable" in rec.getMessage()]
+
+
+def test_a_twin_that_starts_accepting_the_token_clears_the_report(twin, caplog):
+    twin.tokens = {"some-other-token-0123456789abcdef"}
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, token=TOKEN) as c:
+        assert c.get("/health").json()["status"] == "unauthorized"
+        twin.tokens.add(TOKEN)  # e.g. the twin restarted with an onos: entry
+        health = c.get("/health").json()
+        assert c.get(CONTEXT).status_code == 200
+    assert health["status"] == "ok"
+    assert health["twin-authorized"] is True
+    assert health["twin-auth-error"] is None
+    assert any("accepts the adapter's requests again" in r.getMessage() for r in caplog.records)
+
+
+def test_a_dead_twin_is_still_degraded_not_unauthorized(twin):
+    def down(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with _client_for(twin, token=TOKEN, transport=httpx.MockTransport(down)) as c:
+        health = c.get("/health").json()
+    assert health["status"] == "degraded"
+    assert health["twin-reachable"] is False
+    assert health["twin-authorized"] is None
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_the_token_never_leaves_the_adapter(twin, caplog, accepted):
+    """Not in a response body or header, not in a log record -- whether the
+    twin accepts it or not. DEBUG, so httpx's own records are included."""
+    twin.tokens = {TOKEN if accepted else "the-twins-real-token-0123456789"}
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    caplog.set_level("DEBUG")
+    with _client_for(twin, token=TOKEN) as c:
+        responses = _drive_every_endpoint(c)
+        responses.append(c.post("/adapter/modulation", json={"modulation-format": "DP-QPSK"}))
+        responses.append(c.get("/health"))
+        responses.append(c.get("/openapi.json"))
+    assert any(TOKEN in (p or "") for _, p in twin.authorization)  # it was sent
+    for r in responses:
+        assert TOKEN not in r.text, r.request.url
+        assert TOKEN not in str(dict(r.headers)), r.request.url
+    assert caplog.records
+    for record in caplog.records:
+        assert TOKEN not in record.getMessage()
+        assert TOKEN not in str(record.args)
+    assert TOKEN not in caplog.text
+
+
+def test_against_a_real_twin_that_requires_tokens(tmp_path, monkeypatch):
+    """The adapter in front of an in-process TwinLight app with tokens on:
+    discovery, the ONOS-shaped create and delete with the right token; the
+    legible refusal with a wrong one."""
+    pytest.importorskip("twinlight")
+    from twinlight.app import create_app
+    from twinlight.auth import parse_tokens
+    from twinlight.config import GnpyConfig, TwinConfig
+
+    monkeypatch.delenv("TWINLIGHT_API_TOKENS", raising=False)
+    monkeypatch.setattr("twinlight.auth.DEFAULT_ENV_FILE", tmp_path / "absent.env")
+    repo = Path(__file__).resolve().parents[4]
+    equipment = tmp_path / "equipment.json"
+    equipment.write_text("{}")
+    config = TwinConfig(
+        gnpy=GnpyConfig(
+            topology=repo / "tests" / "fixtures" / "edfa_example_network.json",
+            equipment=equipment,
+        ),
+        simulation={"snapshot_dir": str(tmp_path / "snapshots")},
+        api_tokens=parse_tokens(f"onos:{TOKEN},cli:{WRONG[::-1]}"),
+    )
+    twin_app = create_app(config)
+    stub = TwinStub()  # unused; _client_for wants one
+
+    with _client_for(stub, token=TOKEN, transport=httpx.ASGITransport(app=twin_app)) as c:
+        assert c.get("/health").json()["status"] == "ok"
+        sips = c.get(CONTEXT).json()["tapi-common:context"]["service-interface-point"]
+        assert len(sips) >= 2
+        created = c.post(
+            CONNECTIVITY,
+            json=onos_connectivity_request(sips[0]["uuid"], sips[1]["uuid"], "onos-real-1"),
+        )
+        assert created.status_code == 201, created.text
+        assert "onos-real-1" in c.get("/adapter/status").json()["onos-created-services"]
+        assert c.delete(f"{CONNECTIVITY}connectivity-service=onos-real-1").status_code == 204
+
+    # The twin, asked directly with the token, no longer has it.
+    twin_client = TestClient(twin_app, headers={"Authorization": f"Bearer {TOKEN}"})
+    listed = twin_client.get(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+        "/connectivity-service"
+    ).json()
+    uuids = [
+        s["uuid"]
+        for s in listed.get("tapi-connectivity:connectivity-context", {}).get(
+            "connectivity-service", []
+        )
+    ]
+    assert "onos-real-1" not in uuids
+
+    with _client_for(stub, token=WRONG, transport=httpx.ASGITransport(app=twin_app)) as c:
+        health = c.get("/health").json()
+        refused = c.get(CONTEXT)
+    assert health["status"] == "unauthorized"
+    assert health["twin-auth-error"].startswith("the twin rejected the adapter's token (HTTP 401)")
+    assert refused.status_code == 502

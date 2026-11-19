@@ -1,5 +1,6 @@
 """Read T-API v2.6.0 connectivity-service fields that live on the end-point,
-and find where the twin serves T-API (``twin_data_root``).
+find where the twin serves T-API (``twin_data_root``), and talk to a twin
+that requires an API token (``twin_urlopen``).
 
 ``tapi-connectivity`` has no leaf for either modulation or assigned spectrum.
 The photonic module augments the end-point's ``layer-protocol-constraint``
@@ -17,6 +18,11 @@ Only the standard library, matching the rest of the demo scripts.
 """
 
 from __future__ import annotations
+
+import os
+import urllib.error
+import urllib.request
+from urllib.parse import urlsplit
 
 OTSIA_CSEP_SPEC = "tapi-photonic-media:otsia-connectivity-service-end-point-spec"
 MCG_CSEP_SPEC = "tapi-photonic-media:mcg-connectivity-service-end-point-spec"
@@ -75,16 +81,14 @@ def twin_data_root(base: str) -> str:
     The root comes from ``/.well-known/host-meta`` (RFC 8040 §3.1): it is
     ``/restconf`` by default but configurable, so the scripts do not assume
     it. A twin without host-meta (404) runs with an empty root, or predates
-    it, and serves T-API at ``/data``.
+    it, and serves T-API at ``/data``. A twin that refuses the token exits
+    with the reason (see :func:`twin_urlopen`).
     """
-    import urllib.error
-    import urllib.request
     import xml.etree.ElementTree as ET
-    from urllib.parse import urlsplit
 
     base = base.rstrip("/")
     try:
-        with urllib.request.urlopen(f"{base}/.well-known/host-meta", timeout=30) as resp:
+        with twin_urlopen(f"{base}/.well-known/host-meta", timeout=30) as resp:
             xrd = resp.read()
     except urllib.error.HTTPError as exc:
         if exc.code != 404:
@@ -97,3 +101,72 @@ def twin_data_root(base: str) -> str:
             root = (urlsplit(href).path if urlsplit(href).scheme else href).rstrip("/")
             break
     return f"{base}{root}/data"
+
+
+# ---------------------------------------------------------------------------
+# A twin that requires an API token
+# ---------------------------------------------------------------------------
+
+#: The one token a TwinLight client presents -- the CLIs and the ONOS adapter
+#: read the same variable. lib.sh exports it, from the repository's .env when
+#: the environment does not set it.
+TOKEN_ENV_VAR = "TWINLIGHT_API_TOKEN"
+
+
+def twin_request(url: str) -> urllib.request.Request:
+    """A request for ``url`` on the twin, with the bearer token if one is set.
+
+    Only for the twin: ONOS and the adapter must never be sent this token.
+    """
+    request = urllib.request.Request(url)
+    token = os.environ.get(TOKEN_ENV_VAR, "").strip()
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    return request
+
+
+def refusal(url: str, code: int) -> str:
+    """Why a twin answered ``code`` (401/403), in words -- never the token."""
+    parts = urlsplit(url)
+    twin = f"{parts.scheme}://{parts.netloc}"
+    if not os.environ.get(TOKEN_ENV_VAR, "").strip():
+        return (
+            f"the twin at {twin} requires an API token (HTTP {code}): set "
+            f"{TOKEN_ENV_VAR}, in the environment or in the repository's .env"
+        )
+    return (
+        f"the twin at {twin} rejected {TOKEN_ENV_VAR} (HTTP {code}): it is "
+        "not one of the twin's TWINLIGHT_API_TOKENS"
+    )
+
+
+def twin_urlopen(url: str, timeout: float = 120):
+    """``urllib.request.urlopen`` for the twin, presenting the token.
+
+    A 401 or 403 exits with :func:`refusal`'s explanation instead of an
+    HTTPError: the scripts catch HTTPError (and Exception) to mean "the twin
+    is down" or "no data", which a refused token is not.
+    """
+    try:
+        return urllib.request.urlopen(twin_request(url), timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise SystemExit(refusal(url, exc.code)) from None
+        raise
+
+
+def twin_auth_problem(base: str) -> str | None:
+    """Why the twin at ``base`` refuses this shell's token, or None.
+
+    Asks for the host-meta, which a twin with tokens protects (only /health
+    is public). None also when the twin is unreachable: that is not an
+    authorization problem, and the callers report it in their own words.
+    """
+    url = f"{base.rstrip('/')}/.well-known/host-meta"
+    try:
+        with urllib.request.urlopen(twin_request(url), timeout=30):
+            return None
+    except urllib.error.HTTPError as exc:
+        return refusal(url, exc.code) if exc.code in (401, 403) else None
+    except (urllib.error.URLError, OSError):
+        return None

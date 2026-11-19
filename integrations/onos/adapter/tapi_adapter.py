@@ -115,6 +115,14 @@ EXPOSE_TWIN_SERVICES = os.getenv("ADAPTER_EXPOSE_TWIN_SERVICES", "false").lower(
 SIP_REFRESH_SECONDS = float(os.getenv("ADAPTER_SIP_REFRESH_SECONDS", "30"))
 HTTP_TIMEOUT = float(os.getenv("ADAPTER_HTTP_TIMEOUT", "120"))
 
+# The adapter's credential for a twin that requires API tokens. It is the
+# client-side variable the TwinLight CLIs read, so one .env configures the
+# twin (TWINLIGHT_API_TOKENS), the CLIs and this adapter. Read once at
+# start-up and sent as a bearer token on every request to the twin -- see
+# connect_twin(). ONOS never sees it and needs none. Unset or empty, the
+# adapter sends no Authorization header at all, as against an open twin.
+TOKEN_ENV_VAR = "TWINLIGHT_API_TOKEN"
+
 # ONOS re-publishes SIP UUIDs as "<real-uuid>-<index>"; this peels the index off.
 _INDEXED_SIP_RE = re.compile(r"^(?P<real>.+)-(?P<index>\d+)$")
 
@@ -197,6 +205,71 @@ def _modulation_of(service: dict[str, Any]) -> str | None:
 
 class TwinUnavailableError(RuntimeError):
     """The twin could not be reached or answered with a non-2xx status."""
+
+
+class TwinAuthError(RuntimeError):
+    """The twin refused the adapter's credentials (HTTP 401 or 403).
+
+    Deliberately not a :class:`TwinUnavailableError`: the twin is up, so the
+    handlers that log "twin unreachable" must not catch it. One app-level
+    handler turns it into what ONOS is answered -- see
+    :func:`_twin_refused_the_adapter`.
+    """
+
+
+def _load_token() -> str | None:
+    """The bearer token the adapter presents to the twin, or None.
+
+    Only emptiness is checked: whether the token is any good is for the
+    twin to say, and a 401 says it legibly (see TwinAuthorization).
+    """
+    return os.getenv(TOKEN_ENV_VAR, "").strip() or None
+
+
+class TwinAuthorization:
+    """Whether the twin accepts the adapter's requests, as last observed.
+
+    Every response from the twin passes through :meth:`observe` (an httpx
+    response hook installed by :func:`connect_twin`), so a refusal is noticed
+    on whatever call meets it first and reported by ``/health`` and
+    ``/adapter/status``. It is logged when it starts and when it ends, not on
+    every ONOS poll. Nothing here holds or prints the token itself.
+    """
+
+    def __init__(self, token_configured: bool, health_path: str = "/health") -> None:
+        self.token_configured = token_configured
+        # The twin's /health is public, so its answer says nothing about
+        # the credentials and must not clear a refusal.
+        self._health_path = health_path
+        self.refused_with: int | None = None
+
+    @property
+    def problem(self) -> str | None:
+        """Why the twin refuses the adapter, in words, or None if it does not."""
+        if self.refused_with is None:
+            return None
+        if not self.token_configured:
+            return (
+                f"the twin requires an API token (HTTP {self.refused_with}) and "
+                f"the adapter has none: set {TOKEN_ENV_VAR} for the adapter"
+            )
+        return (
+            f"the twin rejected the adapter's token (HTTP {self.refused_with}): "
+            f"{TOKEN_ENV_VAR} is not one of the twin's TWINLIGHT_API_TOKENS"
+        )
+
+    async def observe(self, response: httpx.Response) -> None:
+        if response.request.url.path == self._health_path:
+            return
+        if response.status_code in (401, 403):
+            changed = self.refused_with != response.status_code
+            self.refused_with = response.status_code
+            if changed:
+                log.error("%s", self.problem)
+            raise TwinAuthError(self.problem)
+        if self.refused_with is not None:
+            self.refused_with = None
+            log.info("the twin accepts the adapter's requests again")
 
 
 class SipCatalogue:
@@ -312,10 +385,39 @@ catalogue = SipCatalogue()
 registry = OnosServiceRegistry()
 
 
+def connect_twin(app: FastAPI, token: str | None, **client_options: Any) -> None:
+    """Build the adapter's one HTTP client for the twin, and its auth record.
+
+    Every upstream request -- root discovery, SIPs, services, creates and
+    deletes -- goes through ``app.state.client``, so the bearer header set
+    here and the hook that watches for 401/403 cover all of them without any
+    call site knowing about either. Nothing ONOS sends is forwarded: the
+    adapter's credential is its own. ``client_options`` lets tests supply a
+    transport.
+    """
+    client_options.setdefault("base_url", TWIN_BASE_URL)
+    client_options.setdefault("timeout", HTTP_TIMEOUT)
+    base_path = httpx.URL(str(client_options["base_url"])).path.rstrip("/")
+    auth = TwinAuthorization(token is not None, health_path=f"{base_path}/health")
+    app.state.twin_auth = auth
+    app.state.client = httpx.AsyncClient(
+        headers={"Authorization": f"Bearer {token}"} if token else None,
+        event_hooks={"response": [auth.observe]},
+        **client_options,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.client = httpx.AsyncClient(base_url=TWIN_BASE_URL, timeout=HTTP_TIMEOUT)
-    log.info("T-API adapter up; twin=%s modulation=%s", TWIN_BASE_URL, MODULATION_FORMAT)
+    token = _load_token()
+    connect_twin(app, token)
+    log.info(
+        "T-API adapter up; twin=%s modulation=%s twin-credentials=%s",
+        TWIN_BASE_URL,
+        MODULATION_FORMAT,
+        f"bearer token from {TOKEN_ENV_VAR}" if token else "none",
+    )
+    del token
     try:
         yield
     finally:
@@ -328,6 +430,24 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(TwinAuthError)
+async def _twin_refused_the_adapter(request: Request, exc: TwinAuthError) -> JSONResponse:
+    """What any adapter call answers while the twin refuses the adapter: 502.
+
+    Not the twin's 401. ONOS presented no credentials and needs none, so a
+    401 would tell it to authenticate to the adapter, which it cannot and
+    should not; and passing the twin's challenge through would misattribute
+    it. The fault is the gateway's own upstream credential, which is what
+    502 Bad Gateway means, and ONOS treats it exactly as it treats a twin
+    that is down: the device goes unavailable, discovery and flow rules
+    retry. The detail says which it is, and so do /health, /adapter/status
+    and the log.
+    """
+    return JSONResponse(
+        {"detail": str(exc)}, status_code=status.HTTP_502_BAD_GATEWAY
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -795,31 +915,59 @@ def _error_detail(response: httpx.Response) -> str:
 
 @app.get("/health")
 async def health(request: Request) -> dict[str, Any]:
-    """Liveness plus twin reachability, for the compose healthcheck."""
+    """Liveness plus twin reachability, for the compose healthcheck.
+
+    The twin's own /health is public, so reachability alone says nothing
+    about the adapter's token. A reachable twin is therefore also asked for
+    its host-meta, which needs the token on a protected twin: a 401 or 403
+    there is reported as ``"status": "unauthorized"`` with the reason in
+    ``twin-auth-error``. Still a 200, like "degraded": the adapter itself is
+    alive, and the scripts read the reason from the body.
+    """
     twin_ok = True
     try:
         await _twin_get(request, "/health")
     except TwinUnavailableError:
         twin_ok = False
+    auth: TwinAuthorization = request.app.state.twin_auth
+    if twin_ok:
+        try:
+            await request.app.state.client.get("/.well-known/host-meta")
+        except (httpx.HTTPError, TwinAuthError):
+            pass  # a refusal is recorded by the response hook
+    authorized = auth.problem is None if twin_ok else None
     return {
-        "status": "ok" if twin_ok else "degraded",
+        "status": "degraded" if not twin_ok else "ok" if authorized else "unauthorized",
         "twin": TWIN_BASE_URL,
         "twin-reachable": twin_ok,
+        "twin-authorized": authorized,
+        "twin-auth-error": auth.problem if twin_ok else None,
+        "token-configured": auth.token_configured,
         "sips": len(catalogue),
     }
 
 
 @app.get("/adapter/status")
 async def adapter_status(request: Request) -> dict[str, Any]:
-    """What the adapter is doing -- the demo's explain-yourself endpoint."""
+    """What the adapter is doing -- the demo's explain-yourself endpoint.
+
+    A twin that refuses the adapter's token does not make this fail: the
+    adapter's own state is still worth showing, next to the reason.
+    """
+    auth: TwinAuthorization = request.app.state.twin_auth
     try:
         await _ensure_catalogue(request)
     except TwinUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         ) from exc
+    except TwinAuthError:
+        pass  # reported below
     return {
         "twin": TWIN_BASE_URL,
+        "token-configured": auth.token_configured,
+        "twin-authorized": auth.problem is None,
+        "twin-auth-error": auth.problem,
         "modulation-format": MODULATION_FORMAT,
         "grid-granularity": GRID_GRANULARITY,
         "expose-twin-services": EXPOSE_TWIN_SERVICES,

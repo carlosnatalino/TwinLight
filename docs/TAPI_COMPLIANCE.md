@@ -117,11 +117,11 @@ So: **Common, Topology, Connectivity, Path Computation and Equipment** are imple
 |-----|----------------|------------------|
 | **Query parameters** | RFC 8040: `content`, `depth`, `filter`, `with-defaults` on GET | Not supported. All GETs return full resource; no `content=(config\|nonconfig\|all)`, no `depth`, no `filter`. |
 | **Accept header** | RESTCONF allows client to request `application/yang-data+json` or `application/yang-data+xml` | Only JSON is produced; XML not supported. |
-| **Error format** | RESTCONF errors (e.g. `application/yang-data+json` with `ietf-restconf:errors`) | ✓ Implemented: HTTP and validation errors return `ietf-restconf:errors` with `error-type`, `error-tag`, `error-message`. |
+| **Error format** | RESTCONF errors (e.g. `application/yang-data+json` with `ietf-restconf:errors`) | ✓ Implemented: HTTP and validation errors return `ietf-restconf:errors` with `error-type`, `error-tag`, `error-message`. A 405 has `error-tag: operation-not-supported` (RFC 8040 §7) and an `Allow` header naming every method the resource serves (RFC 9110 §15.5.6); see [API.md § Error format](API.md#error-format). |
 | **PATCH semantics** | RFC 7396 (Merge Patch) / YANG patch rules | PATCH is implemented as a few allowed fields (name, states); not a full merge or YANG-aware PATCH. |
 | **PUT** | Create/replace resource at exact path | ✓ Implemented for connectivity-service: `PUT .../connectivity-service={uuid}` replaces by UUID. |
 | **Body of a creating POST** | RFC 8040 §4.4.1: a `201 Created` with a `Location` header and no message body | ◐ Deliberate deviation: the `201` on the connectivity-context and the path-computation-context carries the `Location` **and** the created entry, as `{"tapi-connectivity:connectivity-service": {…}}` or `{"tapi-path-computation:path-comp-service": {…}}`. The entry holds what the server decided (the UUID when the client sent none; the modulation format and spectrum admission chose; a path-comp-service's computed `path` references), and every client in the repository reads it from there. A strictly conforming client ignores the body and dereferences `Location`, which returns the same entry. |
-| **OPTIONS** | Discovery of allowed methods on a resource | Not explicitly documented; relies on default FastAPI behavior. |
+| **OPTIONS** | RFC 8040 §4.1: the server MUST implement OPTIONS, to discover a resource's methods | Not implemented: a plain `OPTIONS` (not a CORS preflight) answers 405, whose `Allow` header lists the resource's methods. CORS preflights are answered by the CORS middleware. |
 
 ### 2.3 Data model gaps (within implemented modules)
 
