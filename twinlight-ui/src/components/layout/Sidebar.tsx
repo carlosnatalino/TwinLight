@@ -72,7 +72,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="px-4 py-3 border-t border-slate-700">
         <p className="text-xs text-slate-500">TwinLight</p>
-        <p className="text-xs text-slate-600">v0.1.0</p>
+        <p className="text-xs text-slate-600">v0.2.0</p>
       </div>
     </aside>
   );

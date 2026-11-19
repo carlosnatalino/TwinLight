@@ -47,8 +47,8 @@ keywords:
   - gNMI
   - software-defined networking
 license: MIT
-version: 0.1.0
-date-released: '2026-07-23'
+version: 0.2.0
+date-released: '2026-11-19'
 
 # The paper describing TwinLight. GitHub's "Cite this repository" and most
 # reference managers surface this in place of the software entry above, so

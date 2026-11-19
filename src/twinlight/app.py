@@ -211,7 +211,7 @@ def create_app(config: TwinConfig) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
         title="TwinLight",
-        version="0.1.0",
+        version="0.2.0",
         description="Optical network digital twin with T-API interfaces",
     )
 
