@@ -86,6 +86,39 @@ describe("TapiApiClient", () => {
     expect(url).toBe("http://localhost:8080/internal/compute-path");
     expect(JSON.parse(init.body)).toEqual(input);
   });
+
+  it("reads the connectivity-service list from its standard body", async () => {
+    const services = [{ uuid: "svc-1" }, { uuid: "svc-2" }];
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ "tapi-connectivity:connectivity-service": services })
+    );
+    expect(await client.getServices()).toEqual(services);
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      "http://localhost:8080/restconf/data/tapi-common:context" +
+        "/tapi-connectivity:connectivity-context/connectivity-service"
+    );
+  });
+
+  it("reads an empty connectivity-service list as no services", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ "tapi-connectivity:connectivity-service": [] })
+    );
+    expect(await client.getServices()).toEqual([]);
+  });
+
+  it("rejects a list body without the list rather than reporting no services", async () => {
+    // The container's envelope, which the list GET answered with before.
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        "tapi-connectivity:connectivity-context": {
+          "connectivity-service": [{ uuid: "svc-1" }],
+        },
+      })
+    );
+    await expect(client.getServices()).rejects.toThrow(
+      "tapi-connectivity:connectivity-service"
+    );
+  });
 });
 
 describe("TapiApiClient authentication", () => {
@@ -169,16 +202,18 @@ describe("RESTCONF root discovery", () => {
   // Every request, host-meta included, with the answer the test sets per URL.
   const calls: { url: string; init?: RequestInit }[] = [];
   let hostMeta: () => unknown;
+  let dataBody: unknown;
 
   beforeEach(() => {
     calls.length = 0;
     resetRestconfRoots();
     hostMeta = () => hostMetaResponse("/restconf");
+    dataBody = {};
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).fetch = (url: string, init?: RequestInit) => {
       calls.push({ url, init });
       return Promise.resolve(
-        url.endsWith("/.well-known/host-meta") ? hostMeta() : makeResponse({})
+        url.endsWith("/.well-known/host-meta") ? hostMeta() : makeResponse(dataBody)
       );
     };
   });
@@ -202,6 +237,7 @@ describe("RESTCONF root discovery", () => {
 
   it("follows a root other than /restconf", async () => {
     hostMeta = () => hostMetaResponse("/api");
+    dataBody = { "tapi-connectivity:connectivity-service": [] };
     await new TapiApiClient("http://dt").getServices();
     expect(urls()[1]).toBe(
       "http://dt/api/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"

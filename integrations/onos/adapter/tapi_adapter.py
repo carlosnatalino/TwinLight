@@ -699,9 +699,17 @@ async def get_connectivity_context(request: Request) -> JSONResponse:
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         ) from exc
 
-    services = payload.get("tapi-connectivity:connectivity-context", {}).get(
-        "connectivity-service", []
-    )
+    # The twin's list GET answers with the list as its one top-level member
+    # (RFC 8040 §4.3). A body without it is a twin this adapter does not
+    # understand, not one without services: answering ONOS with an empty
+    # list would read as "every service is gone".
+    services = payload.get("tapi-connectivity:connectivity-service")
+    if not isinstance(services, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The twin's connectivity-service list carries no "
+            "tapi-connectivity:connectivity-service member",
+        )
     if not EXPOSE_TWIN_SERVICES:
         owned = set(registry.uuids())
         services = [s for s in services if str(s.get("uuid")) in owned]

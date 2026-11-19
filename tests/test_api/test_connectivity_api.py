@@ -170,7 +170,7 @@ class TestCreateConnectivityService:
         # Both exist
         list_resp = app.get(f"{_BASE}/connectivity-service")
         assert list_resp.status_code == 200
-        services = list_resp.json()["tapi-connectivity:connectivity-context"]["connectivity-service"]
+        services = list_resp.json()["tapi-connectivity:connectivity-service"]
         assert len(services) == 2
 
     def test_422_when_sip_not_found(self, app: TestClient) -> None:
@@ -251,7 +251,7 @@ class TestGetAndDeleteConnectivityService:
         app.post(_BASE, json=_create_service_payload(sip_a, sip_z))
         resp = app.get(f"{_BASE}/connectivity-service")
         assert resp.status_code == 200
-        services = resp.json()["tapi-connectivity:connectivity-context"]["connectivity-service"]
+        services = resp.json()["tapi-connectivity:connectivity-service"]
         assert len(services) >= 1
 
     def test_delete_releases_spectrum_so_new_service_succeeds(self, app: TestClient) -> None:
@@ -407,7 +407,7 @@ class TestUnimplementedLeaves:
         error = resp.json()["ietf-restconf:errors"]["error"][0]
         assert error["error-tag"] == "operation-not-supported"
         listed = app.get(f"{_BASE}/connectivity-service").json()
-        assert listed["tapi-connectivity:connectivity-context"]["connectivity-service"] == []
+        assert listed == {"tapi-connectivity:connectivity-service": []}
         return error["error-message"]
 
     @pytest.mark.parametrize("leaf", [

@@ -10,7 +10,8 @@ import type {
   WhoamiResponse,
   CreateConnectivityServiceRequest,
   CreateConnectivityServiceResponse,
-  ConnectivityContextResponse,
+  ConnectivityService,
+  ConnectivityServiceListResponse,
   UpdateConnectivityServiceRequest,
   UpdateConnectivityServiceResponse,
   ServiceInfoResponse,
@@ -304,10 +305,22 @@ export class TapiApiClient {
     );
   }
 
-  async getServices(): Promise<ConnectivityContextResponse> {
-    return this.get<ConnectivityContextResponse>(
+  /**
+   * Every connectivity service. The list GET answers with the list as its
+   * one top-level member (RFC 8040 §4.3); a body without it is an error,
+   * never an empty list.
+   */
+  async getServices(): Promise<ConnectivityService[]> {
+    const body = await this.get<ConnectivityServiceListResponse>(
       await this.tapi("/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service")
     );
+    const services = body?.["tapi-connectivity:connectivity-service"];
+    if (!Array.isArray(services)) {
+      throw new Error(
+        "The connectivity-service list has no tapi-connectivity:connectivity-service member"
+      );
+    }
+    return services;
   }
 
   async updateService(

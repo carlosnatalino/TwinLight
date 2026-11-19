@@ -338,10 +338,10 @@ def _connectivity_service_payload(ctx, svc) -> dict:
 async def connectivity_context_payload(ctx) -> dict:
     """The ``tapi-connectivity:connectivity-context`` container.
 
-    One function for both views of it, this module's list GET and the full
-    context GET (``api/common.py``), so the two cannot disagree. Assembled
-    per request: each service carries live spectrum and an
-    operational-state that follows the current QoT.
+    One function for every view of it, this module's container and list
+    GETs and the full context GET (``api/common.py``), so they cannot
+    disagree. Assembled per request: each service carries live spectrum and
+    an operational-state that follows the current QoT.
     """
     # operational-state follows the current QoT: re-evaluate what a change
     # (a parameter write, a failure, a neighbour) invalidated.
@@ -366,11 +366,13 @@ async def get_connectivity_context(request: Request) -> dict:
 async def get_services(request: Request) -> dict:
     """Return all connectivity services, with assigned spectrum when held.
 
-    Answers with the container's envelope, the same body as the container
-    GET, as it always has: the UI, the client library and the ONOS adapter
-    read it that way.
+    RFC 8040 §4.3 and RFC 7951 §4: the target list is the body's one
+    top-level member, named with its module. The entries are the container
+    GET's, which still answers with the whole connectivity context.
     """
-    return await get_connectivity_context(request)
+    ctx = request.app.state.context
+    payload = await connectivity_context_payload(ctx)
+    return {"tapi-connectivity:connectivity-service": payload["connectivity-service"]}
 
 
 @router.get("/connectivity-service={uuid}")

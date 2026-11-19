@@ -63,7 +63,7 @@ twin_service_count() {
   twin_curl -sS "${TWIN_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service" \
     | python3 -c "
 import json, sys
-print(len(json.load(sys.stdin)['tapi-connectivity:connectivity-context']['connectivity-service']))
+print(len(json.load(sys.stdin)['tapi-connectivity:connectivity-service']))
 "
 }
 

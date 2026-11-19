@@ -34,11 +34,7 @@ export const useServicesStore = create<ServicesState>()((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const client = createClient(baseUrl);
-      const response = await client.getServices();
-      const services =
-        response["tapi-connectivity:connectivity-context"]?.[
-          "connectivity-service"
-        ] ?? [];
+      const services = await client.getServices();
       set({ services, isLoading: false, error: null, lastFetchedAt: Date.now() });
     } catch (err) {
       const message =

@@ -233,8 +233,11 @@ class TestConnectivityContainerGet:
         assert set(body) == {"tapi-connectivity:connectivity-context"}
         services = body["tapi-connectivity:connectivity-context"]["connectivity-service"]
         assert len(services) == 2
-        # The same body as the list GET, which answers with the container.
-        assert body == _get(admitted, f"{root}{container}/connectivity-service")
+        # The list GET answers with the list itself (RFC 8040 §4.3): the
+        # same entries, under the list's module-qualified name.
+        assert _get(admitted, f"{root}{container}/connectivity-service") == {
+            _SVC_KEY: services
+        }
 
     def test_empty(self, app: TestClient) -> None:
         assert _get(app, f"{ROOTS[-1]}{LONG['connectivity']}") == {
