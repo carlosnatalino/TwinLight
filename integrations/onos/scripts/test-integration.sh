@@ -416,10 +416,14 @@ check_seed() {
 # only on a stack this run booted.
 DELETE_SCOPE_DATA=""; DELETE_SCOPE_NATIVE=""; DELETE_SCOPE_VICTIM=""
 adapter_ok() {
-  curl -sSf "${ADAPTER_URL}/health" | python3 -c 'import json,sys; sys.exit(json.load(sys.stdin)["status"] != "ok")'
+  local health
+  health="$(curl -sf "${ADAPTER_URL}/health" 2>/dev/null)" || return 1
+  printf '%s' "${health}" | python3 -c 'import json,sys; sys.exit(json.load(sys.stdin)["status"] != "ok")'
 }
 onos_device_available() {
-  onos_api GET "/onos/v1/devices/${DEVICE_ID}" | python3 -c 'import json,sys; sys.exit(not json.load(sys.stdin).get("available"))'
+  local device
+  device="$(onos_api GET "/onos/v1/devices/${DEVICE_ID}" 2>/dev/null)" || return 1
+  printf '%s' "${device}" | python3 -c 'import json,sys; sys.exit(not json.load(sys.stdin).get("available"))' 2>/dev/null
 }
 twin_service_code() {
   # the twin's status for GET of one connectivity-service: 200 held, 404 gone
