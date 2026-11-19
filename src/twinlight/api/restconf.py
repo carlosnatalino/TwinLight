@@ -8,6 +8,8 @@ from urllib.parse import quote
 
 from fastapi import HTTPException, Request
 
+from twinlight.models.tapi_schema import SchemaNode, unknown_members
+
 
 def created_location(request: Request, container: str, entry: str, key: str) -> str:
     """The ``Location`` of a list entry that a POST on its parent created.
@@ -46,7 +48,9 @@ class RestconfError(HTTPException):
 
     ``error_app_tag`` and ``error_path`` are the optional ``error-app-tag``
     and ``error-path`` of the ``yang-errors`` template (RFC 8040 §8), for
-    the errors RFC 7950 §15 defines with them.
+    the errors RFC 7950 §15 defines with them; ``error_info`` is its
+    ``error-info``, for the tags RFC 6241 Appendix A gives one (the
+    ``bad-element`` of an ``unknown-element``, say).
     """
 
     def __init__(
@@ -57,12 +61,14 @@ class RestconfError(HTTPException):
         *,
         error_app_tag: str | None = None,
         error_path: str | None = None,
+        error_info: Mapping[str, str] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(status_code=status_code, detail=detail, headers=headers)
         self.error_tag = error_tag
         self.error_app_tag = error_app_tag
         self.error_path = error_path
+        self.error_info = dict(error_info) if error_info else None
 
 
 def error_type(tag: str) -> str:
@@ -114,3 +120,43 @@ def validation_error_tag(errors: Sequence[Mapping[str, Any]]) -> str:
     if kind.endswith(("_type", "_parsing")):
         return "bad-element"
     return "invalid-value"
+
+
+def refuse_unknown_members(
+    value: Any, schema: SchemaNode, path: str, hints: Mapping[str, str] | None = None,
+) -> None:
+    """Refuse a request body with a member the schema does not admit.
+
+    RFC 8040 §1.4 maps a RESTCONF edit onto NETCONF's ``<edit-config>``,
+    which refuses a member the schema does not define: ``unknown-element``,
+    "An unexpected element is present", with the member as ``bad-element``
+    in ``error-info`` (RFC 6241 Appendix A). A member qualified with a module
+    the server does not implement is ``unknown-namespace``, with the module
+    as ``bad-namespace``; a defined member spelled against RFC 7951 §4
+    (qualified where "the simple form ... MUST be used") is a message that
+    does not follow its encoding, ``malformed-message``. RFC 8040 §7 pairs
+    all three with 400. The ``error-path`` is the node holding the member,
+    since the member itself names no data node; the message names every
+    offending member with its path, the error the first. ``hints`` maps a
+    member name clients are known to send (an earlier release's spelling,
+    say) to the advice the message gives for it.
+
+    Raises:
+        RestconfError: 400 with the tag of the first offending member.
+    """
+    errors = unknown_members(value, schema, path)
+    if not errors:
+        return
+    first = errors[0]
+    info: dict[str, str] | None = None
+    if first.error_tag == "unknown-element":
+        info = {"bad-element": first.member}
+    elif first.error_tag == "unknown-namespace":
+        info = {"bad-element": first.member, "bad-namespace": first.namespace or ""}
+    raise RestconfError(
+        400, first.error_tag,
+        "the request carries members T-API v2.6.0 does not define here: "
+        + "; ".join(f"{e.path} ({(hints or {}).get(e.member, e.reason)})" for e in errors),
+        error_path=first.parent_path,
+        error_info=info,
+    )

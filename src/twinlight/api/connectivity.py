@@ -28,8 +28,10 @@ from twinlight.algorithms.path_constraints import ConstraintError, UnresolvedRef
 from twinlight.api.restconf import (
     RestconfError,
     created_location,
+    refuse_unknown_members,
     validation_error_tag,
 )
+from twinlight.models import tapi_schema
 from twinlight.models.common import Direction, ForwardingDirection, LayerProtocolName
 from twinlight.models.connectivity import (
     MCG_CSEP_SPEC,
@@ -61,6 +63,16 @@ def _single_service(body: dict) -> dict:
     wild. Both are accepted; more than one entry is not, because the caller
     below admits exactly one service.
     """
+    if "tapi-connectivity:connectivity-service" in body:
+        extra = sorted(set(body) - {"tapi-connectivity:connectivity-service"})
+        if extra:
+            # §4.4.1 again, and RFC 6241's "An unexpected element is present".
+            raise RestconfError(
+                status.HTTP_400_BAD_REQUEST, "unknown-element",
+                "the body carries one connectivity-service and nothing beside "
+                f"it; unexpected: {', '.join(extra)}",
+                error_path="/", error_info={"bad-element": extra[0]},
+            )
     raw = body.get("tapi-connectivity:connectivity-service", body)
     if isinstance(raw, list):
         if len(raw) != 1:
@@ -79,44 +91,79 @@ def _single_service(body: dict) -> dict:
     return raw
 
 
+#: Advice for members clients are known to send that v2.6.0 does not
+#: define: this project's pre-2.6 modulation leaf, and the T-API 2.1 leaves
+#: ONOS sends (the ONOS adapter drops them; see integrations/onos).
+_HINTS = {
+    "modulation-format": (
+        "not a T-API v2.6.0 member: send the modulation as end-point/"
+        f"layer-protocol-constraint/{OTSIA_CSEP_SPEC}/otsi-config/modulation/"
+        "standard-modulation-technique, e.g. 'MT_DP-QPSK'"
+    ),
+    "service-layer": "a T-API 2.1 member; v2.6.0 has layer-protocol-name",
+    "service-type": "a T-API 2.1 member that v2.6.0 does not define",
+}
+
+#: The connectivity-service list in the v2.6.0 data-node tree, and the
+#: instance path of its entries (RFC 7950 §9.13), for error-path.
+SERVICE_PATH = "/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+SERVICE_SCHEMA = tapi_schema.node(SERVICE_PATH)
+
 # What the twin implements of a connectivity-service request, level by level
-# (tapi-connectivity and tapi-photonic-media v2.6.0). A standard leaf the twin
-# does not act on is refused rather than ignored: admitting the service
-# without it would hand the client a lightpath that does not honour what it
-# asked for.
-#
-# _UNIMPLEMENTED: standard leaves refused whenever present.
-# _FIXED: standard leaves the twin supports at one value only (two for the
-#   end-point direction); any other value is refused. Each is reported at its
-#   value, so a GET body sent back as a PUT passes.
-# Leaves listed in neither are acted on (uuid, name, end-point, the routing
-# and topology constraints, administrative-state, the channel leaves, …) or
-# are config false (operational-state, lifecycle-state, connection, csep-role,
-# connection-end-point): state the server reports and ignores on input.
-_UNIMPLEMENTED: dict[str, tuple[str, ...]] = {
-    "connectivity-service": (
-        "layer-protocol-qualifier", "connectivity-constraint", "resilience-constraint",
-        "connectivity-service", "internal-point", "connectivity-protection-service",
-    ),
-    "end-point": (
-        "layer-protocol-qualifier", "role", "protection-role", "capacity",
-        "administrative-state", "peer-fwd-connectivity-service-end-point",
-        "server-connectivity-service-end-point",
-        "protecting-connectivity-service-end-point",
-        "assembled-connectivity-service-end-point",
-        "profile", "sink-profile", "source-profile",
-    ),
-    "layer-protocol-constraint": (
-        "layer-protocol-qualifier", "name",
-        "tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec",
-    ),
-    OTSIA_CSEP_SPEC: (
-        "total-power-warn-threshold-upper", "total-power-warn-threshold-lower",
-    ),
-    "otsi-config": (
-        "name", "application-identifier", "laser-control",
-        "otsi-threshold-power-config", "power-management-config-pac",
-    ),
+# (tapi-connectivity and tapi-photonic-media v2.6.0): each member it acts on,
+# with what it acts on below it (None: the whole subtree, checked by its own
+# parser — the name lists, the constraints in algorithms/path_constraints.py,
+# the spectrum in models/connectivity.py). Every other configuration member
+# the YANG defines is refused (501) rather than ignored: admitting the
+# service without it would hand the client a lightpath that does not honour
+# what it asked for. That covers connectivity-constraint,
+# resilience-constraint, the layer-protocol qualifiers, the end-point role,
+# capacity and protection-role, the OTSi power and laser controls, the MCG
+# bandwidth and flexi-grid pacs and the tapi-oam service augments. A member
+# the YANG does not define is a 400 (unknown-element) before any of this.
+# Config-false members (operational-state, connection, csep-role,
+# connection-end-point) are state the server reports: an edit ignores them.
+# _FIXED below names the leaves the twin supports at one value only (two for
+# the end-point direction); any other value is refused. Each is reported at
+# its value, so a GET body sent back as a PUT passes.
+_NAMES: tapi_schema.Supported = {"value-name": None, "value": None}
+_SUPPORTED: tapi_schema.Supported = {
+    "uuid": None,
+    "name": _NAMES,
+    "layer-protocol-name": None,
+    "direction": None,
+    "administrative-state": None,
+    "routing-constraint": None,
+    "topology-constraint": None,
+    "end-point": {
+        "local-id": None,
+        "name": _NAMES,
+        "service-interface-point": None,
+        "layer-protocol-name": None,
+        "direction": None,
+        "layer-protocol-constraint": {
+            "local-id": None,
+            "layer-protocol-name": None,
+            OTSIA_CSEP_SPEC: {
+                "number-of-otsi": None,
+                "otsi-config": {
+                    "local-id": None,
+                    "central-frequency": None,
+                    "channel-output-power": None,
+                    "modulation": {"standard-modulation-technique": None},
+                },
+            },
+            MCG_CSEP_SPEC: {
+                "number-of-mc": None,
+                "mc-spectrum-config-pac": {
+                    "local-id": None,
+                    "name": _NAMES,
+                    "spectrum": None,
+                    "edge-frequency-constraint": None,
+                },
+            },
+        },
+    },
 }
 # A lightpath runs from its SOURCE end-point to its SINK over one-way fibres,
 # so the service is UNIDIRECTIONAL (TapiContext.add_service). Each entry is
@@ -157,11 +204,10 @@ def _unimplemented(raw: dict) -> tuple[list[str], list[str]]:
     values the twin does not support (with the values it does). Invalid:
     values the leaf's YANG type does not admit.
     """
-    found: list[str] = []
+    found = tapi_schema.unsupported_members(raw, SERVICE_SCHEMA, _SUPPORTED)
     invalid: list[str] = []
 
     def check(level: str, node: dict, at: str) -> None:
-        found.extend(f"{at}{key}" for key in _UNIMPLEMENTED[level] if key in node)
         for key, (allowed, valid) in _FIXED.get(level, {}).items():
             if key not in node or node[key] in allowed:
                 continue
@@ -180,10 +226,7 @@ def _unimplemented(raw: dict) -> tuple[list[str], list[str]]:
             lpc_at = f"{ep_at}layer-protocol-constraint[{lpc.get('local-id')}]/"
             check("layer-protocol-constraint", lpc, lpc_at)
             for spec in _entries(lpc.get(OTSIA_CSEP_SPEC) or []):
-                spec_at = f"{lpc_at}{OTSIA_CSEP_SPEC}/"
-                check(OTSIA_CSEP_SPEC, spec, spec_at)
-                for cfg in _entries(spec.get("otsi-config") or []):
-                    check("otsi-config", cfg, f"{spec_at}otsi-config[{cfg.get('local-id')}]/")
+                check(OTSIA_CSEP_SPEC, spec, f"{lpc_at}{OTSIA_CSEP_SPEC}/")
     return found, invalid
 
 
@@ -196,13 +239,16 @@ def _parse_service(body: dict) -> ConnectivityService:
     here — otherwise a malformed payload surfaces as a 500.
 
     Raises:
-        HTTPException: 501 (``operation-not-supported``) when the body
-            carries a standard leaf the twin does not implement, naming
-            each (see ``_UNIMPLEMENTED`` and ``_FIXED``); 400 with the
+        HTTPException: 400 when the body carries a member T-API v2.6.0
+            does not define there (``unknown-element``, see
+            ``refuse_unknown_members``); 501 (``operation-not-supported``)
+            when it carries a standard member the twin does not implement,
+            naming each (see ``_SUPPORTED`` and ``_FIXED``); 400 with the
             RFC 8040 §7 tag of the first problem when it does not validate
             (``validation_error_tag``).
     """
     raw = _single_service(body)
+    refuse_unknown_members(raw, SERVICE_SCHEMA, SERVICE_PATH, _HINTS)
     refused, invalid = _unimplemented(raw)
     if invalid:
         raise RestconfError(
@@ -517,6 +563,7 @@ async def update_service(uuid: str, body: dict, request: Request) -> dict:
         raise RestconfError(
             status.HTTP_400_BAD_REQUEST, "invalid-value", "Body UUID must match path UUID",
         )
+    refuse_unknown_members(raw, SERVICE_SCHEMA, SERVICE_PATH, _HINTS)
     fixed = sorted(set(raw) - _PATCHABLE - _STATE - {"uuid"})
     if fixed:
         raise RestconfError(

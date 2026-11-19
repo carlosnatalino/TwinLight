@@ -26,7 +26,13 @@ from pydantic import ValidationError
 
 from twinlight.algorithms.path_constraints import ConstraintError
 from twinlight.api.connectivity import constraint_error
-from twinlight.api.restconf import RestconfError, created_location, validation_error_tag
+from twinlight.api.restconf import (
+    RestconfError,
+    created_location,
+    refuse_unknown_members,
+    validation_error_tag,
+)
+from twinlight.models import tapi_schema
 from twinlight.models.path_computation import PathCompService
 from twinlight.state.context import NoPathError
 
@@ -43,8 +49,57 @@ def _dump(service: PathCompService) -> dict[str, Any]:
     return service.model_dump(by_alias=True)
 
 
+#: The path-comp-service list in the v2.6.0 data-node tree, and the
+#: instance path of its entries (RFC 7950 §9.13), for error-path.
+SERVICE_PATH = "/tapi-common:context/tapi-path-computation:path-computation-context/path-comp-service"
+SERVICE_SCHEMA = tapi_schema.node(SERVICE_PATH)
+
+# What the twin computes from, level by level (see connectivity._SUPPORTED):
+# every other configuration member v2.6.0 defines — the end-point capacity,
+# role, direction, qualifier and node-edge-point, path-set,
+# path-set-constraint, adopt-orphan-path — is refused with 501 rather than
+# ignored, and a member it does not define with 400 (unknown-element).
+# objective-function and optimization-constraint hold only config-false
+# leaves besides their name in v2.6.0, and an edit ignores config-false
+# members (the computed ``path`` list included), so a client can name them
+# and nothing else.
+_NAMES: tapi_schema.Supported = {"value-name": None, "value": None}
+_SUPPORTED: tapi_schema.Supported = {
+    "uuid": None,
+    "name": _NAMES,
+    "layer-protocol-name": None,
+    "direction": None,
+    "end-point": {
+        "local-id": None,
+        "name": _NAMES,
+        "service-interface-point": None,
+        "layer-protocol-name": None,
+    },
+    "routing-constraint": None,
+    "topology-constraint": None,
+    "objective-function": {"local-id": None, "name": _NAMES},
+    "optimization-constraint": {"local-id": None, "name": _NAMES},
+}
+
+
 def _parse(body: dict) -> PathCompService:
-    """Unwrap one path-comp-service (list-or-object, RFC 7951 §5.4) and validate it."""
+    """Unwrap one path-comp-service (list-or-object, RFC 7951 §5.4) and validate it.
+
+    Raises:
+        RestconfError: 400 ``unknown-element`` for a member v2.6.0 does not
+            define (``refuse_unknown_members``); 501
+            ``operation-not-supported`` for a standard member the twin does
+            not compute from, naming each; 400 with the RFC 8040 §7 tag of
+            the first problem when it does not validate.
+    """
+    if _SERVICE_KEY in body and set(body) != {_SERVICE_KEY}:
+        extra = sorted(set(body) - {_SERVICE_KEY})
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "unknown-element",
+            "the body carries one path-comp-service and nothing beside it; "
+            f"unexpected: {', '.join(extra)}",
+            error_path="/", error_info={"bad-element": extra[0]},
+        )
     raw = body.get(_SERVICE_KEY, body)
     if isinstance(raw, list):
         if len(raw) != 1:
@@ -59,8 +114,16 @@ def _parse(body: dict) -> PathCompService:
             status.HTTP_400_BAD_REQUEST, "bad-element",
             "path-comp-service must be an object or a list of one",
         )
+    refuse_unknown_members(raw, SERVICE_SCHEMA, SERVICE_PATH)
+    refused = tapi_schema.unsupported_members(raw, SERVICE_SCHEMA, _SUPPORTED)
+    if refused:
+        raise RestconfError(
+            status.HTTP_501_NOT_IMPLEMENTED, "operation-not-supported",
+            "not implemented by this twin: " + "; ".join(refused)
+            + ". Remove these from the path-comp-service request",
+        )
     try:
-        return PathCompService.model_validate(raw)
+        return PathCompService.model_validate(tapi_schema.without_state(raw, SERVICE_SCHEMA))
     except ValidationError as exc:
         raise RestconfError(
             status.HTTP_400_BAD_REQUEST,

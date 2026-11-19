@@ -67,6 +67,7 @@ def _restconf_error_response(
     error_path: str | None = None,
     headers: Mapping[str, str] | None = None,
     error_app_tag: str | None = None,
+    error_info: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     """Build a JSONResponse with ietf-restconf:errors format (RFC 8040)."""
     err: dict = {
@@ -78,6 +79,8 @@ def _restconf_error_response(
         err["error-app-tag"] = error_app_tag
     if error_path:
         err["error-path"] = error_path
+    if error_info:
+        err["error-info"] = dict(error_info)
     body = {"ietf-restconf:errors": {"error": [err]}}
     return JSONResponse(
         status_code=status_code,
@@ -338,6 +341,7 @@ def create_app(config: TwinConfig) -> FastAPI:
             return _restconf_error_response(
                 exc.status_code, exc.error_tag, msg, error_path=exc.error_path,
                 headers=exc.headers, error_app_tag=exc.error_app_tag,
+                error_info=exc.error_info,
             )
         restconf = is_restconf_path(request.url.path, root)
         tag = _http_status_to_error_tag(exc.status_code, restconf)

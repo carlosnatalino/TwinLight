@@ -72,6 +72,9 @@ in the rows after the paths:
 | A request body in any media type parsed as JSON when it parsed | `415` unless it is `application/yang-data+json` or `application/json` |
 | `GET /restconf/data`, the YANG library, `restconf-state` and `/restconf/operations` answering `404` | Served (RFC 8040 §3.3, §9, §10) |
 | `HEAD` and `OPTIONS` answering `405` on every resource | `HEAD` answers as `GET` without the body, `OPTIONS` answers `200` with `Allow` (and `Accept-Patch` where `PATCH` is allowed); a `405` lists both in `Allow` (see [HEAD and OPTIONS](#head-and-options)) |
+| A connectivity-service request member T-API v2.6.0 does not define (`"foo"`, T-API 2.1's `service-layer`, an augment left unqualified) ignored | `400`, `unknown-element` (or `unknown-namespace`, `malformed-message`) naming it, on `POST`, `PUT` and `PATCH` (see [Connectivity services](#connectivity-services)); the pre-2.6 `modulation-format` is `unknown-element` instead of `invalid-value` |
+| A v2.6.0 member the twin does not act on and earlier releases ignored (the `tapi-oam` service augments, `modulation/proprietary-modulation-technique`) or refused with `400` (`mc-bandwidth-config-pac`, `mc-flexi-grid-config-pac`; a path-comp-service's `capacity`, `role`, `path-set-constraint`) | `501`, `operation-not-supported`, naming it |
+| A path-comp-service's config-false `path` or `objective-function/cost-optimization` refused with `400` | Ignored, as config-false members are on every request (a GET body can be sent back) |
 
 The standard paths are given for the default root, `/restconf`; on a twin
 configured with another, substitute it. Everything after the container is
@@ -337,25 +340,62 @@ the second. Reads report what was provisioned: the service is
 end-points are listed `SOURCE` first, then `SINK`. Two `SOURCE` (or two `SINK`)
 end-points are a `400`. An end-point `name` is kept and echoed.
 
-Standard leaves the twin does not act on fail the create or PUT with `501`
-(`operation-not-supported`). The error message names each one by path, so no
-service is admitted while ignoring part of the request. A value the leaf's
-YANG type does not admit (a `direction` of `"x"`) is a `400` instead. A
-`BIDIRECTIONAL` direction is refused with a note on how to get both
-directions: one service each way.
+**Members the YANG does not define.** Every member of a request body, at any
+depth — the service, each end-point, the constraint containers, the photonic
+augments — is checked against the T-API v2.6.0 data-node tree of the modules
+the twin implements, augments included, before anything else. A member that
+tree does not define where it stands is a `400`, so a request is never
+admitted with part of it ignored. RFC 6241 Appendix A decides the tag, and
+RFC 8040 §7 pairs each with `400`:
 
-| Where | Refused when present | Refused unless |
-|-------|----------------------|----------------|
-| `connectivity-service` | `layer-protocol-qualifier`, `connectivity-constraint`, `resilience-constraint`, `connectivity-service`, `internal-point`, `connectivity-protection-service` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `UNIDIRECTIONAL` |
-| `end-point` | `layer-protocol-qualifier`, `role`, `protection-role`, `capacity`, `administrative-state`, the `peer-fwd-`, `server-`, `protecting-` and `assembled-connectivity-service-end-point` references, `profile`, `sink-profile`, `source-profile` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `SOURCE` or `SINK` |
-| `layer-protocol-constraint` | `layer-protocol-qualifier`, `name`, `tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec` | `layer-protocol-name` = `PHOTONIC_MEDIA` |
-| `otsia-connectivity-service-end-point-spec` | `total-power-warn-threshold-upper`, `total-power-warn-threshold-lower` | `number-of-otsi` = `1` |
-| `otsi-config` | `name`, `application-identifier`, `laser-control`, `otsi-threshold-power-config`, `power-management-config-pac` | — |
+| The member | `error-tag` | Example |
+|------------|-------------|---------|
+| is not defined there (a typo, a T-API 2.1 leaf such as `service-layer`, this project's pre-2.6 `modulation-format`, an augment under the wrong parent, an augment left unqualified, a node qualified with the wrong implemented module) | `unknown-element`, with `error-info: {"bad-element": "<member>"}` | `"foo": 1` on an end-point |
+| is qualified with a module the twin does not implement (`tapi-notification`, which it only imports, or any other) | `unknown-namespace`, with `error-info: {"bad-element": "<member>", "bad-namespace": "<module>"}` | `"tapi-foo:bar": 1` |
+| is defined, but qualified where its module is its parent's: RFC 7951 §4 says "the simple form of the member name MUST be used" there | `malformed-message` (`error-type: rpc`) | `"tapi-connectivity:name"` inside the service |
 
-Config-false leaves (`operational-state`, `connection`, `csep-role`,
-`connection-end-point`) belong to the server: they are ignored on input, so a
-body read with GET can be sent back as a PUT. `lifecycle-state` is kept as
-sent, and can be changed with `PATCH`.
+The `error-path` is the instance-identifier of the node holding the member
+(`…/connectivity-service[uuid='…']/end-point[local-id='a']`), since the
+member itself names no data node, and the `error-message` names every
+offending member with its path. The same check, with the same errors, guards
+a `POST`, a `PUT` and a `PATCH`, and a path-comp-service.
+
+```http
+POST /restconf/data/tapi-common:context/tapi-connectivity:connectivity-context
+{"tapi-connectivity:connectivity-service": [{"uuid": "s1", "service-layer": "PHOTONIC_MEDIA", "end-point": […]}]}
+
+HTTP/1.1 400 Bad Request
+{"ietf-restconf:errors": {"error": [{
+  "error-type": "application", "error-tag": "unknown-element",
+  "error-path": "/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service[uuid='s1']",
+  "error-info": {"bad-element": "service-layer"},
+  "error-message": "the request carries members T-API v2.6.0 does not define here: …/connectivity-service[uuid='s1']/service-layer (a T-API 2.1 member; v2.6.0 has layer-protocol-name)"}]}}
+```
+
+**Members the twin does not implement.** A configuration member v2.6.0
+defines but the twin does not act on fails the create or PUT with `501`
+(`operation-not-supported`): every such member of the tree, not a list kept
+by hand. The error message names each one by path, so no service is admitted
+while ignoring part of the request. A value the leaf's YANG type does not
+admit (a `direction` of `"x"`) is a `400` instead. A `BIDIRECTIONAL` direction
+is refused with a note on how to get both directions: one service each way.
+What the twin acts on, and the members refused, are:
+
+| Where | Acted on | Refused when present (among others the YANG defines) | Refused unless |
+|-------|----------|------------------------------------------------------|----------------|
+| `connectivity-service` | `uuid`, `name`, `end-point`, `routing-constraint`, `topology-constraint`, `administrative-state` | `layer-protocol-qualifier`, `connectivity-constraint`, `resilience-constraint`, `connectivity-service`, `internal-point`, `connectivity-protection-service`, `tapi-oam:connectivity-oam-service`, `tapi-oam:connectivity-oam-job-service` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `UNIDIRECTIONAL` |
+| `end-point` | `local-id`, `name`, `service-interface-point`, `layer-protocol-constraint` | `layer-protocol-qualifier`, `role`, `protection-role`, `capacity`, `administrative-state`, the `peer-fwd-`, `server-`, `protecting-` and `assembled-connectivity-service-end-point` references, `profile`, `sink-profile`, `source-profile` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `SOURCE` or `SINK` |
+| `layer-protocol-constraint` | `local-id`, the OTSiA and MCG augments | `layer-protocol-qualifier`, `name`, `tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec` | `layer-protocol-name` = `PHOTONIC_MEDIA` |
+| `otsia-connectivity-service-end-point-spec` | `otsi-config` | `total-power-warn-threshold-upper`, `total-power-warn-threshold-lower` | `number-of-otsi` = `1` |
+| `otsi-config` | `local-id`, `central-frequency`, `channel-output-power`, `modulation/standard-modulation-technique` | `name`, `application-identifier`, `laser-control`, `otsi-threshold-power-config`, `power-management-config-pac`, `modulation/proprietary-modulation-technique` | — |
+| `mcg-connectivity-service-end-point-spec` | `number-of-mc`, `mc-spectrum-config-pac` (`local-id`, `name`, `spectrum`, `edge-frequency-constraint`) | `mc-bandwidth-config-pac`, `mc-flexi-grid-config-pac`, `mc-spectrum-config-pac/power-management-config-pac` | one media channel |
+
+Config-false members (`operational-state`, `connection`, `csep-role`,
+`connection-end-point`) belong to the server: they are not part of the
+configuration an edit sets (RFC 7950 §7.21.1), so they are ignored on input
+and a body read with GET can be sent back as a PUT. `lifecycle-state` is the
+exception: config false in v2.6.0, it is kept as sent and can be changed with
+`PATCH`, as in earlier releases.
 
 A service may carry the standard `routing-constraint` container and
 `topology-constraint` list; they constrain the route exactly as on a
@@ -509,6 +549,18 @@ its fiber length as a `routing-constraint/cost-characteristic` named
 `fiber-length-km`. Paths are computed `UNIDIRECTIONAL`, from the first
 end-point to the second; `direction` defaults to that and other values are
 refused.
+
+A request body is checked as a connectivity-service's is: a member v2.6.0
+does not define is a `400` (`unknown-element`, `unknown-namespace` or
+`malformed-message`, see [Connectivity services](#connectivity-services)); a
+standard configuration member the twin does not compute from — the
+end-point's `capacity`, `role`, `direction`, `layer-protocol-qualifier` and
+`node-edge-point`, `path-set`, `path-set-constraint`, `adopt-orphan-path` —
+is a `501` naming it; and config-false members are ignored, so the computed
+`path` references, or the `objective-function`'s `cost-optimization` and the
+other leaves v2.6.0 makes config false, may be sent back as a GET returned
+them and change nothing. An unsupported constraint value stays a `400`
+(`invalid-value`, see [Route constraints](#route-constraints)).
 
 #### Route constraints
 
@@ -724,7 +776,9 @@ so no T-API resource answers it:
 
 | HTTP status | `error-tag` | Used for |
 |-------------|-------------|----------|
-| 400 | `malformed-message` (`error-type: rpc`) | A body that is not JSON |
+| 400 | `malformed-message` (`error-type: rpc`) | A body that is not JSON, or a member qualified where RFC 7951 §4 requires the simple form |
+| 400 | `unknown-element` | A member T-API v2.6.0 does not define where it stands; `error-info` names it as `bad-element`, `error-path` is the node holding it |
+| 400 | `unknown-namespace` | A member qualified with a module the twin does not implement; `error-info` carries `bad-element` and `bad-namespace` |
 | 400 | `missing-element` | A mandatory leaf left out (an end-point without its `service-interface-point`) |
 | 400 | `bad-element` | A value of the wrong JSON type, or a malformed envelope (a list of more than one entry, a string where the entry belongs) |
 | 400 | `invalid-value` | A value the leaf or the twin does not accept: outside the YANG type, an unsupported constraint, a spectrum off the grid, a launch power outside the modelled range, a key in the body that differs from the one in the path, a `PUT` with no body (RFC 8040 §4.5) |
@@ -732,7 +786,7 @@ so no T-API resource answers it:
 | 405 | `operation-not-supported` | A method the resource does not serve |
 | 409 | `data-missing` (`error-app-tag: instance-required`) | A reference to a SIP, node or link that does not exist: a leafref with no instance (RFC 7950 §15.5); `error-path` names the leaf where the twin knows it |
 | 409 | `resource-denied` | Admission refused (no route, spectrum or QoT), or a `POST` of an entry that already exists (RFC 8040 §4.4.1) |
-| 501 | `operation-not-supported` | A standard leaf the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
+| 501 | `operation-not-supported` | A standard member the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
 
 The first problem a body has decides the tag; the message lists every one.
 The proprietary endpoints (`/internal`, `/admin`, `/config`, `/transparent`)

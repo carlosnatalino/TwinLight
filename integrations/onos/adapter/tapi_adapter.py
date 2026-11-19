@@ -48,8 +48,12 @@ what the T-API specification says it should do. The four behaviours that matter:
 4. ``TapiFlowRuleProgrammable`` POSTs a connectivity-service whose body is a
    **JSON list** under ``tapi-connectivity:connectivity-service`` and carries
    ``service-layer`` / ``service-type`` but no modulation format. The array
-   of one is RFC 7951 §5.4's encoding, which the twin takes, so it is
-   forwarded as it is; but the twin still needs a modulation, which T-API
+   of one is RFC 7951 §5.4's encoding, which the twin takes, so the envelope
+   is kept; its members are not. The twin refuses a member T-API v2.6.0 does
+   not define (``400 unknown-element``), and ``service-layer`` and
+   ``service-type`` are T-API 2.1's, so the adapter builds the entry anew
+   from what it can translate and drops the rest, member by member (see
+   ``ONOS_SERVICE_MEMBERS``). The twin still needs a modulation, which T-API
    2.1 has nowhere to carry. The adapter supplies
    one as policy, in the T-API 2.6 place: a ``tapi-photonic-media`` augment
    on the end-point. Translated in :func:`create_connectivity_service`.
@@ -151,6 +155,57 @@ MODULATION_TO_MT = {
     "DP-64QAM": "MT_DP-QAM64",
 }
 MT_TO_MODULATION = {mt: fmt for fmt, mt in MODULATION_TO_MT.items()}
+
+
+# What becomes of each member of ONOS's T-API 2.1 create body: the members
+# TapiFlowRuleProgrammable.createConnectivityRequest() writes (pinned by
+# tests/test_tapi_adapter.onos_connectivity_request). The twin answers a
+# member T-API v2.6.0 does not define with 400 unknown-element, and a v2.6.0
+# member it does not implement with 501, so the entry the twin receives is
+# built anew in create_connectivity_service and nothing is forwarded as ONOS
+# wrote it. A member ONOS sends that is not listed here is dropped as well,
+# with a warning naming it.
+ONOS_SERVICE_MEMBERS = {
+    "uuid": "kept: the twin's service UUID, so ONOS's later DELETE lines up",
+    "end-point": "translated member by member (ONOS_END_POINT_MEMBERS)",
+    "service-layer": (
+        "dropped: T-API 2.1 only; v2.6.0 says layer-protocol-name, whose "
+        "PHOTONIC_MEDIA is the twin's default and only value"
+    ),
+    "service-type": (
+        "dropped: T-API 2.1 only; a twin service is point-to-point by "
+        "construction"
+    ),
+}
+ONOS_END_POINT_MEMBERS = {
+    "service-interface-point": "translated: ONOS's port-indexed SIP UUID to the twin's",
+    "local-id": "replaced: the end-points are numbered 1 and 2 in ONOS's order",
+    "layer-protocol-name": "dropped: PHOTONIC_MEDIA, the twin's default",
+    "layer-protocol-qualifier": (
+        "dropped: a v2.6.0 member the twin does not implement (501); ONOS "
+        "asks for the NMC qualifier, which is what a twin service is"
+    ),
+}
+# Translated rather than dropped: these reach the twin in another form.
+_ONOS_TRANSLATED = {"uuid", "end-point", "service-interface-point", "local-id"}
+
+
+def _dropped_onos_members(service: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """``(known, unexpected)``: the members of ONOS's entry the twin will not
+    receive, each with its path, split by whether ONOS_*_MEMBERS lists it."""
+    known: list[str] = []
+    unexpected: list[str] = []
+    for member in service:
+        if member not in _ONOS_TRANSLATED:
+            (known if member in ONOS_SERVICE_MEMBERS else unexpected).append(member)
+    for index, end_point in enumerate(service.get("end-point") or []):
+        if not isinstance(end_point, dict):
+            continue
+        for member in end_point:
+            if member not in _ONOS_TRANSLATED:
+                where = f"end-point[{index}]/{member}"
+                (known if member in ONOS_END_POINT_MEMBERS else unexpected).append(where)
+    return known, unexpected
 
 
 def _modulation_augment(modulation: str) -> dict[str, Any]:
@@ -826,11 +881,14 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
 
     ONOS sends the entry as a list of one under
     ``tapi-connectivity:connectivity-service``, which is the standard
-    encoding the twin takes as it is. What is translated: the SIPs (ONOS's
-    port-indexed UUIDs back to the twin's), the T-API 2.1 end-point leaves
-    ONOS adds (dropped), and the modulation format, which 2.1 cannot carry
-    (added as the 2.6 augment). ONOS's UUID is reused as the twin's service
-    UUID so the later DELETE lines up.
+    encoding the twin takes as it is. The entry itself is rebuilt, since the
+    twin refuses the T-API 2.1 members in it: what each of ONOS's members
+    becomes is ``ONOS_SERVICE_MEMBERS`` and ``ONOS_END_POINT_MEMBERS``, and
+    the members dropped are logged by name, so the adapter's log records what
+    ONOS really sent. Translated: the SIPs (ONOS's port-indexed UUIDs back to
+    the twin's) and the modulation format, which 2.1 cannot carry (added as
+    the 2.6 augment). ONOS's UUID is reused as the twin's service UUID so the
+    later DELETE lines up.
 
     A 409 from the twin is not a failure of the adapter: it means the RMSA/QoT
     admission path refused the lightpath. It is relayed unchanged so ONOS marks
@@ -847,6 +905,18 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
     # ONOS emits exactly one service per flow rule.
     onos_service = services[0]
     onos_uuid = str(onos_service.get("uuid", ""))
+    known, unexpected = _dropped_onos_members(onos_service)
+    if known:
+        log.info(
+            "not forwarded from ONOS's T-API 2.1 request %s: %s",
+            onos_uuid[:8], ", ".join(known),
+        )
+    if unexpected:
+        log.warning(
+            "ONOS's request %s carries members this adapter does not know; "
+            "dropped, since the twin refuses what T-API v2.6.0 does not define: %s",
+            onos_uuid[:8], ", ".join(unexpected),
+        )
     endpoints = onos_service.get("end-point", [])
     if len(endpoints) != 2:
         raise HTTPException(

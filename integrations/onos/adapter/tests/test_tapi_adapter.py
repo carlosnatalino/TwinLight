@@ -446,6 +446,51 @@ def test_the_list_body_is_forwarded_in_its_standard_form(client, twin):
     assert got == [TWIN_SIP_A, TWIN_SIP_Z]
 
 
+def test_only_t_api_2_6_members_reach_the_twin(client, twin, caplog):
+    """The twin refuses a member T-API v2.6.0 does not define (400
+    unknown-element), so ONOS's 2.1 members must not be forwarded: each is
+    dropped by name, and the log says which, recording what ONOS sent."""
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
+    caplog.set_level("INFO", logger="tapi-adapter")
+    r = client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    assert r.status_code == 201
+    (sent,) = twin.posted[0]["tapi-connectivity:connectivity-service"]
+    assert set(sent) == {"uuid", "name", "end-point"}
+    for end_point in sent["end-point"]:
+        assert set(end_point) == {"local-id", "service-interface-point", "layer-protocol-constraint"}
+    dropped = [rec.getMessage() for rec in caplog.records if "not forwarded" in rec.getMessage()]
+    assert len(dropped) == 1
+    for member in ("service-layer", "service-type", "end-point[0]/layer-protocol-qualifier",
+                   "end-point[1]/layer-protocol-name"):
+        assert member in dropped[0]
+    assert not [rec for rec in caplog.records if "does not know" in rec.getMessage()]
+
+    # The twin's own check, where the twin is installed beside the adapter.
+    schema = pytest.importorskip("twinlight.models.tapi_schema")
+    path = "/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+    assert schema.unknown_members(sent, schema.node(path), path) == []
+
+
+def test_an_unexpected_onos_member_is_dropped_with_a_warning(client, twin, caplog):
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
+    body = onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2")
+    body["tapi-connectivity:connectivity-service"][0]["connectivity-direction"] = "UNIDIRECTIONAL"
+    caplog.set_level("INFO", logger="tapi-adapter")
+    r = client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=body,
+    )
+    assert r.status_code == 201
+    (sent,) = twin.posted[0]["tapi-connectivity:connectivity-service"]
+    assert "connectivity-direction" not in sent
+    (warning,) = [rec for rec in caplog.records if "does not know" in rec.getMessage()]
+    assert warning.levelname == "WARNING"
+    assert "connectivity-direction" in warning.getMessage()
+
+
 def test_service_name_carries_the_onos_port_pair(client, twin):
     """The port pair is the only identifier ONOS and the twin share, so it is
     stamped into the T-API name list — that is what makes a row in the ONOS
