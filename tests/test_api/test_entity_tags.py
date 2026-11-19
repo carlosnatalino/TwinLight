@@ -337,7 +337,9 @@ class TestConditionalWrites:
         missing = f"{root}{_CONNECTIVITY}/connectivity-service=missing"
         assert client.delete(missing, headers={"If-Match": '"x"'}).status_code == 404
         assert client.patch(missing, json={}, headers={"If-Match": '"x"'}).status_code == 404
-        resp = client.put(f"{root}/data", json={}, headers={"If-Match": '"x"'})
+        # The topology is config false: no edit is ever served there.
+        read_only = f"{root}/data/tapi-common:context/tapi-topology:topology-context"
+        resp = client.put(read_only, json={}, headers={"If-Match": '"x"'})
         assert resp.status_code == 405
 
     def test_with_tokens_a_401_comes_first(self, tmp_path: Path) -> None:
