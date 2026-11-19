@@ -506,6 +506,7 @@ every other script and checks what it did:
 | `fault.sh cut-path`, `heal-all`, `list` | OPM reports `link-failed`, then recovers |
 | `lightpath.sh delete` | the twin releases the service |
 | `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number, so no flow was left in `PENDING_ADD` without a lightpath. The pairs are drawn with `SEED_RANDOM_SEED`, `twinlight-onos-test` unless you export another, and the run prints it |
+| `seed-demo.sh --reset` with the twin's `qot_margin_db` raised by 3 dB | pairs screened against the default margin are refused; each refusal is reported and its flow removed, spares fill in, and ONOS ends with no flow in `PENDING_ADD`. The margin is put back afterwards |
 | delete scope, across an adapter restart | a lightpath created on the twin directly is not listed to ONOS and survives a `DELETE` through the adapter (`204`, reported under `refused-deletes`); after the adapter restarts, ONOS is shown the same services as before and `/adapter/status` reports them, and removing a flow in ONOS still releases its lightpath. The restart is skipped with `--reuse` |
 | `resync.sh --check`, `resync.sh` | ONOS-created lightpaths survive, every port enabled |
 | `onos-cli.sh devices` | the CLI answers and lists the device |

@@ -531,6 +531,44 @@ check_delete_scope() {
     "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${DELETE_SCOPE_NATIVE}"
   return "${rc}"
 }
+# A pair the twin refuses at create must not leave its flow in ONOS. The
+# twin's QoT margin is raised by 3 dB for one seeding, so pairs find_pairs.py
+# screened against the default 1.5 dB are refused for certain; seed-demo.sh
+# must report each refusal, remove its flow and provision spares, and leave
+# ONOS with no flow in PENDING_ADD. The margin is put back whatever happens.
+twin_margin() {
+  twin_curl -sS "${TWIN_URL}/metrics" | sed -n 's/^twinlight_rmsa_qot_margin_db \([0-9.]*\)$/\1/p'
+}
+set_twin_margin() {
+  local code
+  code="$(twin_curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d "{\"twin\": {\"rmsa\": {\"qot_margin_db\": $1}}}" "${TWIN_URL}/config/set")"
+  [ "${code}" = 200 ] || { echo "the twin answered ${code} to setting qot_margin_db=$1"; return 1; }
+}
+pending_add_flows() {
+  onos_rest_flows | awk '$4 == "PENDING_ADD"' | wc -l | tr -d ' '
+}
+check_seed_refusals() {
+  local margin raised out rc=0 refused removed
+  margin="$(twin_margin)"
+  [ -n "${margin}" ] || { echo "cannot read the twin's qot_margin_db from /metrics"; return 1; }
+  raised="$(python3 -c 'import sys; print(float(sys.argv[1]) + 3)' "${margin}")"
+  set_twin_margin "${raised}" || return 1
+  echo "qot_margin_db ${margin} -> ${raised} dB; SEED_RANDOM_SEED=${SEED_RANDOM_SEED}"
+  out="$("${HERE}/seed-demo.sh" --reset)" || rc=1
+  set_twin_margin "${margin}" || rc=1
+  printf '%s\n' "${out}"
+  echo "qot_margin_db back to $(twin_margin) dB"
+  [ "${rc}" = 0 ] || return 1
+  refused="$(printf '%s' "${out}" | sed -n 's/.* lightpath(s) admitted, \([0-9][0-9]*\) refused.*/\1/p')"
+  removed="$(printf '%s\n' "${out}" | grep -c 'removed its flow')"
+  [ "${refused:-0}" -gt 0 ] || { echo "nothing was refused: the refusal path did not run"; return 1; }
+  [ "${removed}" = "${refused}" ] || { echo "${refused} refused but ${removed} flow(s) removed"; return 1; }
+  until_true 60 flows_match_services \
+    || { echo "ONOS holds $(onos_rest_flows | wc -l | tr -d ' ') REST flows, the adapter $(adapter_service_count) services"; return 1; }
+  [ "$(pending_add_flows)" = 0 ] || { echo "$(pending_add_flows) flow(s) left in PENDING_ADD"; return 1; }
+  echo "${refused} refused, each flow removed; no flow in PENDING_ADD; ONOS flows and twin services agree"
+}
 check_resync() {
   local out
   out="$("${HERE}/resync.sh")" || { printf '%s\n' "${out}"; return 1; }
@@ -623,6 +661,7 @@ e2e() {
   fi
   step "seed-demo.sh --reset, ONOS flows match twin services" check_seed
   step "correlate.sh after seeding" check_correlate
+  step "seed-demo.sh with refusals: their flows are removed" check_seed_refusals
   step "delete scope, across an adapter restart" check_delete_scope
   step "resync.sh --check" "${HERE}/resync.sh" --check
   step "resync.sh, lightpaths survive, ports enabled" check_resync
