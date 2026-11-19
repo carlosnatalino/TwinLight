@@ -458,6 +458,20 @@ prints both versions; `unit --pinned` runs the same tests in
 environment lacks a package, the step says what to install rather than failing
 on an import.
 
+**With authentication on.** Export the twin's tokens and the one the adapter
+and the scripts present before running; Compose passes both into the stack
+from the environment, and the run adds a step proving the twin refuses an
+anonymous request:
+
+```bash
+export TWINLIGHT_API_TOKENS="onos-test:$(openssl rand -hex 24)"
+export TWINLIGHT_API_TOKEN="${TWINLIGHT_API_TOKENS#onos-test:}"
+./integrations/onos/scripts/test-integration.sh all
+unset TWINLIGHT_API_TOKENS TWINLIGHT_API_TOKEN
+```
+
+The header of the run says `authentication on` or `off`.
+
 **`e2e`** boots a stack of its own from cold (`down -v` of its own project,
 a fresh snapshot directory, `demo-up.sh`), runs `validate.sh`, then drives
 every other script and checks what it did:

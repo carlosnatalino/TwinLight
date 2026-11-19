@@ -10,6 +10,11 @@
 #   test-integration.sh preflight             only check that the test stack has
 #                                             room to boot; changes nothing
 #
+# Authentication: export TWINLIGHT_API_TOKENS (the twin's tokens) and
+# TWINLIGHT_API_TOKEN (one of them, for the adapter and the scripts) before
+# running, and the whole stack runs with tokens on; an extra step checks that
+# the twin refuses an anonymous request. Unset, authentication is off.
+#
 # e2e options:
 #   --keep        leave the stack up afterwards, for inspection
 #   --reuse       test a stack that is already up instead of booting one; it is
@@ -42,7 +47,7 @@ REPO_ROOT="$(cd "${HERE}/../../.." && pwd)"
 ADAPTER_DIR="${HERE}/../adapter"
 LABEL="org.twinlight.onos-test"
 
-usage() { sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 MODE="${1:-}"; [ -n "${MODE}" ] || usage; shift
 PINNED=""; KEEP=""; REUSE=""; BOOTS=1; RMI=""; OUT=""
@@ -340,7 +345,24 @@ check_correlate() {
   "${HERE}/correlate.sh" --json | python3 -c 'import json,sys; rows=json.load(sys.stdin); assert rows, "empty join"; print(len(rows), "rows")'
 }
 opm_status() {
-  curl -sS "${TWIN_URL}/internal/opm/$1" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","ok"))'
+  # twin_curl: the twin may require TWINLIGHT_API_TOKEN (see --help, tokens).
+  twin_curl -sS "${TWIN_URL}/internal/opm/$1" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","ok"))'
+}
+# With TWINLIGHT_API_TOKENS set for the twin, prove the stack really runs with
+# authentication on: the twin refuses a request without a token, and accepts
+# the one the adapter and the scripts present.
+check_tokens() {
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' "${TWIN_URL}/restconf/data/tapi-common:context")"
+  [ "${code}" = 401 ] || { echo "the twin answered ${code} without a token, not 401"; return 1; }
+  code="$(twin_curl -s -o /dev/null -w '%{http_code}' "${TWIN_URL}/restconf/data/tapi-common:context")"
+  [ "${code}" = 200 ] || { echo "the twin answered ${code} to TWINLIGHT_API_TOKEN, not 200"; return 1; }
+  curl -sS "${ADAPTER_URL}/health" | python3 -c '
+import json, sys
+h = json.load(sys.stdin)
+assert h["token-configured"] and h["twin-authorized"], h
+print("the twin refuses an anonymous request and accepts the adapter and the scripts")
+'
 }
 check_fault_cut() {
   local out
@@ -445,8 +467,10 @@ e2e() {
   trap on_interrupt INT TERM
   printf '%sTest stack%s  project %s, prefix %s, tag %s\n' "${C_BOLD}" "${C_RESET}" \
     "${COMPOSE_PROJECT_NAME}" "${TL_PREFIX}" "${TWINLIGHT_IMAGE_TAG}"
-  printf '            twin %s  adapter %s  ONOS %s  device %s\n\n' \
+  printf '            twin %s  adapter %s  ONOS %s  device %s\n' \
     "${TWIN_URL}" "${ADAPTER_URL}" "${ONOS_URL}" "${DEVICE_ID}"
+  printf '            authentication %s\n\n' \
+    "$([ -n "${TWINLIGHT_API_TOKENS:-}" ] && echo "on (TWINLIGHT_API_TOKENS for the twin, TWINLIGHT_API_TOKEN for the adapter and scripts)" || echo off)"
 
   if [ -n "${REUSE}" ]; then
     step "preflight (reuse a running stack)" reuse_preflight || return
@@ -460,6 +484,9 @@ e2e() {
   fi
 
   step "validate.sh" "${HERE}/validate.sh"
+  if [ -n "${TWINLIGHT_API_TOKENS:-}" ]; then
+    step "authentication on: anonymous refused, the token accepted" check_tokens
+  fi
   step "lightpath.sh create ${SMOKE_A} ${SMOKE_Z}" check_lightpath_create
   SMOKE_UUID="$(smoke_uuid)"
   step "lightpath.sh list" check_lightpath_list
