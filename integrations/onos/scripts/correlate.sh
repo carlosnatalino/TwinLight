@@ -45,6 +45,11 @@ rows = []
 for f in flows:
     if f.get("appId") != "org.onosproject.rest":
         continue
+    # A removed flow lingers in ONOS as PENDING_REMOVE for a while after its
+    # T-API DELETE has already released the service on the twin; joining it would
+    # report a lightpath that is merely on its way out as uncorrelated.
+    if f.get("state") in ("PENDING_REMOVE", "REMOVED"):
+        continue
     ins = [c["port"] for c in f["selector"]["criteria"] if c["type"] == "IN_PORT"]
     outs = [i["port"] for i in f["treatment"]["instructions"] if i["type"] == "OUTPUT"]
     if not ins or not outs:

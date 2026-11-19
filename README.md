@@ -176,6 +176,12 @@ docker compose down          # stop the stack, keep Prometheus/Grafana volumes
 docker compose down -v       # stop and discard the metric history too
 ```
 
+To run a second stack beside one that is already up (another checkout, or a
+pull request under review), move its container names, image tags, ports and
+snapshot directory with the variables listed in [.env.example](.env.example);
+[integrations/onos/README.md § Running a second stack side by side](integrations/onos/README.md#running-a-second-stack-side-by-side)
+walks through it, with and without ONOS.
+
 > **Apple Silicon note.** One of GNPy's transitive dependencies
 > (`oopt-gnpy-libyang`) publishes manylinux wheels for x86-64 only, so the twin
 > image is built for `linux/amd64` and runs under Rosetta/QEMU on arm64 hosts.

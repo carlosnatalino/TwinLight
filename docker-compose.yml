@@ -26,6 +26,11 @@
 #   http://localhost:9090             — Prometheus UI
 #   http://localhost:3000             — Grafana (admin / admin)
 #
+# Container names, image tags, host ports and the snapshot directory default to
+# the values below and can be moved from the environment or .env to run a
+# second stack beside this one; see .env.example and
+# integrations/onos/README.md § Running a second stack side by side.
+#
 # Override the twin config (default: CORONET CONUS):
 #   docker compose run --rm twin twinlight \
 #       --config /app/examples/twin_config.yaml --rest-host 0.0.0.0
@@ -41,25 +46,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: twinlight:latest
+    image: twinlight:${TWINLIGHT_IMAGE_TAG:-latest}
     # gnpy's oopt-gnpy-libyang has no manylinux aarch64 wheel; the
     # image is built for linux/amd64 and runs under Rosetta/qemu on
     # Apple Silicon hosts. Declared here too so compose doesn't warn
     # about the mismatch on every up.
     platform: linux/amd64
-    container_name: twinlight
+    container_name: ${TWINLIGHT_CONTAINER_PREFIX:-twinlight}
     hostname: twin
     ports:
-      - "8080:8080"   # REST (TAPI + /config + /metrics + /admin)
+      - "${TWINLIGHT_REST_PORT:-8080}:8080"   # REST (TAPI + /config + /metrics + /admin)
       # gNMI: the T-API measurement stream. Its advertised connection-address
       # is grpc://twin:50051, right for containers on this network; from the
       # host, pass --gnmi-target localhost:50051 to twinlight-client, or set
       # streaming.advertised_address in the scenario YAML.
-      - "50051:50051"
+      - "${TWINLIGHT_GNMI_PORT:-50051}:50051"
     volumes:
       # Snapshots and the shutdown checkpoint land here on the host so they
       # survive container rebuilds. Created on first up if it doesn't exist.
-      - ./snapshots:/app/snapshots
+      - ${TWINLIGHT_SNAPSHOT_DIR:-./snapshots}:/app/snapshots
     # No restore flag needed: the twin checkpoints itself on SIGTERM (which is
     # what `docker compose down`/`stop` sends) and resumes from that checkpoint
     # on the next start, or begins clean when there is none. Add --reset to
@@ -96,8 +101,8 @@ services:
     build:
       context: ./twinlight-ui
       dockerfile: Dockerfile
-    image: twinlight-ui:latest
-    container_name: twinlight-ui
+    image: twinlight-ui:${TWINLIGHT_IMAGE_TAG:-latest}
+    container_name: ${TWINLIGHT_CONTAINER_PREFIX:-twinlight}-ui
     hostname: ui
     environment:
       # URL the *browser* uses to reach the twin's REST API. The UI runs in
@@ -106,16 +111,16 @@ services:
       # compose service name. Override for a remotely-hosted twin.
       # localhost:5173 is already in the twin's cors_origins, so CORS works
       # out of the box with the default config.
-      TWIN_URL: "http://localhost:8080"
+      TWIN_URL: "http://localhost:${TWINLIGHT_REST_PORT:-8080}"
     ports:
-      - "5173:80"   # served by nginx; matches the twin's allowed CORS origin
+      - "${TWINLIGHT_UI_PORT:-5173}:80"   # served by nginx; matches the twin's allowed CORS origin
     depends_on:
       - twin
     restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:v3.13.1
-    container_name: twinlight-prometheus
+    container_name: ${TWINLIGHT_CONTAINER_PREFIX:-twinlight}-prometheus
     hostname: prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -126,7 +131,7 @@ services:
       - "--storage.tsdb.retention.time=7d"
       - "--web.enable-lifecycle"
     ports:
-      - "9090:9090"
+      - "${TWINLIGHT_PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       # With authentication on: uncomment, and see docker/prometheus.yml.
@@ -139,7 +144,7 @@ services:
 
   grafana:
     image: grafana/grafana:13.1.1
-    container_name: twinlight-grafana
+    container_name: ${TWINLIGHT_CONTAINER_PREFIX:-twinlight}-grafana
     hostname: grafana
     environment:
       # Override on the command line for any real deployment.
@@ -150,7 +155,7 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_DEFAULT_THEME: light
     ports:
-      - "3000:3000"
+      - "${TWINLIGHT_GRAFANA_PORT:-3000}:3000"
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
       # Dashboard JSON is served via the file provider; mount the
@@ -171,7 +176,7 @@ services:
   # runs on every `docker compose up` while grafana-data persists the star.
   grafana-init:
     image: curlimages/curl:8.11.1
-    container_name: twinlight-grafana-init
+    container_name: ${TWINLIGHT_CONTAINER_PREFIX:-twinlight}-grafana-init
     hostname: grafana-init
     depends_on:
       - grafana

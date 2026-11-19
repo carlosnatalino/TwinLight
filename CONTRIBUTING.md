@@ -39,6 +39,11 @@ npm --prefix twinlight-ui run build     # web UI build
 CI additionally builds both Docker images and smoke-tests the twin image, so a
 change that breaks `docker compose up --build` will be caught there.
 
+CI does not run the ONOS integration. If a change touches `integrations/onos/`,
+the compose files, or a twin interface the adapter calls, test it locally with
+`./integrations/onos/scripts/test-integration.sh all`; see
+[integrations/onos/README.md § Testing the integration locally](integrations/onos/README.md#testing-the-integration-locally).
+
 ## Project conventions
 
 These are not style preferences; each one prevents a specific class of bug.

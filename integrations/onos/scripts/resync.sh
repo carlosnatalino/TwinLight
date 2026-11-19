@@ -92,15 +92,21 @@ fi
 say "State before resync"
 report
 
-# ONOS re-runs discoverPortDetails() when a device is (re)connected, so removing
-# and re-adding the netcfg entry is the supported way to force it. The device
-# disappears from the topology for a few seconds.
+# ONOS re-runs discoverPortDetails() only for a device with no ports
+# (RestDeviceProvider.checkAndUpdateDevice, quoted above). Removing the device's
+# netcfg disconnects it but keeps its ports in the store, disabled, so a
+# remove-and-re-add on its own rediscovers nothing and leaves every port
+# disabled. The ports therefore have to go too, and ONOS removes a device's
+# ports only while the device is unavailable
+# (DeviceManager.removeDevicePorts, CLI `device-ports-remove`; no REST
+# resource), so: remove the netcfg, wait for the device to go unavailable,
+# remove its ports, re-add the netcfg. The device itself and its flow rules stay.
 say "Removing the device from netcfg"
 curl -sS -u "${ONOS_AUTH}" -X DELETE \
   "${ONOS_URL}/onos/v1/network/configuration/devices/${DEVICE_ID}" >/dev/null \
   || die "could not remove the device configuration"
 
-wait_for "device to drop" 60 bash -c "
+wait_for "device to go unavailable" 60 bash -c "
   ! curl -sS -u '${ONOS_AUTH}' '${ONOS_URL}/onos/v1/devices/${DEVICE_ID}' 2>/dev/null \
     | python3 -c \"
 import json, sys
@@ -108,20 +114,33 @@ d = json.load(sys.stdin)
 sys.exit(0 if d.get('available') else 1)
 \" 2>/dev/null" || warn "device did not drop cleanly; continuing"
 
-say "Re-adding the device"
-code="$(curl -sS -u "${ONOS_AUTH}" -X POST \
-  -H 'Content-Type: application/json' \
-  -d @"${ONOS_DIR}/netcfg/twinlight-ols.json" \
-  -o /dev/null -w '%{http_code}' \
-  "${ONOS_URL}/onos/v1/network/configuration")"
-[ "${code}" = "200" ] || die "netcfg POST returned HTTP ${code}"
+say "Removing its ports from ONOS's store"
+ports_left() {
+  onos_api GET "/onos/v1/devices/${DEVICE_ID}/ports" 2>/dev/null \
+    | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("ports", [])))' 2>/dev/null \
+    || echo "?"
+}
+ports_cleared() { [ "$(ports_left)" = 0 ]; }
+if "${SCRIPT_DIR}/onos-cli.sh" "device-ports-remove ${DEVICE_ID}" >/dev/null 2>&1 \
+   && wait_for "ports to clear" 30 ports_cleared; then
+  ok "ports removed"
+else
+  warn "could not remove the ports ($(ports_left) left); ONOS will keep the old, disabled port list"
+fi
 
-wait_for "port re-discovery" 180 bash -c "
-  curl -sS -u '${ONOS_AUTH}' '${ONOS_URL}/onos/v1/devices/${DEVICE_ID}/ports' 2>/dev/null \
-    | python3 -c \"
+say "Re-adding the device"
+onos_push_netcfg || die "ONOS refused the network configuration"
+
+rediscovered() {
+  onos_device_present --available || return 1
+  onos_api GET "/onos/v1/devices/${DEVICE_ID}/ports" 2>/dev/null | python3 -c "
 import json, sys
-sys.exit(0 if len(json.load(sys.stdin).get('ports', [])) > 0 else 1)
-\"" || die "ports did not come back — check: docker logs twinlight-onos"
+ports = json.load(sys.stdin).get('ports', [])
+sys.exit(0 if ports and all(p.get('isEnabled') for p in ports) else 1)
+"
+}
+wait_for "device available, ports re-discovered and enabled" 180 rediscovered \
+  || die "ports did not come back enabled — check: docker logs ${ONOS_CONTAINER}"
 
 say "State after resync"
 report

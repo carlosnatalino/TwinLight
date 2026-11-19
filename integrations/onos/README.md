@@ -102,14 +102,20 @@ this, neither configurable:
 ./integrations/onos/scripts/resync.sh --check  # compare what each side holds, change nothing
 ```
 
-This removes and re-adds the device in netcfg, which is the supported way to
-make ONOS re-run discovery. It refreshes **the port list and its annotations**.
-It does **not** surface twin-created lightpaths — nothing can.
+This removes the device's netcfg, removes its ports from ONOS's store while
+the device is unavailable (`device-ports-remove`, through `onos-cli.sh`; ONOS
+offers no REST call for it), and re-adds the netcfg. ONOS then re-runs port
+discovery, because it does so only for a device with no ports. Removing and
+re-adding the netcfg alone, as earlier versions of the script did, rediscovers
+nothing and leaves all 75 ports disabled. The device and its flow rules stay.
+It refreshes **the port list and its annotations**. It does **not** surface
+twin-created lightpaths — nothing can.
 
-It is also the one operation that can tear down ONOS-created lightpaths, via
-`removeInitalConnectivityServices()`, if ONOS's flow cache happens to be empty
-at reconnect. In testing the cache survived and the lightpaths did too, but the
-script checks afterwards and tells you if they did not.
+Port discovery is also the one operation that can tear down ONOS-created
+lightpaths, via `removeInitalConnectivityServices()`, if ONOS's connection
+cache for the device is empty at that moment. While ONOS holds flows for the
+device the cache is not empty, and with none there is nothing ONOS-created to
+lose, but the script checks afterwards and tells you if lightpaths went.
 
 This asymmetry is a property of ODTN's `ols` driver, not of the twin. The
 integration treats **ONOS as the orchestrator**: provisioning originates there,
@@ -122,8 +128,6 @@ require a controller resync.
 - Docker with Compose v2 (Docker Desktop ≥ 4.30 is fine)
 - Python 3 and `curl` on the host (used by the scripts)
 - ~6 GB free RAM and ~4 GB disk
-- Optional: `sshpass` for non-interactive ONOS CLI access
-  (`brew install hudochenkov/sshpass/sshpass`)
 
 **On Apple Silicon:** ONOS publishes `linux/amd64` images only — there is no
 arm64 tag for any release — so it runs under Rosetta, as the twin image already
@@ -144,7 +148,9 @@ memory, or ONOS will OOM mid-boot.
 ```
 
 `demo-up.sh` is idempotent — re-run it freely. First run takes 5–10 minutes
-(image pulls, the amd64 twin build, ONOS boot); later runs are much quicker.
+(image pulls, the amd64 twin build, ONOS boot). Once the images are built, a
+cold boot (`demo-down.sh --purge` first) took 2¼–2½ minutes on Apple Silicon
+in testing, about a minute of it waiting for ONOS's apps to report ready.
 
 ### Driving Compose directly
 
@@ -248,10 +254,12 @@ The script prints the allocation and then the live OPM:
 
 ```
   ADMITTED by the twin
+    service uuid  : 25a60596-ed43-4e07-b2ba-d6f1a5e3f6d8
     modulation    : DP-QPSK
-    centre freq   : 190.725 THz
+    centre freq   : 191.3063 THz
+    slot width    : 56.25 GHz
 ==> Twin optical performance monitoring
-    1808f35f   2148.7 km  GSNR  11.43 dB  OSNR  13.07 dB  Q  11.00 dB  BER 1.94e-04
+    25a60596  2148.7 km  GSNR  12.71 dB  OSNR  13.76 dB  Q  12.71 dB  BER 7.83e-06
 ```
 
 Now switch to the **TwinLight UI** — the lightpath is on the map and in the
@@ -300,17 +308,18 @@ one table:
 ```
   ONOS FLOW ID         ONOS STATE   PORTS   LIGHTPATH                  SERVICE          KM  GSNR dB        BER
   ----------------------------------------------------------------------------------------------------------
-  48976649027695507    ADDED        32->58  Los_Angeles -> San_Diego   b12fa809      223.8    21.90    1.9e-03
-  48976650132659142    ADDED        2->6    Albany -> Baltimore        eca1f799      830.6    15.62    4.4e-08
-  48976647806749592    ADDED        1->4    Abilene -> Atlanta         761bf68f     2148.7    11.43    1.9e-04
+  48976647025378110    ADDED        2->6    Albany -> Baltimore        c8d870de      830.6    16.53    1.0e-11
+  48976648847065518    ADDED        1->4    Abilene -> Atlanta         25a60596     2148.7    12.37    1.6e-05
 ```
 
-A flow with no twin service in that table is one the twin refused.
+A flow with no twin service in that table is one the twin refused. Flows ONOS
+is still removing (`PENDING_REMOVE`) are left out: their lightpaths are
+already gone from the twin.
 
 > **Why the live GSNR differs from the admission figure.** Admission gates on
-> the *pristine GNPy baseline* (11.9 dB here), while `/internal/opm` reports
-> GSNR **after** the transient layer, so the live value sits a few tenths of a
-> dB below the number the admission decision used — PDL drift and EEPN.
+> the *pristine GNPy baseline*, while `/internal/opm` reports GSNR **after**
+> the transient layer, so the live value moves by a few tenths of a dB around
+> the number the admission decision used — PDL drift and EEPN.
 > `rmsa.qot_margin_db`, 1.5 dB by default, is the allowance for exactly that,
 > the same role a system margin plays in network design.
 >
@@ -325,9 +334,11 @@ A flow with no twin service in that table is one the twin refused.
 controller would otherwise have provisioned into a failure.*
 
 ONOS's T-API 2.1 connectivity request has nowhere to carry a modulation format,
-so it is adapter policy. Raise it to DP-16QAM and ask for the same path:
+so it is adapter policy. Release the Part 2 lightpaths, raise the format to
+DP-16QAM and ask for the same path:
 
 ```bash
+./integrations/onos/scripts/lightpath.sh clear
 curl -s -X POST localhost:8282/adapter/modulation \
      -H 'Content-Type: application/json' \
      -d '{"modulation-format":"DP-16QAM"}'
@@ -337,8 +348,13 @@ curl -s -X POST localhost:8282/adapter/modulation \
 
 ```
   REFUSED by the twin (rmsa-qot-refused)
-    Path GSNR 11.9 dB below required 16.0 dB (req 14.5 + margin 1.5)
+    candidate 1 (trx Abilene > roadm Abilene > roadm Dallas > … > trx Atlanta): DP-16QAM GSNR 12.6 dB below 16.0 dB; candidate 2 (…): DP-16QAM GSNR 12.7 dB below 16.0 dB; … (required GSNR includes the 1.5 dB qot_margin_db)
 ```
+
+The `clear` matters: ONOS identifies a flow rule by its in-port, so a second
+flow from Abilene's port would replace the first in ONOS while the twin kept
+both lightpaths. `lightpath.sh create` refuses to do that and names the flow to
+delete.
 
 The twin returns RFC 8040 `409 resource-denied`, the adapter relays it
 unchanged, and ONOS leaves the flow rule stuck in `PENDING_ADD`. The same A–Z
@@ -353,13 +369,13 @@ knows that.
 > and the reason is spelled out at `localhost:8282/adapter/status`.
 
 A *marginal* pair shows the same thing more precisely — this one misses by
-0.2 dB, so the refusal is clearly a QoT computation rather than a distance
-cutoff:
+0.2 dB on its best route, so the refusal is clearly a QoT computation rather
+than a distance cutoff:
 
 ```bash
-./integrations/onos/scripts/lightpath.sh create Albany Baltimore
+./integrations/onos/scripts/lightpath.sh create Boston Buffalo
 #   REFUSED by the twin (rmsa-qot-refused)
-#     Path GSNR 15.8 dB below required 16.0 dB (req 14.5 + margin 1.5)
+#     candidate 1 (trx Boston > roadm Boston > roadm Albany > roadm Syracuse > roadm Rochester > roadm Buffalo > trx Buffalo): DP-16QAM GSNR 15.8 dB below 16.0 dB; …
 ```
 
 Reset with:
@@ -409,14 +425,99 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 | `scripts/correlate.sh` | Join the ONOS Flows view to the twin's service list, one row per flow (`--json` for the raw join) |
 | `scripts/resync.sh` | Force ONOS to re-discover ports (`--check` just compares the two sides) |
 | `scripts/fault.sh` | `list` / `cut <uid>` / `cut-path <svc-uuid>` / `heal <uid>` / `heal-all` |
-| `scripts/onos-cli.sh` | ONOS Karaf CLI, interactive or one-shot |
+| `scripts/onos-cli.sh` | ONOS Karaf CLI, interactive or one-shot, through Karaf's own client in the ONOS container (no host `ssh` needed) |
 | `scripts/demo-down.sh` | Stop the stack (`--purge` also drops volumes) |
+| `scripts/test-integration.sh` | `unit` / `e2e` / `all` / `preflight` — test the integration on this machine; see [Testing the integration locally](#testing-the-integration-locally) |
 
 Overridable environment variables: `ONOS_URL`, `ONOS_AUTH`, `ADAPTER_URL`,
 `TWIN_URL`, `DEVICE_ID`, and `VALIDATE_A` / `VALIDATE_Z` for the validation A–Z
-pair. Against a twin with API tokens, the scripts present `TWINLIGHT_API_TOKEN`
+pair. The first four default to what the stack variables in
+[Running a second stack side by side](#running-a-second-stack-side-by-side)
+publish, so set those rather than these. Against a twin with API tokens, the scripts present `TWINLIGHT_API_TOKEN`
 on the requests they send to the twin directly (see
 [Authentication](#authentication)).
+
+## Testing the integration locally
+
+Nothing in CI boots ONOS; `scripts/test-integration.sh` is how a change to the
+integration is tested, on your machine:
+
+```bash
+./integrations/onos/scripts/test-integration.sh unit         # adapter unit tests, seconds, no Docker
+./integrations/onos/scripts/test-integration.sh e2e          # boot, validate, every script, tear down
+./integrations/onos/scripts/test-integration.sh all          # both
+./integrations/onos/scripts/test-integration.sh preflight    # will the test stack fit? changes nothing
+```
+
+**`unit`** runs `adapter/tests` in the repo's Python environment (`.venv`, or
+`$PYTHON`): the one [CONTRIBUTING.md](../../CONTRIBUTING.md) sets up, which
+has FastAPI, httpx, uvicorn and pytest, so it needs no Docker and takes a few
+seconds. That FastAPI is the twin's, not the adapter image's pin, and the run
+prints both versions; `unit --pinned` runs the same tests in
+`python:3.12-slim` with exactly `adapter/requirements.txt` instead. If the
+environment lacks a package, the step says what to install rather than failing
+on an import.
+
+**With authentication on.** Export the twin's tokens and the one the adapter
+and the scripts present before running; Compose passes both into the stack
+from the environment, and the run adds a step proving the twin refuses an
+anonymous request:
+
+```bash
+export TWINLIGHT_API_TOKENS="onos-test:$(openssl rand -hex 24)"
+export TWINLIGHT_API_TOKEN="${TWINLIGHT_API_TOKENS#onos-test:}"
+./integrations/onos/scripts/test-integration.sh all
+unset TWINLIGHT_API_TOKENS TWINLIGHT_API_TOKEN
+```
+
+The header of the run says `authentication on` or `off`.
+
+**`e2e`** boots a stack of its own from cold (`down -v` of its own project,
+a fresh snapshot directory, `demo-up.sh`), runs `validate.sh`, then drives
+every other script and checks what it did:
+
+| Step | Checked |
+|------|---------|
+| `lightpath.sh create Boston New_York`, `list` | admitted, OPM read back, the flow listed |
+| `correlate.sh`, `--json` | every ONOS flow joins a twin service |
+| `fault.sh cut-path`, `heal-all`, `list` | OPM reports `link-failed`, then recovers |
+| `lightpath.sh delete` | the twin releases the service |
+| `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number |
+| `resync.sh --check`, `resync.sh` | ONOS-created lightpaths survive, every port enabled |
+| `onos-cli.sh devices` | the CLI answers and lists the device |
+| `lightpath.sh clear`, `validate.sh` again | the twin is emptied; still 16/16 |
+| `demo-down.sh --purge` | nothing of the project is left |
+
+Options: `--keep` leaves the stack up for inspection, `--reuse` tests a stack
+that is already running instead of booting one (and never tears it down),
+`--boots N` cold-boots N times in a row before the checks, `--rmi` also
+removes the images it built, `--out DIR` chooses where the logs go.
+
+It never touches a stack it did not start. The test stack has its own project,
+container prefix and image tag (`twinlight-onos-test`), ports (28080 REST,
+28282 adapter, 28181 ONOS, 25173 UI, 23000 Grafana, 29090, 25051, 28101) and
+subnet (`172.30.0.0/16`); each can be moved with the variables of
+[Running a second stack side by side](#running-a-second-stack-side-by-side),
+from the environment only. Everything it creates carries the label
+`org.twinlight.onos-test`, and before booting it refuses to go on if the
+project, a container name, an image tag, a port or the subnet is held by
+anything without that label. `preflight` runs only that check.
+
+Each step's output goes to `<run dir>/steps/`, and the containers' logs to
+`<run dir>/logs/` before teardown, so a failure can be read after the stack is
+gone; the run directory is printed first and last. The exit status is non-zero
+if any step failed, and the summary names them.
+
+How long it takes:
+
+| Host | `unit` | `e2e`, images already built | each extra `--boots` |
+|------|--------|-----------------------------|----------------------|
+| Apple Silicon, ONOS under emulation, 8 GB Docker VM (measured) | 3 s | about 4½ min: a cold boot ≈ 2¼ min, the checks ≈ 2 min | ≈ 2¼ min |
+| amd64 Linux (estimated, not measured) | 3 s | about 3 min: ONOS and the twin run natively | ≈ 1 min |
+
+The first run on a machine also pulls ONOS (≈ 900 MB) and builds the three
+images, the twin's for `linux/amd64`, which under emulation adds several
+minutes.
 
 ## Adapter endpoints
 
@@ -448,6 +549,71 @@ Introspection, safe to call any time:
 | `ADAPTER_EXPOSE_TWIN_SERVICES` | `false` | See below |
 | `ADAPTER_SIP_REFRESH_SECONDS` | `30` | SIP catalogue cache lifetime |
 | `TWINLIGHT_API_TOKEN` | *(empty)* | The bearer token the adapter presents to a twin with `TWINLIGHT_API_TOKENS` set. Compose passes it from `.env`. Empty, the adapter sends no credentials. See [Authentication](#authentication) |
+
+### Running a second stack side by side
+
+Everything a stack claims on the Docker host has a variable whose default is
+the value above: the Compose project, the container names, the image tags, the
+published ports, the twin's snapshot directory and, with this overlay, the
+subnet. Leave them all unset and nothing changes. Set them, and a second stack
+runs next to the first, with no override file and no edited script: both
+compose files and every script in `scripts/` read the same names, from the
+environment first and then from the repo-root `.env`.
+
+| Variable | Default | Moves |
+|----------|---------|-------|
+| `COMPOSE_PROJECT_NAME` | the checkout directory's name | project, network and volume names (Compose's own variable) |
+| `TWINLIGHT_CONTAINER_PREFIX` | `twinlight` | `twinlight`, `twinlight-ui`, `-prometheus`, `-grafana`, `-grafana-init`, `-tapi-adapter`, `-onos` |
+| `TWINLIGHT_IMAGE_TAG` | `latest` | `twinlight`, `twinlight-ui` and `twinlight-tapi-adapter` images |
+| `TWINLIGHT_SNAPSHOT_DIR` | `./snapshots` | the twin's snapshots and shutdown checkpoint |
+| `TWINLIGHT_REST_PORT` / `_GNMI_PORT` / `_UI_PORT` | `8080` / `50051` / `5173` | |
+| `TWINLIGHT_PROMETHEUS_PORT` / `_GRAFANA_PORT` | `9090` / `3000` | |
+| `TWINLIGHT_ADAPTER_PORT` | `8282` | |
+| `TWINLIGHT_ONOS_REST_PORT` / `_CLI_PORT` | `8181` / `8101` | |
+| `TWINLIGHT_ONOS_SUBNET_PREFIX` | `172.28` | the overlay's `/16`, the adapter's and ONOS's addresses, and `DEVICE_ID` |
+| `TWINLIGHT_COMPOSE_FILES` | *(none)* | extra `-f` files for the scripts' Compose calls, colon-separated |
+
+For example, beside a default stack that is already running:
+
+```bash
+export COMPOSE_PROJECT_NAME=tl2 TWINLIGHT_CONTAINER_PREFIX=tl2 TWINLIGHT_IMAGE_TAG=tl2 \
+       TWINLIGHT_REST_PORT=38080 TWINLIGHT_GNMI_PORT=35051 TWINLIGHT_UI_PORT=35173 \
+       TWINLIGHT_PROMETHEUS_PORT=39090 TWINLIGHT_GRAFANA_PORT=33000 \
+       TWINLIGHT_ADAPTER_PORT=38282 TWINLIGHT_ONOS_REST_PORT=38181 TWINLIGHT_ONOS_CLI_PORT=38101 \
+       TWINLIGHT_ONOS_SUBNET_PREFIX=172.29 TWINLIGHT_SNAPSHOT_DIR="$PWD/snapshots-tl2"
+./integrations/onos/scripts/demo-up.sh      # and every other script, in the same shell
+./integrations/onos/scripts/demo-down.sh --purge
+```
+
+Use the environment, not `.env`, for a second stack from the **same**
+checkout: `.env` is shared by everything run from that directory. In a separate
+checkout or worktree, `.env` works just as well. Without ONOS the same
+variables apply to a plain `docker compose up`.
+
+**Why a subnet prefix, and only that.** The overlay pins its network's subnet
+because ONOS's netcfg parses the device's `rest.ip` as an `IpAddress`, so the
+adapter needs a literal, predictable address. Docker refuses to create two
+networks whose subnets overlap, so a second ONOS stack needs another `/16`;
+nothing else about the addressing has to change. One variable carries the
+first two octets: the subnet is `<prefix>.0.0/16`, the adapter `<prefix>.0.10`
+and ONOS `<prefix>.0.20`, and the scripts derive
+`DEVICE_ID=rest:<prefix>.0.10:8282`. `netcfg/twinlight-ols.json` stays written
+for the default; when `DEVICE_ID` differs, the scripts rewrite its device key
+and `rest` address as they push it. Pick a prefix no existing network uses:
+
+```bash
+docker network inspect $(docker network ls -q) \
+  --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}'
+```
+
+If you pick a taken one, `up` fails with `Pool overlaps with other one on this
+address space`.
+
+**What does not follow.** The second stack's **web UI** loads, but its API
+calls are refused by the browser: the twin's `server.cors_origins` (in the
+scenario YAML, not an environment variable) allows `http://localhost:5173`
+and not the moved port. Nothing in the ONOS integration uses the UI, and the
+twin's REST API, Grafana and Prometheus are unaffected.
 
 ### Why twin-native lightpaths are hidden from ONOS
 
@@ -556,14 +722,14 @@ is not a plain decimal. Confirm with:
 
 ```bash
 curl -s localhost:8282/restconf/data/tapi-common:context | python3 -m json.tool | head -40
-docker logs twinlight-onos 2>&1 | grep -i "tapi\|ols\|NumberFormat"
+docker logs twinlight-onos 2>&1 | grep -i "tapi\|ols\|NumberFormat"   # <prefix>-onos if you moved TWINLIGHT_CONTAINER_PREFIX
 ```
 
 **Device never becomes `available`.** ONOS cannot reach the adapter. The netcfg
-IP must match the adapter's static address — both are `172.28.0.10` and must
-stay in sync between `docker-compose.onos.yml` and `netcfg/twinlight-ols.json`.
-A compose service name will not work there: ONOS parses that field as an
-`IpAddress`.
+IP must match the adapter's static address, `172.28.0.10` by default. The
+overlay and the scripts both derive it from `TWINLIGHT_ONOS_SUBNET_PREFIX`, so
+they agree unless `DEVICE_ID` is set by hand to something else. A compose
+service name will not work there: ONOS parses that field as an `IpAddress`.
 
 **`ols` driver missing.** `org.onosproject.odtn-service` did not activate.
 `./integrations/onos/scripts/onos-cli.sh apps -a -s` to check, then
@@ -577,8 +743,22 @@ see Part 3; it is not a fault. Confirm the reason at
 2–4 minutes to a usable CLI is normal.
 
 **`ssh` to port 8101 refuses to negotiate.** ONOS 2.7 ships an older Karaf SSHD.
-`onos-cli.sh` already passes the needed `+ssh-rsa` / `diffie-hellman-group14-sha1`
-options; if you connect by hand you will need them too.
+`onos-cli.sh` does not use `ssh` (it runs Karaf's own client inside the
+container); if you connect by hand, a modern OpenSSH client needs
+`-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group14-sha1`.
+
+**`demo-up.sh` sits at "waiting for app health 'ready'" for a minute or two
+on a cold boot.** Expected. ONOS reports its apps `ACTIVE` well before they
+run: activating `odtn-service`'s dependencies triggers a Karaf bundle refresh
+that restarts ONOS's core components, typically 30–60 s after the REST API
+first answers, and a device configuration pushed before that is lost (the
+device never appears, or the push is answered `207 "subjectClassKey 'devices'
+not found"`). The script therefore waits for each app's
+`/onos/v1/applications/<app>/health` to report `ready`, then pushes, retrying
+a transient answer with a bounded back-off.
+[COMPATIBILITY.md § C](COMPATIBILITY.md#c-integration-pitfalls) has the
+detail. Before this, the first `demo-up.sh` on a cold boot usually failed and a
+second run recovered.
 
 ---
 

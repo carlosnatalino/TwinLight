@@ -31,6 +31,9 @@ cmd_create() {
   a_port="$(port_for_node "${a_city}")" || die "unknown transceiver: ${a_city}"
   z_port="$(port_for_node "${z_city}")" || die "unknown transceiver: ${z_city}"
   [ "${a_port}" != "${z_port}" ] || die "source and destination are the same port"
+  local taken
+  taken="$(onos_flow_on_port "${a_port}")"
+  [ -z "${taken}" ] || die "port ${a_port} (${a_city}) already carries flow ${taken}; ONOS keys a flow on its in-port, so a second one would replace it. Remove it first: lightpath.sh delete ${taken}"
 
   if [ -n "${modulation}" ]; then
     curl -sSf -X POST -H 'Content-Type: application/json' \
@@ -94,7 +97,7 @@ elif new_rej:
         print('    %s' % r['detail'])
     sys.exit(2)
 else:
-    print('  no adapter activity seen — check: docker logs twinlight-tapi-adapter')
+    print('  no adapter activity seen — check: docker logs ${ADAPTER_CONTAINER}')
     sys.exit(1)
 " "${before}" || {
     rc=$?

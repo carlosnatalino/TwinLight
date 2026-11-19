@@ -4,12 +4,21 @@
 # network with amd64 containers is fine.
 FROM python:3.12-slim
 
+# Non-root user, as in the twin's image: the adapter is a long-running server
+# that needs no privilege. It writes nothing to disk, so the files below can
+# stay root-owned and read-only to it.
+RUN useradd --create-home --shell /usr/sbin/nologin adapter
+
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY tapi_adapter.py .
+
+USER adapter
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 # Matches ADAPTER_PORT in docker-compose.onos.yml.
 EXPOSE 8282

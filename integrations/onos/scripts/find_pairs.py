@@ -129,6 +129,12 @@ def main() -> int:
         fmt: [] for fmt in wanted
     }
     tried: set[tuple[str, str]] = set()
+    # ONOS keys an OLS flow rule on its selector, the in-port, and not on the
+    # out-port: a second lightpath from the same A-end gets the first one's
+    # flow id and *replaces* it in ONOS, while the twin keeps both services.
+    # So each winner needs an A-end of its own; a pair whose A-end is taken is
+    # turned round when its Z-end is still free.
+    sources: set[str] = set()
 
     for attempt in range(attempts):
         if all(len(found[f]) >= wanted[f] for f in wanted):
@@ -143,6 +149,10 @@ def main() -> int:
         if key in tried:
             continue
         tried.add(key)
+        if a in sources:
+            if z in sources:
+                continue
+            a, z = z, a
 
         result = _probe(base, cities[a], cities[z])
         if result is None:
@@ -153,6 +163,7 @@ def main() -> int:
         for fmt, threshold in THRESHOLDS:
             if gsnr >= threshold and len(found[fmt]) < wanted[fmt]:
                 found[fmt].append((a, z, gsnr, km))
+                sources.add(a)
                 break
 
     for fmt, _threshold in THRESHOLDS:
