@@ -490,13 +490,13 @@ _MC_SPECTRUM_KEYS = frozenset({"local-id", "name", "spectrum", "edge-frequency-c
 # Per-channel launch powers the twin models [dBm]. Above the top a single
 # channel approaches an amplifier's total output (GNPy's EDFAs saturate and
 # propagation returns NaN from ~25 dBm); below the bottom it is far under any
-# receiver's sensitivity. A request outside is refused (a 400 on T-API, 422 on
+# receiver's sensitivity. A request outside is refused (a 400 on T-API and on
 # /internal/compute-path) rather than given a QoT that means nothing.
 LAUNCH_POWER_RANGE_DBM = (-20.0, 10.0)
 
 
 # These helpers run inside pydantic validators, which turn only ValueError into
-# a validation error (a 400 on T-API, a 422 on the proprietary endpoints); any
+# a validation error (a 400, on T-API and the proprietary endpoints alike); any
 # other exception would escape as a 500. Hence
 # the TRY004 suppressions below, and the type checks on input that pydantic
 # has not validated yet.

@@ -50,7 +50,6 @@ from twinlight.api.middleware import (
 from twinlight.api.restconf import (
     RestconfError,
     error_type,
-    is_restconf_path,
     validation_error_tag,
 )
 from twinlight.api.restconf_resources import YANG_LIBRARY_REVISION
@@ -87,35 +86,32 @@ def _restconf_error_response(
     )
 
 
-def _http_status_to_error_tag(status_code: int, restconf: bool = True) -> str:
+def _http_status_to_error_tag(status_code: int) -> str:
     """Map an HTTP status to the RFC 8040 §7 error-tag of an error that names none.
 
-    A 404 on a RESTCONF resource is ``invalid-value``: RFC 8040 §4.3, "If a
-    retrieval request for a data resource represents an instance that does
-    not exist, then an error response containing a '404 Not Found'
-    status-line MUST be returned by the server. The error-tag value
-    'invalid-value' is used in this case"; §4.5, §4.6 and §4.7 let PUT,
-    PATCH and DELETE answer the same 404 ("A server MAY return a '404 Not
-    Found' status-line ... The error-tag value 'invalid-value' is used in
-    this case"), which keeps one answer for a missing resource whatever the
-    method. ``data-missing``
-    is paired with 409 only by the §7 table, and the IETF rejected
-    re-pairing it with 404 (erratum 5565). The proprietary endpoints
-    (``restconf=False``) keep ``data-missing`` on a 404: they are outside
-    the T-API rule, and nothing in this change is meant to alter them.
+    A 404 is ``invalid-value``: RFC 8040 §4.3, "If a retrieval request for
+    a data resource represents an instance that does not exist, then an
+    error response containing a '404 Not Found' status-line MUST be
+    returned by the server. The error-tag value 'invalid-value' is used in
+    this case"; §4.5, §4.6 and §4.7 let PUT, PATCH and DELETE answer the
+    same 404 ("A server MAY return a '404 Not Found' status-line ... The
+    error-tag value 'invalid-value' is used in this case"), which keeps one
+    answer for a missing resource whatever the method. ``data-missing`` is
+    paired with 409 only by the §7 table, and the IETF rejected re-pairing
+    it with 404 (erratum 5565). The proprietary endpoints (``/internal``,
+    ``/admin``, ``/config``, ``/transparent``) follow the same convention,
+    so a client handles every error of the twin one way.
     """
     if status_code in (401, 403):
         return "access-denied"
     if status_code == 404:
-        return "invalid-value" if restconf else "data-missing"
+        return "invalid-value"
     if status_code == 405:
         return "operation-not-supported"
     if status_code == 409:
         return "resource-denied"
     if status_code == 400:
         return "bad-element"
-    if status_code == 422:
-        return "invalid-value"
     if status_code == 501:
         return "operation-not-supported"
     return "operation-failed"
@@ -339,10 +335,16 @@ def create_app(config: TwinConfig) -> FastAPI:
                 exc.status_code, exc.error_tag, msg, error_path=exc.error_path,
                 headers=exc.headers, error_app_tag=exc.error_app_tag,
             )
-        restconf = is_restconf_path(request.url.path, root)
-        tag = _http_status_to_error_tag(exc.status_code, restconf)
+        status_code = exc.status_code
+        if status_code == 422:
+            # RFC 8040 does not use 422 (see below); a handler that still
+            # raises it means a value the twin does not accept.
+            status_code = 400
+            tag = "invalid-value"
+        else:
+            tag = _http_status_to_error_tag(status_code)
         return _restconf_error_response(
-            exc.status_code, tag, msg, headers=exc.headers
+            status_code, tag, msg, headers=exc.headers
         )
 
     @app.exception_handler(RequestValidationError)
@@ -352,13 +354,9 @@ def create_app(config: TwinConfig) -> FastAPI:
         msg = "; ".join(
             f"{e['loc']}: {e['msg']}" for e in exc.errors()
         ) if exc.errors() else str(exc)
-        if is_restconf_path(request.url.path, root):
-            # RFC 8040 does not use 422: §7 pairs every tag that describes a
-            # request the server cannot accept as sent with 400.
-            return _restconf_error_response(400, validation_error_tag(exc.errors()), msg)
-        # The proprietary endpoints keep FastAPI's 422: they are outside the
-        # T-API rule, and their clients (the UI's diagrams and compute-path,
-        # the soft-failure client, scripts) are written against it.
-        return _restconf_error_response(422, "invalid-value", msg)
+        # RFC 8040 does not use 422: §7 pairs every tag that describes a
+        # request the server cannot accept as sent with 400. One convention
+        # for the whole twin, the proprietary endpoints included.
+        return _restconf_error_response(400, validation_error_tag(exc.errors()), msg)
 
     return app

@@ -59,6 +59,9 @@ in the rows after the paths:
 | `404` with `error-tag: data-missing`, on any T-API resource | `404` with `invalid-value` (RFC 8040 §4.3; `data-missing` is a `409` tag) |
 | `422` (`invalid-value`) for a T-API request that does not validate | `400`, with the tag that names the problem: `malformed-message`, `missing-element`, `bad-element` or `invalid-value` (see [Error format](#error-format)) |
 | `422` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required` (RFC 7950 §15.5) |
+| `404` with `error-tag: data-missing` on a proprietary endpoint (`/internal`, `/admin`, `/config`, `/transparent`), an unknown path under one included | `404` with `invalid-value`, as on the T-API resources |
+| `422` (`invalid-value`) for a request to a proprietary endpoint that does not validate (a query parameter left out or out of range, a body of the wrong shape) | `400`, with the tag that names the problem, classified as on the T-API resources; every message is unchanged |
+| `422` from `POST /internal/compute-path` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required`, as the path-comp-service answers; an unsupported constraint is `400` `invalid-value` |
 | `GET …/service-interface-point` answering `{"tapi-common:context": {"service-interface-point": […]}}` | `{"tapi-common:service-interface-point": […]}` (RFC 8040 §4.3); the old body is the full context's SIP section |
 | `GET …/service-interface-point={uuid}` answering `{"tapi-common:context": {"service-interface-point": [{…}]}}` | `{"tapi-common:service-interface-point": [{…}]}` |
 | `GET` of one `connectivity-service=`, `path-comp-service=`, `path=`, `device=`, `device=/equipment=` or `physical-span=` answering `{"<module>:<list>": {…}}` | An array of one, `{"<module>:<list>": [{…}]}` (RFC 7951 §5.4), as `topology=`, `node=`, `link=` and `oam-job=` already answered |
@@ -720,7 +723,9 @@ Errors under `/restconf/data/` use the RESTCONF format of
 
 Each status is paired with the tag RFC 8040 §7 gives the condition (the tags
 themselves are NETCONF's, RFC 6241 Appendix A). RFC 8040 does not use `422`,
-so no T-API resource answers it:
+so no endpoint of the twin answers it. The proprietary endpoints (`/internal`,
+`/admin`, `/config`, `/transparent`) follow the same table as the T-API
+resources, so a client handles every error of the twin one way:
 
 | HTTP status | `error-tag` | Used for |
 |-------------|-------------|----------|
@@ -735,9 +740,13 @@ so no T-API resource answers it:
 | 501 | `operation-not-supported` | A standard leaf the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
 
 The first problem a body has decides the tag; the message lists every one.
-The proprietary endpoints (`/internal`, `/admin`, `/config`, `/transparent`)
-use the same error body but keep FastAPI's `422` (`invalid-value`) for a
-request that does not validate, and `data-missing` on a `404`.
+A query parameter a proprietary endpoint requires and did not get is a `400`
+`missing-element`; one outside its range a `400` `invalid-value`. Statuses
+that mean something else keep it there too: `401`, `409` for a conflict,
+`501` for an operation the backend does not support, `503` when no
+physical-layer backend is loaded, and the transparent controller's `403`
+(a read-only leaf) and `412` (a stale `If-Match`, see
+[TRANSPARENT_CONTROLLER.md](TRANSPARENT_CONTROLLER.md)).
 
 A 405 also carries an `Allow` header (RFC 9110 §15.5.6) naming every method
 the resource serves at that path, on every path of the twin: T-API resources

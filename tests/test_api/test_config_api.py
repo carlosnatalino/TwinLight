@@ -206,5 +206,7 @@ class TestSetConfig:
 
     def test_post_must_be_object(self, gnpy_app: TestClient) -> None:
         r = gnpy_app.post("/config/set", json=[1, 2, 3])
-        # FastAPI rejects non-object bodies for dict typing with 422.
-        assert r.status_code in (400, 422)
+        # FastAPI rejects a non-object body for dict typing: a value of the
+        # wrong JSON type, RFC 8040's 400 bad-element.
+        assert r.status_code == 400
+        assert r.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "bad-element"
