@@ -44,13 +44,13 @@ SHORT = {
 #: what the app actually registers, so a route added later cannot be missed.
 ROUTES: dict[str, dict[str, set[str]]] = {
     "connectivity": {
-        "": {"GET"},
-        "/connectivity-service": {"GET", "POST"},
+        "": {"GET", "POST"},
+        "/connectivity-service": {"GET"},
         "/connectivity-service={uuid}": {"GET", "PUT", "PATCH", "DELETE"},
     },
     "path-computation": {
-        "": {"GET"},
-        "/path-comp-service": {"GET", "POST"},
+        "": {"GET", "POST"},
+        "/path-comp-service": {"GET"},
         "/path-comp-service={uuid}": {"GET", "DELETE"},
         "/path": {"GET"},
         "/path={uuid}": {"GET"},
@@ -99,10 +99,10 @@ def admitted(mesh: TestClient) -> TestClient:
     """
     refs = MeshRefs(mesh.app.state.context)
     for a in ("trx A", "trx B"):
-        resp = mesh.post(f"{ROOTS[-1]}{LONG['connectivity']}/connectivity-service",
+        resp = mesh.post(f"{ROOTS[-1]}{LONG['connectivity']}",
                          json=_service_body(refs, a, "trx C"))
         assert resp.status_code == 201, resp.text
-    resp = mesh.post(f"{ROOTS[-1]}{LONG['path-computation']}/path-comp-service",
+    resp = mesh.post(f"{ROOTS[-1]}{LONG['path-computation']}",
                      json=_pcs_body(refs, "trx A", "trx B"))
     assert resp.status_code == 201, resp.text
     return mesh
@@ -277,7 +277,8 @@ class TestConnectivityMutations:
         refs = MeshRefs(mesh.app.state.context)
         services = f"{root}{LONG['connectivity']}/connectivity-service"
 
-        resp = mesh.post(services, json=_service_body(refs, "trx A", "trx C"))
+        resp = mesh.post(f"{root}{LONG['connectivity']}",
+                         json=_service_body(refs, "trx A", "trx C"))
         assert resp.status_code == 201, resp.text
         assert resp.headers["content-type"].startswith("application/yang-data+json")
         uuid = resp.json()[_SVC_KEY]["uuid"]
@@ -312,7 +313,7 @@ class TestPathCompServiceMutations:
         refs = MeshRefs(mesh.app.state.context)
         container = f"{root}{LONG['path-computation']}"
 
-        resp = mesh.post(f"{container}/path-comp-service", json=_pcs_body(refs, "trx A", "trx B"))
+        resp = mesh.post(container, json=_pcs_body(refs, "trx A", "trx B"))
         assert resp.status_code == 201, resp.text
         service = resp.json()[_PCS_KEY]
         path_uuid = service["path"][0]["path-uuid"]
@@ -354,7 +355,7 @@ class TestErrorsOnTheLongForm:
 
     @pytest.mark.parametrize("root", ROOTS)
     @pytest.mark.parametrize(("method", "module", "path"), [
-        ("POST", "connectivity", ""),
+        ("PUT", "connectivity", ""),
         ("DELETE", "connectivity", ""),
         ("PATCH", "connectivity", "/connectivity-service"),
         ("PUT", "path-computation", "/path-comp-service=x"),
@@ -369,7 +370,7 @@ class TestErrorsOnTheLongForm:
         assert "ietf-restconf:errors" in long.json()
 
     def test_422_on_a_malformed_body(self, app: TestClient) -> None:
-        resp = app.post(f"{ROOTS[-1]}{LONG['connectivity']}/connectivity-service",
+        resp = app.post(f"{ROOTS[-1]}{LONG['connectivity']}",
                         json={_SVC_KEY: [{"end-point": "nope"}]})
         assert resp.status_code == 422
         assert resp.headers["content-type"].startswith("application/yang-data+json")

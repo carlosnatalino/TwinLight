@@ -294,11 +294,13 @@ export class TapiApiClient {
     return this.get<ServiceInfoResponse>(`/internal/services/${serviceUuid}`);
   }
 
+  // RFC 8040 §4.4.1: a list entry is created by POST on its parent, here
+  // the connectivity-context; the new connectivity-service is the body.
   async createConnectivityService(
     body: CreateConnectivityServiceRequest
   ): Promise<CreateConnectivityServiceResponse> {
     return this.post<CreateConnectivityServiceResponse>(
-      await this.tapi("/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"),
+      await this.tapi("/tapi-common:context/tapi-connectivity:connectivity-context"),
       body
     );
   }

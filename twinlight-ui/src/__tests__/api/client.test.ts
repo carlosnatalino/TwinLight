@@ -244,6 +244,24 @@ describe("RESTCONF root discovery", () => {
     );
   });
 
+  it("creates a service by POST on the connectivity-context (RFC 8040 §4.4.1)", async () => {
+    const body = { "tapi-connectivity:connectivity-service": { "end-point": [] } };
+    await new TapiApiClient("http://dt").createConnectivityService(body as never);
+    expect(calls[1].url).toBe(
+      `http://dt/restconf${CONTEXT}/tapi-connectivity:connectivity-context`
+    );
+    expect(calls[1].init?.method).toBe("POST");
+    expect(JSON.parse(calls[1].init?.body as string)).toEqual(body);
+  });
+
+  it("creates on the container under a root other than /restconf", async () => {
+    hostMeta = () => hostMetaResponse("/api");
+    await new TapiApiClient("http://dt").createConnectivityService({} as never);
+    expect(urls()[1]).toBe(
+      "http://dt/api/data/tapi-common:context/tapi-connectivity:connectivity-context"
+    );
+  });
+
   it("asks once per base URL, across calls and clients", async () => {
     await createClient("http://dt").getContext();
     await createClient("http://dt").getPhysicalContext();

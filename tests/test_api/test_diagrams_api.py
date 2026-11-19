@@ -27,7 +27,7 @@ def _create_service(app: TestClient) -> str:
         }
     }
     resp = app.post(
-        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service",
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
         json=body,
     )
     assert resp.status_code == 201

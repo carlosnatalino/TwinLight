@@ -93,7 +93,7 @@ class TestOccupancyIsSipLocal:
     def test_service_occupies_exactly_its_block(self, app: TestClient) -> None:
         sip_a, sip_z = _sip_uuids(app)
         resp = app.post(
-            f"{_BASE}/connectivity-service",
+            _BASE,
             json={
                 "tapi-connectivity:connectivity-service": {
                     "end-point": [
@@ -132,7 +132,7 @@ class TestOccupancyIsSipLocal:
         ]
         sip_a, sip_z = sips[0]["uuid"], sips[1]["uuid"]
         app.post(
-            f"{_BASE}/connectivity-service",
+            _BASE,
             json={
                 "tapi-connectivity:connectivity-service": {
                     "end-point": [
@@ -151,7 +151,7 @@ class TestOccupancyIsSipLocal:
     def test_delete_releases_the_band(self, app: TestClient) -> None:
         sip_a, sip_z = _sip_uuids(app)
         created = app.post(
-            f"{_BASE}/connectivity-service",
+            _BASE,
             json={
                 "tapi-connectivity:connectivity-service": {
                     "end-point": [

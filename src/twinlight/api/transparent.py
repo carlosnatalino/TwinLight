@@ -376,9 +376,36 @@ def _as_tree_error(exc: Exception) -> TreeError:
     return TreeError(str(exc), tag="invalid-value")
 
 
+#: The datastores a client can write; startup and operational are read-only.
+_WRITABLE = ("running", "candidate")
+
+
+def refused_methods(path: str) -> frozenset[str]:
+    """Methods routed to this module whose handler answers 405 at ``path``.
+
+    Routing cannot see these, so the app's ``AllowHeaderMiddleware`` asks
+    here before it lists a resource's methods in a 405's ``Allow`` header:
+    ``POST /data…`` is served only to explain that nothing can be created,
+    and a write to a read-only datastore reaches ``_write``, which refuses
+    it. An unknown datastore is a 404, not a refusal.
+    """
+    if not path.startswith(f"{ROOT}/"):
+        return frozenset()
+    parts = path[len(ROOT) + 1:].split("/")
+    if parts[0] == "data":
+        return frozenset({"POST"})
+    if parts[0] == "ds" and len(parts) > 1:
+        try:
+            if datastore_name(parts[1]) not in _WRITABLE:
+                return frozenset({"PUT", "PATCH", "DELETE"})
+        except TreeError:
+            pass
+    return frozenset()
+
+
 async def _write(request: Request, ds: str, depth: int, operation: str) -> Response:
     ctx = _ctx(request)
-    if ds not in ("running", "candidate"):
+    if ds not in _WRITABLE:
         return _error(
             f"The {ds} datastore is read-only; write running (or /data) or candidate",
             "operation-not-supported", 405,

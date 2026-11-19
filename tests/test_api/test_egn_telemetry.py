@@ -23,7 +23,8 @@ from tests.conftest import MeshRefs, _mesh_config, tapi_end_point
 from twinlight.app import create_app
 from twinlight.physics.ber_conversion import ber_to_q_db, gsnr_to_ber
 
-_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_CONTAINER = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_SVC = f"{_CONTAINER}/connectivity-service"
 
 
 def _no_gnpy_propagation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,7 +59,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 def _create(client: TestClient, a: str, z: str) -> str:
     refs = MeshRefs(client.app.state.context)
-    resp = client.post(_SVC, json={"tapi-connectivity:connectivity-service": [{
+    resp = client.post(_CONTAINER, json={"tapi-connectivity:connectivity-service": [{
         "end-point": [tapi_end_point("a", refs.sip(a)), tapi_end_point("z", refs.sip(z))],
     }]})
     assert resp.status_code == 201, resp.text

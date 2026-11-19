@@ -236,7 +236,8 @@ What happens:
 1. The script pushes an **ONOS flow rule** on the OLS device (in-port 1 →
    out-port 4). Nothing here touches the twin's API.
 2. ONOS's `TapiFlowRuleProgrammable` turns that into a T-API
-   **connectivity-service POST**.
+   **connectivity-service POST** on the connectivity-context, which the
+   adapter translates and forwards to the twin's connectivity-context.
 3. The twin routes it (k-shortest paths over 2149 km, 9 hops), first-fits
    spectrum, runs GNPy split-step propagation, and checks GSNR against the
    DP-QPSK threshold plus the configured margin.
@@ -413,7 +414,9 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 
 Overridable environment variables: `ONOS_URL`, `ONOS_AUTH`, `ADAPTER_URL`,
 `TWIN_URL`, `DEVICE_ID`, and `VALIDATE_A` / `VALIDATE_Z` for the validation A–Z
-pair.
+pair. Against a twin with API tokens, the scripts present `TWINLIGHT_API_TOKEN`
+on the requests they send to the twin directly (see
+[Authentication](#authentication)).
 
 ## Adapter endpoints
 
@@ -427,8 +430,8 @@ connected, as ONOS's port cache depends on them being consistent:
 
 Introspection, safe to call any time:
 
-- `GET /health` — liveness plus twin reachability
-- `GET /adapter/status` — modulation policy, ONOS-created services, recent refusals
+- `GET /health` — liveness, twin reachability, and whether the twin accepts the adapter's token
+- `GET /adapter/status` — modulation policy, ONOS-created services, recent refusals, the twin's verdict on the adapter's token
 - `GET /adapter/ports` — the SIP ↔ ONOS-port map
 - `POST /adapter/modulation` — switch modulation format at runtime
 
@@ -444,6 +447,7 @@ Introspection, safe to call any time:
 | `ADAPTER_GRID_GRANULARITY` | `G_50GHZ` | **Only `G_50GHZ` and `G_25GHZ` are safe** — ONOS's `getChannelSpacing()` has trailing spaces in its other case labels (`"G_100GHZ "`, `"G_12_5GHZ "`), so those fall through to `CHL_0GHZ` and then divide by zero in `getOchSignal()` |
 | `ADAPTER_EXPOSE_TWIN_SERVICES` | `false` | See below |
 | `ADAPTER_SIP_REFRESH_SECONDS` | `30` | SIP catalogue cache lifetime |
+| `TWINLIGHT_API_TOKEN` | *(empty)* | The bearer token the adapter presents to a twin with `TWINLIGHT_API_TOKENS` set. Compose passes it from `.env`. Empty, the adapter sends no credentials. See [Authentication](#authentication) |
 
 ### Why twin-native lightpaths are hidden from ONOS
 
@@ -454,6 +458,93 @@ restart. Left exposed, that silently tears down anything the TwinLight UI or
 `examples/demo_services.py` created. The adapter therefore shows ONOS only the
 services ONOS itself created. Set `ADAPTER_EXPOSE_TWIN_SERVICES=true` if you
 specifically want to demonstrate that behaviour.
+
+## Authentication
+
+The integration works against a twin with or without API tokens. ONOS is
+configured the same way in both cases (`netcfg/twinlight-ols.json` carries no
+credentials), and the adapter accepts its requests without any.
+
+When the twin has `TWINLIGHT_API_TOKENS` set, the adapter presents
+`TWINLIGHT_API_TOKEN`, the same token the TwinLight CLIs and the scripts
+present. Set it once, in the `.env` next to the root `docker-compose.yml`. The
+twin reads its accepted token from there, the overlay passes the token to the
+adapter, and the CLIs and the scripts read it too:
+
+```dotenv
+TWINLIGHT_API_TOKENS=<token>
+TWINLIGHT_API_TOKEN=<token>
+```
+
+The adapter reads the token once at start-up and sends it as a bearer token on
+every request it makes to the twin, root discovery included. Run outside
+Compose, it reads the variable from its own environment. With the variable
+unset or empty, it sends no `Authorization` header, as before. The scripts
+present the same token on the requests they send to the twin directly, taking
+it from the environment or else from the repository's `.env`. They send it to
+the twin only (never to ONOS or the adapter) and never print it. Neither the
+adapter nor the scripts check the token beyond its being non-empty, because the
+twin decides.
+
+Because every client presents the same token, revoking it (removing it from
+`TWINLIGHT_API_TOKENS` and restarting the twin) cuts off the adapter, the CLIs,
+the scripts and any UI session that entered it, all at once. The twin's log
+and `GET /internal/whoami` name the same principal for all of them, so they
+cannot tell the adapter's requests from a CLI's. An operator who wants a separate token for the adapter can set
+`TWINLIGHT_API_TOKEN` on the `tapi-adapter` service in their own Compose
+override file, as an option outside the default setup.
+
+### What the adapter exposes
+
+With a token, the adapter is a way into the twin that needs no credentials.
+Anyone who can reach its port can do what the adapter forwards, with the
+token's rights: read the T-API context and its SIPs, list connectivity
+services, create a connectivity service, and delete any connectivity service
+whose UUID they know (including one created in the UI). The adapter forwards
+nothing else (no `/config/`, `/transparent/`, `/admin/` or `/internal/`), but
+it does accept `POST /adapter/modulation` from anyone.
+
+The overlay publishes the adapter's port on all of the host's interfaces
+(`8282:8282`), which is the easiest to use from the host and from other
+machines, so every machine that can reach the host on 8282 has that access.
+ONOS reaches the adapter over the Compose network at `172.28.0.10:8282` and
+does not use the published port. An operator who wants to narrow access can
+bind the mapping to the loopback interface
+(`"127.0.0.1:8282:8282"`), which keeps the scripts working because they call
+`localhost:8282`, or drop the mapping and the scripts that use `ADAPTER_URL`
+with it, or close the port in the host firewall. The token also sits in the
+adapter container's environment, where `docker inspect` shows it, as it does
+`TWINLIGHT_API_TOKENS` for the twin. It is never written into the image.
+
+### When the twin refuses the adapter
+
+A twin with tokens answers `401` when the adapter has no token or one it does
+not accept. The adapter logs that once, at `ERROR`, when it starts (and once at
+`INFO` when it ends), naming the variable and never the token:
+
+```
+[ERROR] tapi-adapter: the twin requires an API token (HTTP 401) and the adapter has none: set TWINLIGHT_API_TOKEN for the adapter
+[ERROR] tapi-adapter: the twin rejected the adapter's token (HTTP 401): TWINLIGHT_API_TOKEN is not one of the twin's TWINLIGHT_API_TOKENS
+```
+
+`/health` still answers `200`, so the Compose healthcheck passes and the
+scripts get to read the reason. Its body says `"status": "unauthorized"`,
+`"twin-authorized": false` and gives the sentence above in `twin-auth-error`.
+A twin that is down still reads `"status": "degraded"` with
+`"twin-reachable": false`, because the twin's `/health` is public and says
+nothing about the token. `/adapter/status` carries the same `twin-authorized`
+and `twin-auth-error` fields next to the adapter's own state. `demo-up.sh`,
+`validate.sh` and the scripts that need ONOS stop with that sentence instead of
+waiting for ports that never appear. A script whose own token the twin refuses
+says so in the same words, naming the twin.
+
+ONOS gets `502 Bad Gateway` from every RESTCONF call in that state, with the
+sentence in `detail`. It handles that answer as it handles a twin that is down
+(the device turns unavailable, and discovery and flow rules are retried). The
+adapter does not relay the twin's `401`, because ONOS presented no credentials
+and needs none, and a `401` would ask ONOS to authenticate to the adapter.
+Flow rules pushed in that state fail, and a deleted flow rule stays
+`PENDING_REMOVE` until the twin accepts the adapter again.
 
 ---
 
@@ -505,9 +596,12 @@ What this integration does not do:
   a line system — the twin's topology stays inside the domain. The T-API
   topology context is served at `/restconf/data/tapi-common:context/tapi-topology:topology-context`
   but ONOS's `ols` driver does not consume it.
-- **No authentication anywhere.** The demo assumes the twin runs with
-  authentication off (no `TWINLIGHT_API_TOKENS`): neither the adapter nor the
-  scripts send a token. The adapter and the ONOS northbound are
-  unauthenticated as well. Run it on a local or lab network only.
+- **ONOS and the adapter do not authenticate their clients.** ONOS talks to
+  the adapter without credentials, and the adapter accepts every request.
+  Against a twin with tokens, the adapter presents `TWINLIGHT_API_TOKEN` on
+  ONOS's behalf, so anyone who can reach port 8282 can read the twin's SIPs and
+  create and delete connectivity services (see
+  [Authentication](#authentication)). No link uses TLS. Run the demo on a
+  local or lab network only.
 - **Modulation format is adapter policy**, because T-API 2.1 connectivity
   requests cannot express one. A 2.6-native controller would not need that.

@@ -101,7 +101,6 @@ class TestRejection:
             )),
             ("POST", (
                 "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context"
-                "/path-comp-service"
             )),
             ("GET", "/restconf/data/tapi-common:context/tapi-path-computation:path-computation-context/path"),
             ("GET", "/restconf/data/tapi-common:context/tapi-equipment:physical-context/device"),
@@ -109,7 +108,7 @@ class TestRejection:
             ("GET", "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"),
             ("POST", (
                 "/restconf/data/tapi-common:context"
-                "/tapi-connectivity:connectivity-context/connectivity-service"
+                "/tapi-connectivity:connectivity-context"
             )),
             ("PATCH", (
                 "/restconf/data/tapi-common:context"

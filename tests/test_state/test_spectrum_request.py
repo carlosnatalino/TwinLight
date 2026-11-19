@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient
 from tests.conftest import MeshRefs, tapi_end_point
 from twinlight.models.connectivity import MCG_CSEP_SPEC, OTSIA_CSEP_SPEC
 
-_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_CONTAINER = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+_SVC = f"{_CONTAINER}/connectivity-service"
 GRID_LOWER = 190_696_875_000_000   # 193.1 THz - 384.5 x 6.25 GHz
 SLOT = 6_250_000_000
 WIDTH = 9                          # 8 slots (50 GHz) + 1 guard
@@ -59,7 +60,7 @@ def refs(mesh_app: TestClient) -> MeshRefs:
 
 class TestFirstFitInsideTheAmplifierBand:
     def test_first_block_starts_inside_the_edfa_band(self, mesh_app, refs) -> None:
-        resp = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C")))
+        resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C")))
         assert resp.status_code == 201, resp.text
         (lower, upper), centre = _assigned(resp.json()["tapi-connectivity:connectivity-service"])
         assert (lower, upper) == _block(FIRST_IN_BAND)
@@ -85,7 +86,7 @@ class TestFirstFitInsideTheAmplifierBand:
     def test_without_physics_the_whole_grid_is_assignable(self, app: TestClient) -> None:
         data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
         sips = [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
-        resp = app.post(_SVC, json=_body(sips[0], sips[1]))
+        resp = app.post(_CONTAINER, json=_body(sips[0], sips[1]))
         (lower, _), _ = _assigned(resp.json()["tapi-connectivity:connectivity-service"])
         assert lower == GRID_LOWER
 
@@ -95,7 +96,7 @@ class TestRequestedSpectrum:
     def test_spectrum_is_used(self, mesh_app, refs, as_string: bool) -> None:
         block = _block(200)
         spectrum = tuple(str(f) for f in block) if as_string else block
-        resp = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"),
+        resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"),
                                               spectrum=spectrum))
         assert resp.status_code == 201, resp.text
         assert _assigned(resp.json()["tapi-connectivity:connectivity-service"]) == (
@@ -103,13 +104,13 @@ class TestRequestedSpectrum:
 
     def test_central_frequency_alone_is_used(self, mesh_app, refs) -> None:
         block = _block(300)
-        resp = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"),
+        resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"),
                                               centre=sum(block) // 2))
         assert resp.status_code == 201, resp.text
         assert _assigned(resp.json()["tapi-connectivity:connectivity-service"])[0] == block
 
     def test_a_get_can_be_put_back_unchanged(self, mesh_app, refs) -> None:
-        created = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"),
+        created = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"),
                                                  spectrum=_block(250)))
         service = created.json()["tapi-connectivity:connectivity-service"]
         uuid = service["uuid"]
@@ -128,7 +129,7 @@ class TestRequestedSpectrum:
         (best,) = ctx.candidate_paths("trx A", "trx C")
         span = best[best.index("roadm B"):best.index("roadm C") + 1]
         ctx._spectrum_state.allocate(path_uids_to_edges(span), 200, WIDTH)
-        second = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"), spectrum=block))
+        second = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), spectrum=block))
         assert second.status_code == 201, second.text
         uuid = second.json()["tapi-connectivity:connectivity-service"]["uuid"]
         path = mesh_app.app.state.context._allocated_path_uids(uuid)
@@ -147,7 +148,7 @@ class TestRefusals:
         ({"spectrum": _block(200), "mcg_extra": {"number-of-mc": 2}}, "one media channel"),
     ])
     def test_malformed_request_is_422_naming_it(self, mesh_app, refs, kwargs, named) -> None:
-        resp = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"), **kwargs))
+        resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), **kwargs))
         assert resp.status_code == 422, resp.text
         assert named in _error(resp)
 
@@ -156,7 +157,7 @@ class TestRefusals:
         pac = body["tapi-connectivity:connectivity-service"][0]["end-point"][1][
             "layer-protocol-constraint"][0][MCG_CSEP_SPEC]["mc-spectrum-config-pac"][0]
         pac["spectrum"] = dict(zip(("lower-frequency", "upper-frequency"), _block(210), strict=True))
-        resp = mesh_app.post(_SVC, json=body)
+        resp = mesh_app.post(_CONTAINER, json=body)
         assert resp.status_code == 422 and "different spectrum" in _error(resp)
 
     def test_other_grid_is_refused(self, mesh_app, refs) -> None:
@@ -164,11 +165,11 @@ class TestRefusals:
         pac = body["tapi-connectivity:connectivity-service"][0]["end-point"][0][
             "layer-protocol-constraint"][0][MCG_CSEP_SPEC]["mc-spectrum-config-pac"][0]
         pac["edge-frequency-constraint"] = {"grid-type": "GRID_TYPE_DWDM"}
-        resp = mesh_app.post(_SVC, json=body)
+        resp = mesh_app.post(_CONTAINER, json=body)
         assert resp.status_code == 422 and "grid-type" in _error(resp)
 
     def test_outside_the_amplifier_band_is_409(self, mesh_app, refs) -> None:
-        resp = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"),
+        resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"),
                                               spectrum=_block(10)))
         assert resp.status_code == 409
         assert "outside the band every amplifier on the path passes" in _error(resp)
@@ -176,8 +177,8 @@ class TestRefusals:
 
     def test_occupied_everywhere_names_the_holder(self, mesh_app, refs) -> None:
         block = _block(200)
-        first = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"), spectrum=block))
+        first = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), spectrum=block))
         holder = first.json()["tapi-connectivity:connectivity-service"]["uuid"]
-        resp = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"), spectrum=block))
+        resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), spectrum=block))
         assert resp.status_code == 409
         assert f"occupied by service {holder}" in _error(resp)

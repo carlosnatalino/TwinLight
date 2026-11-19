@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import MeshRefs, tapi_end_point
 from twinlight.models.connectivity import OTSIA_CSEP_SPEC, ConnectivityService
 
-_SVC = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+_CONTAINER = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
 
 
 def _body(sip_a: str, sip_z: str, power=None) -> dict:
@@ -38,7 +38,7 @@ def _reported_power(service: dict) -> float:
 @pytest.mark.parametrize("wire", [150, 150.0, "150"])
 def test_channel_output_power_is_hundredths_of_a_dbm(mesh_app: TestClient, wire) -> None:
     refs = MeshRefs(mesh_app.app.state.context)
-    resp = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"), wire))
+    resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), wire))
     assert resp.status_code == 201, resp.text
     service = resp.json()["tapi-connectivity:connectivity-service"]
     assert mesh_app.app.state.context._service_launch_power[service["uuid"]] == 1.5
@@ -48,7 +48,7 @@ def test_channel_output_power_is_hundredths_of_a_dbm(mesh_app: TestClient, wire)
 @pytest.mark.parametrize("wire", ["abc", True, "nan"])
 def test_malformed_power_is_422(mesh_app: TestClient, wire) -> None:
     refs = MeshRefs(mesh_app.app.state.context)
-    resp = mesh_app.post(_SVC, json=_body(refs.sip("trx A"), refs.sip("trx C"), wire))
+    resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), wire))
     assert resp.status_code == 422
     assert "channel-output-power" in resp.text
 
