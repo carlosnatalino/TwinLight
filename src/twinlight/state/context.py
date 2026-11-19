@@ -1748,6 +1748,10 @@ class TapiContext:
         self._edfa_tracker = copy.deepcopy(checkpoint.edfa_tracker)
         self._path_comp_services = dict(checkpoint.path_comp_services)
         self._paths = dict(checkpoint.paths)
+        # The entity-tags handed out while the replacement was under way name
+        # states that are gone. Move both validators: a reader that saw one
+        # of those states must not be told 304 for the one restored here.
+        self._tapi_changed(config=True)
 
     async def put_path_comp_service(self, service: PathCompService) -> bool:
         """Create a path-comp-service, or replace the one with its UUID by it
@@ -1773,6 +1777,7 @@ class TapiContext:
                 if old is not None:
                     self._path_comp_services[old.uuid] = old
                     self._paths.update(old_paths)
+                    self._tapi_changed(config=True)  # as in _rollback
                 raise
             return old is None
 
