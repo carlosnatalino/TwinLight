@@ -107,13 +107,20 @@ def _admitted_end_point() -> dict:
 
 
 class TwinStub:
-    """Minimal stand-in for the twin, recording what the adapter sends it."""
+    """Minimal stand-in for the twin, recording what the adapter sends it.
+
+    Like the twin, it holds the services it admitted, as they were sent,
+    name list included, until they are deleted: the adapter reads its own
+    mark back from them.
+    """
 
     def __init__(self) -> None:
         self.posted: list[dict] = []
+        # Every DELETE the adapter forwarded, whether or not it found a service.
         self.deleted: list[str] = []
         self.create_status = 201
-        self.create_body: dict = {}
+        # The 201's body; None: the entry as held, an array of one.
+        self.create_body: dict | None = None
         self.services: list[dict] = []
         # Mutable so a test can change what spectrum the twin reports.
         self.sips: list[dict] = list(SIPS)
@@ -158,16 +165,33 @@ class TwinStub:
         # Like the twin: created by POST on the container (RFC 8040 §4.4.1);
         # the list path serves GET only.
         if path.endswith("/tapi-connectivity:connectivity-context") and request.method == "POST":
-            self.posted.append(json.loads(request.content))
-            return httpx.Response(self.create_status, json=self.create_body)
+            body = json.loads(request.content)
+            self.posted.append(body)
+            if self.create_status != 201:
+                return httpx.Response(self.create_status, json=self.create_body or {})
+            (entry,) = body["tapi-connectivity:connectivity-service"]
+            self.services.append(entry)
+            if self.create_body is not None:
+                return httpx.Response(201, json=self.create_body)
+            return httpx.Response(201, json={"tapi-connectivity:connectivity-service": [entry]})
         if path.endswith("/connectivity-service") and request.method == "POST":
             return httpx.Response(405)
         if path.endswith("/connectivity-service") and request.method == "GET":
             return httpx.Response(
                 200, json={"tapi-connectivity:connectivity-service": self.services}
             )
+        uuid = path.rsplit("=", 1)[-1]
+        held = [s for s in self.services if s.get("uuid") == uuid]
+        if "/connectivity-service=" in path and request.method == "GET":
+            if not held:
+                return httpx.Response(404, json={"detail": f"Service {uuid} not found"})
+            # RFC 7951 §5.4: the entry as an array of one.
+            return httpx.Response(200, json={"tapi-connectivity:connectivity-service": held})
         if request.method == "DELETE":
-            self.deleted.append(path.rsplit("=", 1)[-1])
+            self.deleted.append(uuid)
+            if not held:
+                return httpx.Response(404, json={"detail": f"Service {uuid} not found"})
+            self.services = [s for s in self.services if s.get("uuid") != uuid]
             return httpx.Response(204)
         return httpx.Response(404)
 
@@ -602,12 +626,189 @@ def test_onos_created_services_remain_visible_for_resync(client, twin):
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
     )
-    twin.services = [{"uuid": "onos-uuid-1"}, {"uuid": "created-in-the-ui"}]
+    twin.services.append({"uuid": "created-in-the-ui"})
     body = client.get(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/"
     ).json()
     listed = body["tapi-connectivity:connectivity-context"]["connectivity-service"]
     assert [s["uuid"] for s in listed] == ["onos-uuid-1"]
+
+
+# --- ONOS may delete exactly what it is shown -------------------------------
+
+# A lightpath created in the TwinLight UI: a service-name, no adapter mark.
+TWIN_NATIVE = {
+    "uuid": "created-in-the-ui",
+    "name": [{"value-name": "service-name", "value": "Boston to New York"}],
+}
+
+
+def _restart_adapter() -> None:
+    """What an adapter restart loses: everything it holds in memory."""
+    tapi_adapter.catalogue = tapi_adapter.SipCatalogue()
+    tapi_adapter.registry = tapi_adapter.OnosServiceRegistry()
+    tapi_adapter._data_root = tapi_adapter.TWIN_DATA_ROOT
+
+
+def _onos_creates(client, uuid: str = "onos-uuid-1") -> None:
+    r = client.post(
+        CONNECTIVITY,
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2", uuid=uuid),
+    )
+    assert r.status_code == 201
+
+
+def _listed(client) -> list[str]:
+    r = client.get(CONNECTIVITY)
+    assert r.status_code == 200
+    services = r.json()["tapi-connectivity:connectivity-context"]["connectivity-service"]
+    return [s["uuid"] for s in services]
+
+
+def test_the_mark_the_create_stamps_is_the_one_ownership_reads(client, twin):
+    """Ownership is the name entry the create puts on every service it
+    forwards; if the two ever differ, ONOS loses sight of its own services."""
+    _onos_creates(client)
+    (sent,) = twin.posted[0]["tapi-connectivity:connectivity-service"]
+    assert tapi_adapter.ONOS_MARK in sent["name"]
+    assert tapi_adapter._onos_created(sent)
+    assert not tapi_adapter._onos_created(TWIN_NATIVE)
+
+
+def test_a_twin_native_service_is_not_deleted_through_the_adapter(client, twin, caplog):
+    """The adapter does not show ONOS a lightpath it did not create, so it
+    does not forward ONOS's DELETE for one either. The answer is 204, not an
+    error: ONOS retires a flow rule only on 204, and to ONOS the service does
+    not exist. Logged once, however often the DELETE is repeated, and
+    counted in /adapter/status."""
+    caplog.set_level("INFO", logger="tapi-adapter")
+    twin.services = [dict(TWIN_NATIVE)]
+    answers = [
+        client.delete(f"{CONNECTIVITY}connectivity-service=created-in-the-ui").status_code
+        for _ in range(3)
+    ]
+    assert answers == [204, 204, 204]
+    assert twin.deleted == []
+    assert [s["uuid"] for s in twin.services] == ["created-in-the-ui"]
+    warnings = [r for r in caplog.records if "refused to delete" in r.getMessage()]
+    assert [r.levelname for r in warnings] == ["WARNING"]
+    assert "created-in-the-ui" in warnings[0].getMessage()
+    refused = client.get("/adapter/status").json()["refused-deletes"]
+    assert [(r["uuid"], r["reason"], r["count"]) for r in refused] == [
+        ("created-in-the-ui", "not-shown-to-onos", 3)
+    ]
+
+
+def test_onos_created_services_survive_an_adapter_restart(client, twin):
+    """The registry is memory; ownership is not. After a restart ONOS still
+    holds flows for the services it created and the twin still holds those
+    lightpaths: ONOS is still shown them, may still delete them, and still
+    may not delete anything else."""
+    _onos_creates(client)
+    twin.services.append(dict(TWIN_NATIVE))
+    _restart_adapter()
+
+    assert _listed(client) == ["onos-uuid-1"]
+    status_body = client.get("/adapter/status").json()
+    assert list(status_body["onos-created-services"]) == ["onos-uuid-1"]
+    # The join key correlate.sh needs, read back off the twin's copy.
+    assert status_body["service-endpoints"]["onos-uuid-1"] == {
+        "onos-in-port": 1,
+        "onos-out-port": 2,
+        "onos-port-pair": "1->2",
+        "a-end": "Abilene",
+        "z-end": "Atlanta",
+    }
+
+    assert client.delete(f"{CONNECTIVITY}connectivity-service=onos-uuid-1").status_code == 204
+    assert twin.deleted == ["onos-uuid-1"]
+    assert client.delete(f"{CONNECTIVITY}connectivity-service=created-in-the-ui").status_code == 204
+    assert twin.deleted == ["onos-uuid-1"]
+    assert [s["uuid"] for s in twin.services] == ["created-in-the-ui"]
+    assert client.get("/adapter/status").json()["onos-created-services"] == {}
+
+
+@pytest.mark.parametrize("expose", [False, True])
+def test_onos_may_delete_exactly_what_it_is_listed(client, twin, monkeypatch, expose):
+    """One rule for both: what the list GET shows ONOS is what its DELETE
+    reaches, with ADAPTER_EXPOSE_TWIN_SERVICES off (its own services) and on
+    (everything)."""
+    monkeypatch.setattr(tapi_adapter, "EXPOSE_TWIN_SERVICES", expose)
+    _onos_creates(client)
+    twin.services += [
+        dict(TWIN_NATIVE),
+        # Another client's label under the same value-name is not the mark.
+        {"uuid": "labelled-elsewhere",
+         "name": [{"value-name": "provisioned-by", "value": "operator"}]},
+    ]
+    every = [s["uuid"] for s in twin.services]
+    listed = _listed(client)
+    assert listed == (every if expose else ["onos-uuid-1"])
+    for uuid in every:
+        assert client.delete(f"{CONNECTIVITY}connectivity-service={uuid}").status_code == 204
+    assert twin.deleted == listed
+    assert [s["uuid"] for s in twin.services] == [u for u in every if u not in listed]
+
+
+def test_a_service_gone_from_the_twin_leaves_the_status(client, twin):
+    """The registry follows the twin: a service released by other means (the
+    UI, a twin restarted without its checkpoint) is not reported as ONOS's."""
+    _onos_creates(client)
+    twin.services = []
+    status_body = client.get("/adapter/status").json()
+    assert status_body["onos-created-services"] == {}
+    assert status_body["service-endpoints"] == {}
+
+
+def test_a_registry_list_read_before_a_create_is_not_applied():
+    """sync() is given the registry's version from before the twin's list was
+    requested; a create in between makes that list stale, and it is dropped."""
+    registry = tapi_adapter.OnosServiceRegistry()
+    version = registry.version
+    registry.record("onos-uuid-1", {}, endpoints={"onos-port-pair": "1->2"})
+    registry.sync([], version)
+    assert registry.uuids() == ["onos-uuid-1"]
+    registry.sync([], registry.version)
+    assert registry.uuids() == []
+
+
+def test_a_delete_with_the_twin_down_is_still_a_502(twin, caplog):
+    """Unchanged by the ownership check: no answer from the twin is a 502,
+    the flow rule stays and ONOS retries, and the outage is logged once."""
+    switch = _Switch(twin)
+    switch.up = False
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, transport=httpx.MockTransport(switch.handler)) as c:
+        answers = [
+            c.delete(f"{CONNECTIVITY}connectivity-service=onos-uuid-1") for _ in range(3)
+        ]
+        refused = c.get("/adapter/status").json()["refused-deletes"]
+    assert [r.status_code for r in answers] == [502, 502, 502]
+    assert "connection refused" in answers[0].json()["detail"]
+    assert _outage_lines(caplog) == (["ERROR"], [])
+    assert refused == []
+
+
+def test_an_unreadable_service_entry_deletes_nothing(twin, caplog):
+    """An entry the adapter cannot read is neither ONOS's nor not ONOS's:
+    nothing is deleted, ONOS gets a 502 and retries, and it is logged once."""
+    caplog.set_level("INFO", logger="tapi-adapter")
+    twin.services = [{"uuid": "onos-uuid-1", "name": [tapi_adapter.ONOS_MARK]}]
+    original = twin.handler
+
+    def bare_object(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and "/connectivity-service=" in request.url.path:
+            return httpx.Response(200, json=twin.services[0])
+        return original(request)
+
+    with _client_for(twin, transport=httpx.MockTransport(bare_object)) as c:
+        answers = [
+            c.delete(f"{CONNECTIVITY}connectivity-service=onos-uuid-1") for _ in range(3)
+        ]
+    assert [r.status_code for r in answers] == [502, 502, 502]
+    assert twin.deleted == []
+    messages = [r.getMessage() for r in caplog.records]
+    assert sum("cannot read" in m for m in messages) == 1
 
 
 def test_onos_reads_the_twins_connectivity_service_list(client, twin, monkeypatch):
@@ -1072,6 +1273,62 @@ def test_against_a_real_twin_that_requires_tokens(tmp_path, monkeypatch):
     assert health["status"] == "unauthorized"
     assert health["twin-auth-error"].startswith("the twin rejected the adapter's token (HTTP 401)")
     assert refused.status_code == 502
+
+
+def test_against_a_real_twin_the_delete_scope_survives_a_restart(tmp_path, monkeypatch):
+    """The ownership mark against an in-process TwinLight app: the twin keeps
+    the name list as the adapter sent it, so after an adapter restart ONOS's
+    service is still listed and deletable, and a service created directly on
+    the twin is neither."""
+    pytest.importorskip("twinlight")
+    from twinlight.app import create_app
+    from twinlight.config import GnpyConfig, TwinConfig
+
+    monkeypatch.delenv("TWINLIGHT_API_TOKENS", raising=False)
+    monkeypatch.setattr("twinlight.auth.DEFAULT_ENV_FILE", tmp_path / "absent.env")
+    repo = Path(__file__).resolve().parents[4]
+    equipment = tmp_path / "equipment.json"
+    equipment.write_text("{}")
+    twin_app = create_app(TwinConfig(
+        gnpy=GnpyConfig(
+            topology=repo / "tests" / "fixtures" / "edfa_example_network.json",
+            equipment=equipment,
+        ),
+        simulation={"snapshot_dir": str(tmp_path / "snapshots")},
+    ))
+    stub = TwinStub()  # unused; _client_for wants one
+    twin = TestClient(twin_app)
+    services = (
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+        "/connectivity-service"
+    )
+
+    with _client_for(stub, transport=httpx.ASGITransport(app=twin_app)) as c:
+        sips = [s["uuid"] for s in c.get(CONTEXT).json()["tapi-common:context"]["service-interface-point"]]
+        created = c.post(CONNECTIVITY, json=onos_connectivity_request(sips[0], sips[1], "onos-real-2"))
+        assert created.status_code == 201, created.text
+    native = twin.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
+        json={"tapi-connectivity:connectivity-service": [{
+            "uuid": "native-real-1",
+            "name": [{"value-name": "service-name", "value": "made in the UI"}],
+            "end-point": [
+                {"local-id": str(i),
+                 "service-interface-point": {
+                     "service-interface-point-uuid": tapi_adapter._to_twin_sip(sip)}}
+                for i, sip in enumerate(sips[:2], start=1)
+            ],
+        }]},
+    )
+    assert native.status_code == 201, native.text
+
+    with _client_for(stub, transport=httpx.ASGITransport(app=twin_app)) as c:  # restarted
+        assert _listed(c) == ["onos-real-2"]
+        assert list(c.get("/adapter/status").json()["onos-created-services"]) == ["onos-real-2"]
+        assert c.delete(f"{CONNECTIVITY}connectivity-service=native-real-1").status_code == 204
+        assert c.delete(f"{CONNECTIVITY}connectivity-service=onos-real-2").status_code == 204
+    held = [s["uuid"] for s in twin.get(services).json()["tapi-connectivity:connectivity-service"]]
+    assert held == ["native-real-1"]
 
 
 # --- The twin's standard bodies are read strictly -------------------------

@@ -407,6 +407,107 @@ check_seed() {
     || { echo "ONOS holds $(onos_rest_flows | wc -l | tr -d ' ') REST flows, the adapter $(adapter_service_count) services"; return 1; }
   echo "${admitted} admitted; ONOS flows and twin services agree"
 }
+# ONOS may delete exactly what the adapter shows it, also after the adapter
+# restarts: the adapter keeps ownership on the twin, as the mark it puts in the
+# name list of every service it creates, not in its own memory. A lightpath
+# created directly on the twin (as the UI would) survives a DELETE sent through
+# the adapter, which answers 204 and reports the refusal; an ONOS-created one
+# is still released when its flow is removed in ONOS. The adapter is restarted
+# only on a stack this run booted.
+DELETE_SCOPE_DATA=""; DELETE_SCOPE_NATIVE=""; DELETE_SCOPE_VICTIM=""
+adapter_ok() {
+  curl -sSf "${ADAPTER_URL}/health" | python3 -c 'import json,sys; sys.exit(json.load(sys.stdin)["status"] != "ok")'
+}
+onos_device_available() {
+  onos_api GET "/onos/v1/devices/${DEVICE_ID}" | python3 -c 'import json,sys; sys.exit(not json.load(sys.stdin).get("available"))'
+}
+twin_service_code() {
+  # the twin's status for GET of one connectivity-service: 200 held, 404 gone
+  twin_curl -s -o /dev/null -w '%{http_code}' \
+    "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=$1"
+}
+victim_released() { [ "$(twin_service_code "${DELETE_SCOPE_VICTIM}")" = 404 ]; }
+delete_scope() {
+  local body code flow
+  body="$(curl -sS "${ADAPTER_URL}/adapter/ports" | python3 -c '
+import json, sys
+ports = json.load(sys.stdin)["ports"]
+def sip(city):
+    hits = [p for p in ports if (p["node-name"] or "").lower() == "trx " + city.lower()]
+    assert len(hits) == 1, "no single transceiver named %r" % city
+    return hits[0]["twin-sip-uuid"]
+print(json.dumps({"tapi-connectivity:connectivity-service": [{
+    "uuid": sys.argv[1],
+    "name": [{"value-name": "service-name", "value": "onos-test: created on the twin"}],
+    "end-point": [
+        {"local-id": str(i), "service-interface-point": {"service-interface-point-uuid": sip(city)}}
+        for i, city in enumerate(sys.argv[2:4], start=1)
+    ],
+}]}))
+' "${DELETE_SCOPE_NATIVE}" "${SMOKE_A}" "${SMOKE_Z}")" || return 1
+  code="$(twin_curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/yang-data+json' \
+          -d "${body}" "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context")"
+  [ "${code}" = 201 ] || { echo "the twin answered ${code} to a create sent to it directly"; return 1; }
+  echo "created ${DELETE_SCOPE_NATIVE} on the twin directly (${SMOKE_A} -> ${SMOKE_Z})"
+
+  if [ -n "${STARTED}" ]; then
+    docker restart "${TL_PREFIX}-tapi-adapter" >/dev/null || return 1
+    until_true 90 adapter_ok || { echo "the adapter is not healthy 90 s after its restart"; return 1; }
+    until_true 120 onos_device_available || { echo "the device is not available 120 s after the adapter's restart"; return 1; }
+    echo "adapter restarted: its memory is empty"
+  else
+    echo "--reuse: the adapter is not restarted"
+  fi
+
+  until_true 90 flows_match_services \
+    || { echo "ONOS holds $(onos_rest_flows | wc -l | tr -d ' ') REST flows, the adapter reports $(adapter_service_count) services"; return 1; }
+  curl -sS "${ADAPTER_URL}/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context" \
+    | python3 -c '
+import json, sys
+listed = [s["uuid"] for s in json.load(sys.stdin)["tapi-connectivity:connectivity-context"]["connectivity-service"]]
+assert sys.argv[1] not in listed, "the twin-native service is listed to ONOS"
+assert listed, "ONOS is shown none of its own services"
+print("ONOS is shown its %d service(s), not the twin-native one" % len(listed))
+' "${DELETE_SCOPE_NATIVE}" || return 1
+
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+    "${ADAPTER_URL}/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${DELETE_SCOPE_NATIVE}")"
+  [ "${code}" = 204 ] || { echo "the adapter answered ${code} to the DELETE, not 204"; return 1; }
+  code="$(twin_service_code "${DELETE_SCOPE_NATIVE}")"
+  [ "${code}" = 200 ] || { echo "the twin-native service is gone (${code}) after a DELETE through the adapter"; return 1; }
+  curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c '
+import json, sys
+refused = [r["uuid"] for r in json.load(sys.stdin)["refused-deletes"]]
+assert sys.argv[1] in refused, "the refusal is not in /adapter/status"
+print("DELETE through the adapter: 204, the twin still holds it, refused-deletes reports it")
+' "${DELETE_SCOPE_NATIVE}" || return 1
+
+  read -r flow DELETE_SCOPE_VICTIM < <(onos_rest_flows | python3 -c '
+import sys, json, urllib.request
+eps = json.load(urllib.request.urlopen(sys.argv[1] + "/adapter/status")).get("service-endpoints", {})
+by_pair = {ep.get("onos-port-pair"): uuid for uuid, ep in eps.items()}
+for line in sys.stdin:
+    fid, i, o, state = line.split()
+    if state == "ADDED" and "%s->%s" % (i, o) in by_pair:
+        print(fid, by_pair["%s->%s" % (i, o)]); break
+' "${ADAPTER_URL}")
+  [ -n "${DELETE_SCOPE_VICTIM}" ] || { echo "no ADDED ONOS flow joins a service the adapter reports"; return 1; }
+  "${HERE}/lightpath.sh" delete "${flow}" || return 1
+  until_true 90 victim_released \
+    || { echo "service ${DELETE_SCOPE_VICTIM} still on the twin 90 s after its flow was removed"; return 1; }
+  echo "flow ${flow} removed in ONOS: the twin released ${DELETE_SCOPE_VICTIM}"
+}
+check_delete_scope() {
+  local rc=0
+  DELETE_SCOPE_DATA="$(twin_data)" || return 1
+  DELETE_SCOPE_NATIVE="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  delete_scope || rc=$?
+  # Whatever happened, the twin-native lightpath goes, so the later steps see
+  # a twin holding only what ONOS created.
+  twin_curl -s -o /dev/null -X DELETE \
+    "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${DELETE_SCOPE_NATIVE}"
+  return "${rc}"
+}
 check_resync() {
   local out
   out="$("${HERE}/resync.sh")" || { printf '%s\n' "${out}"; return 1; }
@@ -498,6 +599,7 @@ e2e() {
   fi
   step "seed-demo.sh --reset, ONOS flows match twin services" check_seed
   step "correlate.sh after seeding" check_correlate
+  step "delete scope, across an adapter restart" check_delete_scope
   step "resync.sh --check" "${HERE}/resync.sh" --check
   step "resync.sh, lightpaths survive, ports enabled" check_resync
   step "onos-cli.sh devices" check_onos_cli

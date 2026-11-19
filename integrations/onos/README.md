@@ -490,6 +490,7 @@ every other script and checks what it did:
 | `fault.sh cut-path`, `heal-all`, `list` | OPM reports `link-failed`, then recovers |
 | `lightpath.sh delete` | the twin releases the service |
 | `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number |
+| delete scope, across an adapter restart | a lightpath created on the twin directly is not listed to ONOS and survives a `DELETE` through the adapter (`204`, reported under `refused-deletes`); after the adapter restarts, ONOS's flows and the services it is shown still agree, and removing a flow in ONOS still releases its lightpath. The restart is skipped with `--reuse` |
 | `resync.sh --check`, `resync.sh` | ONOS-created lightpaths survive, every port enabled |
 | `onos-cli.sh devices` | the CLI answers and lists the device |
 | `lightpath.sh clear`, `validate.sh` again | the twin is emptied; still 16/16 |
@@ -539,7 +540,7 @@ connected, as ONOS's port cache depends on them being consistent:
 Introspection, safe to call any time:
 
 - `GET /health` — liveness, twin reachability (its T-API resources, not only its `/health`), and whether the twin accepts the adapter's token
-- `GET /adapter/status` — modulation policy, ONOS-created services, recent refusals, the twin's verdict on the adapter's token. Always `200`: a twin that is down sets `"twin-reachable": false` with the reason in `twin-error`, as a refused token sets `twin-authorized` and `twin-auth-error`
+- `GET /adapter/status` — modulation policy, ONOS-created services (read from the twin on each call, see [below](#why-twin-native-lightpaths-are-hidden-from-onos)), recent refusals, `DELETE`s it did not forward (`refused-deletes`), the twin's verdict on the adapter's token. Always `200`: a twin that is down sets `"twin-reachable": false` with the reason in `twin-error`, as a refused token sets `twin-authorized` and `twin-auth-error`
 - `GET /adapter/ports` — the SIP ↔ ONOS-port map
 - `POST /adapter/modulation` — switch modulation format at runtime
 
@@ -629,8 +630,44 @@ connectivity service it can see whenever ONOS's flow cache for the device is
 empty — which includes the moment it first connects, and again after any ONOS
 restart. Left exposed, that silently tears down anything the TwinLight UI or
 `examples/demo_services.py` created. The adapter therefore shows ONOS only the
-services ONOS itself created. Set `ADAPTER_EXPOSE_TWIN_SERVICES=true` if you
-specifically want to demonstrate that behaviour.
+services ONOS itself created, and forwards ONOS's `DELETE` only for those:
+ONOS can delete exactly what it is shown. Set
+`ADAPTER_EXPOSE_TWIN_SERVICES=true` if you specifically want to demonstrate
+that behaviour; ONOS is then shown every service and may delete any of them.
+
+**What makes a service ONOS's.** The adapter puts one name-and-value pair,
+`provisioned-by` = `onos-odtn`, in the `name` list of every service it creates
+for ONOS (next to the `service-name` the UI renders and the `onos-port-pair`
+of the [join key](#part-2--onos-provisions-a-lightpath-the-twin-supplies-the-physics)).
+The `name` list is standard T-API (`tapi-common` v2.6.0, grouping
+`global-class`), so the twin stores and returns it unchanged and keeps it in
+its checkpoint; the UI and the CLIs read only `service-name` and ignore the
+other entries. One rule reads the mark for both the list ONOS is served and
+the `DELETE`s that are forwarded, so the two cannot drift apart. Ownership
+therefore lives on the twin, the system of record, not in the adapter's
+memory: after an adapter restart ONOS is still shown, and can still delete,
+the services it created, and `/adapter/status` reports them again (with their
+port pairs read back off the names), so `correlate.sh` and the other scripts
+keep working. Services created by earlier releases of the adapter carry the
+same pair.
+
+**A `DELETE` for anything else** is answered `204` and not forwarded: to ONOS
+that service does not exist, which is how the adapter already reports a
+service the twin no longer holds. Any other status would leave the flow rule
+that sent it in `PENDING_REMOVE` forever. The refusal is logged once per UUID
+at `WARNING`, and `/adapter/status` lists it under `refused-deletes` with a
+count of the attempts. To decide, the adapter reads the service from the twin
+before forwarding the `DELETE`; a twin that does not answer is still a `502`,
+as before.
+
+**Keep the mark.** A service whose `name` list loses the pair is no longer
+ONOS's: hidden from ONOS, and its `DELETE` refused, which would leave the
+lightpath on the twin after ONOS removes the flow. The twin's `PATCH` on a
+connectivity-service replaces the whole `name` list, so a client renaming an
+ONOS-created service must send the `provisioned-by` entry back with the new
+`service-name`. Nothing in this repository renames services. Anyone who can
+reach the twin can also put the pair on a service of their own, which ONOS
+would then be shown and could delete: the mark is a label, not access control.
 
 ## Authentication
 
@@ -672,8 +709,9 @@ override file, as an option outside the default setup.
 With a token, the adapter is a way into the twin that needs no credentials.
 Anyone who can reach its port can do what the adapter forwards, with the
 token's rights: read the T-API context and its SIPs, list connectivity
-services, create a connectivity service, and delete any connectivity service
-whose UUID they know (including one created in the UI). The adapter forwards
+services, create a connectivity service, and delete a connectivity service
+created through the adapter (or any service, with
+`ADAPTER_EXPOSE_TWIN_SERVICES=true`). The adapter forwards
 nothing else (no `/config/`, `/transparent/`, `/admin/` or `/internal/`), but
 it does accept `POST /adapter/modulation` from anyone.
 
@@ -794,8 +832,8 @@ What this integration does not do:
 - **ONOS and the adapter do not authenticate their clients.** ONOS talks to
   the adapter without credentials, and the adapter accepts every request.
   Against a twin with tokens, the adapter presents `TWINLIGHT_API_TOKEN` on
-  ONOS's behalf, so anyone who can reach port 8282 can read the twin's SIPs and
-  create and delete connectivity services (see
+  ONOS's behalf, so anyone who can reach port 8282 can read the twin's SIPs,
+  create connectivity services and delete those created through the adapter (see
   [Authentication](#authentication)). No link uses TLS. Run the demo on a
   local or lab network only.
 - **Modulation format is adapter policy**, because T-API 2.1 connectivity
