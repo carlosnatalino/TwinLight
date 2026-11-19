@@ -83,7 +83,9 @@ CLIs, examples, ONOS adapter) read it from host-meta, but a client that
 hard-codes `/restconf` will not find the new location. Set it to `""` to put the
 data resource at `/data/…`; the twin then serves no root resource and no
 `host-meta`, and the bundled clients read that `404` as "T-API is at `/data/…`"
-(see [API.md](API.md#finding-the-restconf-root)).
+(see [API.md](API.md#finding-the-restconf-root)). RFC 8040 §3.1 requires
+host-meta, so that mode does not conform; see
+[TAPI_COMPLIANCE.md § 2.7](TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix).
 
 ## Authentication — API tokens
 

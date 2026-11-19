@@ -33,6 +33,7 @@ from twinlight.algorithms.path_constraints import (
     LinkRef,
     NodeRef,
     PathConstraints,
+    UnresolvedReferenceError,
 )
 from twinlight.algorithms.spectrum_assignment import first_fit, path_uids_to_edges
 from twinlight.config import TwinConfig
@@ -93,8 +94,9 @@ class InsufficientQoTError(RmsaError):
 
 class SpectrumRequestError(ValueError):
     """A requested spectrum or central frequency that cannot be on the grid at
-    all (misaligned, outside it, the wrong width). A client error (422),
-    unlike a conflict with spectrum in use or the amplifier band (409)."""
+    all (misaligned, outside it, the wrong width). A client error (400,
+    invalid-value), unlike a conflict with spectrum in use or the amplifier
+    band (409)."""
 
 
 @dataclass(frozen=True)
@@ -1239,7 +1241,7 @@ class TapiContext:
             (n.value for n in node.name if n.value_name == "node-name"), None,
         ) if node is not None else None
         if uid is None:
-            raise ConstraintError(
+            raise UnresolvedReferenceError(
                 f"{where}: node {ref.node_uuid} not found in topology "
                 f"{ref.topology_uuid}"
             )
@@ -1248,7 +1250,7 @@ class TapiContext:
     def _resolve_link(self, ref: LinkRef, where: str) -> tuple[str, str]:
         pair = self._link_ref_to_pair.get((ref.topology_uuid, ref.link_uuid))
         if pair is None:
-            raise ConstraintError(
+            raise UnresolvedReferenceError(
                 f"{where}: link {ref.link_uuid} not found in topology "
                 f"{ref.topology_uuid}"
             )

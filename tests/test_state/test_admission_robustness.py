@@ -104,11 +104,11 @@ class TestRefusedPutKeepsTheService:
                           tapi_end_point("z", refs.sip("trx C"))],
         }]})
         assert resp.status_code == 201, resp.text
-        return resp.json()["tapi-connectivity:connectivity-service"]
+        return resp.json()["tapi-connectivity:connectivity-service"][0]
 
     @staticmethod
     def _bad_spectrum(service: dict) -> dict:
-        """The same service asking for an off-grid central frequency: 422."""
+        """The same service asking for an off-grid central frequency: 400."""
         body = dict(service)
         for ep in body["end-point"]:
             ep["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0][
@@ -126,7 +126,8 @@ class TestRefusedPutKeepsTheService:
         ctx.set_link_failed("fiber (B → C)", True)
 
         resp = client.put(f"{_SVC}={uuid}", json=self._bad_spectrum(service))
-        assert resp.status_code == 422, resp.text
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert (ctx._service_allocation[uuid], ctx.get_service(uuid).modulation_format) == before
         assert "roadm B" in ctx._allocated_path_uids(uuid)
 
@@ -159,7 +160,7 @@ class TestRefusedPutKeepsTheService:
             tapi_end_point("a", refs.sip("trx A"), "DP-QPSK"),
             tapi_end_point("z", refs.sip("trx B"), "DP-QPSK"),
         ]}}
-        assert client.put(f"{_SVC}={uuid}", json=body).status_code == 200
+        assert client.put(f"{_SVC}={uuid}", json=body).status_code == 204
         assert "roadm C" not in ctx._allocated_path_uids(uuid)
         assert client.delete(f"{_SVC}={uuid}").status_code == 204
         # Neither the old block nor the new one is left behind.

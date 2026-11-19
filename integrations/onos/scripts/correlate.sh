@@ -17,10 +17,10 @@
 require_stack
 
 JSON="$(python3 - "$@" <<PY
-import json, sys, urllib.request, base64
+import json, sys, urllib.error, urllib.request, base64
 
 sys.path.insert(0, "${SCRIPT_DIR}")
-from tapi_fields import spectrum_of, twin_urlopen
+from tapi_fields import created_service, spectrum_of, twin_urlopen
 
 onos_auth = base64.b64encode(b"${ONOS_AUTH}").decode()
 
@@ -70,8 +70,7 @@ for f in flows:
     if uuid:
         ep = endpoints.get(uuid, {})
         row["a-end"], row["z-end"] = ep.get("a-end"), ep.get("z-end")
-        svc = services.get(uuid, {}).get("tapi-connectivity:connectivity-service", {})
-        band = spectrum_of(svc)
+        band = spectrum_of(created_service(services[uuid])) if uuid in services else None
         row["centre-thz"] = round(band[0], 4) if band else None
         try:
             opm = json.load(twin_urlopen("${TWIN_URL}/internal/opm/" + uuid))
@@ -80,8 +79,15 @@ for f in flows:
             row["twin-status"] = opm.get("status", "ok")
             row["gsnr-db"], row["osnr-db"] = m.get("gsnr-db"), m.get("osnr-db")
             row["ber"], row["km"] = m.get("pre-fec-ber"), info.get("total-fiber-km")
-        except Exception:
+        except urllib.error.HTTPError as exc:
+            # The twin answered, and refused: a service it no longer holds
+            # (404), a token it does not accept (401/403), ...
+            row["twin-status"] = "http-%d" % exc.code
+        except (urllib.error.URLError, OSError):
             row["twin-status"] = "unreachable"
+        except (ValueError, KeyError) as exc:
+            # It answered with a body this script does not understand.
+            row["twin-status"] = "unreadable (%s)" % exc.__class__.__name__
 
     rows.append(row)
 

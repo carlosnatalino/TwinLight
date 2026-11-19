@@ -55,8 +55,7 @@ export const useServicesStore = create<ServicesState>()((set, get) => ({
     body: UpdateConnectivityServiceRequest
   ) => {
     const client = createClient(baseUrl);
-    const response = await client.updateService(uuid, body);
-    const updated = response["tapi-connectivity:connectivity-service"];
+    const updated = await client.updateService(uuid, body);
     set({
       services: get().services.map((s) => (s.uuid === uuid ? updated : s)),
     });

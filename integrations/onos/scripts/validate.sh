@@ -19,18 +19,23 @@ A_CITY="${VALIDATE_A:-Abilene}"
 Z_CITY="${VALIDATE_Z:-Atlanta}"
 
 PASS=0; FAIL=0
+# Each check's output, in a file of our own: mktemp names it unpredictably
+# (a fixed /tmp name can be pre-created or symlinked by another user) and
+# the trap removes it however the script ends.
+CHECK_OUT="$(mktemp "${TMPDIR:-/tmp}/twinlight-validate.XXXXXX")" || die "cannot create a temporary file"
+trap 'rm -f "${CHECK_OUT}"' EXIT
 check() {
   # check <description> <command...>
   local desc="$1"; shift
-  if "$@" >/tmp/twinlight-validate.$$ 2>&1; then
+  if "$@" >"${CHECK_OUT}" 2>&1; then
     printf '%s  PASS%s  %s\n' "${C_GREEN}" "${C_RESET}" "${desc}"
     PASS=$((PASS + 1))
   else
     printf '%s  FAIL%s  %s\n' "${C_RED}${C_BOLD}" "${C_RESET}" "${desc}"
-    sed 's/^/          /' /tmp/twinlight-validate.$$ | head -6
+    sed 's/^/          /' "${CHECK_OUT}" | head -6
     FAIL=$((FAIL + 1))
   fi
-  rm -f /tmp/twinlight-validate.$$
+  : > "${CHECK_OUT}"
 }
 note() { printf '        %s\n' "$*"; }
 
@@ -50,7 +55,7 @@ check "twin serves T-API v2.6.0 SIPs at its RESTCONF root" \
     SCRIPT_DIR='${SCRIPT_DIR}'; TWIN_URL='${TWIN_URL}'
     twin_auth_problem || exit 1
     twin_curl -sSf '${TWIN_DATA}/tapi-common:context/service-interface-point' \
-    | python3 -c 'import json,sys; n=len(json.load(sys.stdin)[\"tapi-common:context\"][\"service-interface-point\"]); assert n>0, \"no SIPs\"; print(n)'"
+    | python3 -c 'import json,sys; n=len(json.load(sys.stdin)[\"tapi-common:service-interface-point\"]); assert n>0, \"no SIPs\"; print(n)'"
 
 # --- Layer 2: the adapter --------------------------------------------------
 say "Layer 2 — T-API 2.6 to 2.1 adapter"
@@ -109,7 +114,7 @@ check "per-SIP resource is unwrapped for TapiDeviceLambdaQuery" \
 import json, sys
 d = json.load(sys.stdin)
 assert \"tapi-photonic-media:media-channel-service-interface-point-spec\" in d, \\
-    \"mc-pool must be at the top level, not wrapped in tapi-common:context\"
+    \"mc-pool must be at the top level, not wrapped as the twin answers it\"
 '"
 
 # --- Layer 3: ONOS ---------------------------------------------------------
@@ -210,11 +215,11 @@ check "the lightpath carries the T-API spectrum augment and live OPM" \
   bash -c "curl -sSf '${ADAPTER_URL}/adapter/status' | python3 -c '
 import json, sys
 sys.path.insert(0, \"${SCRIPT_DIR}\")
-from tapi_fields import spectrum_of, twin_urlopen
+from tapi_fields import created_service, spectrum_of, twin_urlopen
 svcs = json.load(sys.stdin)[\"onos-created-services\"]
 assert svcs, \"no ONOS-created services\"
 uuid, payload = next(iter(svcs.items()))
-svc = payload[\"tapi-connectivity:connectivity-service\"]
+svc = created_service(payload)
 # T-API 2.6 has no frequency-slot leaf; spectrum is an end-point augment.
 assert \"frequency-slot\" not in svc, \"non-standard frequency-slot key is back\"
 band = spectrum_of(svc)

@@ -140,7 +140,8 @@ def _create_service(data: str, base: str, sips: list, modulation: str, attempts:
             headers={"Content-Type": "application/json"},
         )
         try:
-            svc = json.load(urllib.request.urlopen(req))["tapi-connectivity:connectivity-service"]
+            # The 201 carries the entry as its GET does, an array of one.
+            (svc,) = json.load(urllib.request.urlopen(req))["tapi-connectivity:connectivity-service"]
         except HTTPError as exc:
             # 409 = not admissible on this pair (no route / no spectrum / QoT
             # below threshold). Anything else is a real error worth surfacing.
@@ -210,7 +211,7 @@ def main() -> None:
                 f"{base} requires an API token: set TWINLIGHT_API_TOKEN or pass --token"
             ) from None
         raise
-    sips = ctx["tapi-common:context"]["service-interface-point"]
+    sips = ctx["tapi-common:service-interface-point"]  # the list (RFC 8040 §4.3)
     if len(sips) < 2:
         raise SystemExit("Need at least 2 service interface points")
 

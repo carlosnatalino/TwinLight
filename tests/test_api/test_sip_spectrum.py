@@ -29,16 +29,14 @@ _BAND_UPPER_HZ = 195_496_875_000_000
 
 
 def _sip_uuids(app: TestClient) -> tuple[str, str]:
-    sips = app.get(_SIPS).json()["tapi-common:context"][
-        "service-interface-point"
-    ]
+    sips = app.get(_SIPS).json()["tapi-common:service-interface-point"]
     return sips[0]["uuid"], sips[1]["uuid"]
 
 
 def _pac(app: TestClient, uuid: str) -> dict:
     resp = app.get(f"{_SIPS}={uuid}")
     assert resp.status_code == 200
-    sip = resp.json()["tapi-common:context"]["service-interface-point"][0]
+    (sip,) = resp.json()["tapi-common:service-interface-point"]
     return sip[PHOTONIC_SIP_SPEC]["spectrum-capability-pac"]
 
 
@@ -104,7 +102,7 @@ class TestOccupancyIsSipLocal:
             },
         )
         assert resp.status_code == 201
-        end_point = resp.json()["tapi-connectivity:connectivity-service"][
+        end_point = resp.json()["tapi-connectivity:connectivity-service"][0][
             "end-point"
         ][0]
         service_band = end_point["layer-protocol-constraint"][0][
@@ -127,9 +125,7 @@ class TestOccupancyIsSipLocal:
         )
 
     def test_other_sips_stay_free(self, app: TestClient) -> None:
-        sips = app.get(_SIPS).json()["tapi-common:context"][
-            "service-interface-point"
-        ]
+        sips = app.get(_SIPS).json()["tapi-common:service-interface-point"]
         sip_a, sip_z = sips[0]["uuid"], sips[1]["uuid"]
         app.post(
             _BASE,
@@ -161,17 +157,16 @@ class TestOccupancyIsSipLocal:
                 }
             },
         )
-        uuid = created.json()["tapi-connectivity:connectivity-service"]["uuid"]
+        uuid = created.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
         assert app.delete(f"{_BASE}/connectivity-service={uuid}").status_code == 204
         assert _pac(app, sip_a)["occupied-spectrum"] == []
 
 
 def test_augment_present_in_the_context_listing(app: TestClient) -> None:
     """All three SIP resources carry the augment, not just the single GET."""
-    for path in ("/restconf/data/tapi-common:context", _SIPS):
-        sips = app.get(path).json()["tapi-common:context"][
-            "service-interface-point"
-        ]
+    full = app.get("/restconf/data/tapi-common:context").json()["tapi-common:context"]
+    listed = app.get(_SIPS).json()["tapi-common:service-interface-point"]
+    for sips in (full["service-interface-point"], listed):
         assert sips
         for sip in sips:
             assert PHOTONIC_SIP_SPEC in sip

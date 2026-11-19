@@ -128,18 +128,17 @@ class TestConfigurableRoot:
     ) -> None:
         client = _with_root(twin_config, root)
         data = f"{root}/data"
-        sips = client.get(f"{data}{_RESOURCE}").json()["tapi-common:context"][
-            "service-interface-point"
-        ]
+        sips = client.get(f"{data}{_RESOURCE}").json()["tapi-common:service-interface-point"]
         body = {_SVC_KEY: {"end-point": [
             tapi_end_point("a", sips[0]["uuid"]), tapi_end_point("z", sips[1]["uuid"]),
         ]}}
         resp = client.post(f"{data}{_CONNECTIVITY}", json=body)
         assert resp.status_code == 201, resp.text
-        uuid = resp.json()[_SVC_KEY]["uuid"]
+        uuid = resp.json()[_SVC_KEY][0]["uuid"]
         assert resp.headers["location"] == f"{data}{_SERVICES}={uuid}"
         name = [{"value-name": "service-name", "value": "renamed"}]
-        assert client.patch(f"{data}{_SERVICES}={uuid}", json={"name": name}).status_code == 200
+        patch = client.patch(f"{data}{_SERVICES}={uuid}", json={_SVC_KEY: [{"name": name}]})
+        assert patch.status_code == 200
         full = client.get(f"{data}/tapi-common:context").json()["tapi-common:context"]
         (svc,) = full["tapi-connectivity:connectivity-context"]["connectivity-service"]
         assert svc["name"] == name

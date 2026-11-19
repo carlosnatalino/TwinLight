@@ -13,7 +13,7 @@ _BASE = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-conte
 
 def _get_two_sips(app: TestClient) -> tuple[str, str]:
     data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
-    sips = data["tapi-common:context"]["service-interface-point"]
+    sips = data["tapi-common:service-interface-point"]
     assert len(sips) >= 2
     return sips[0]["uuid"], sips[1]["uuid"]
 
@@ -30,7 +30,7 @@ def _create_service(app: TestClient, sip_a: str, sip_z: str) -> str:
     }
     r = app.post(_BASE, json=payload)
     assert r.status_code == 201
-    return r.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    return r.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
 
 
 class TestSnapshot:

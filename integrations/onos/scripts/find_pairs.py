@@ -58,7 +58,9 @@ def _get(url: str) -> dict:
 def _cities(base: str) -> dict[str, str]:
     """City name -> SIP UUID, from the twin's T-API context."""
     payload = _get(f"{twin_data_root(base)}/tapi-common:context/service-interface-point")
-    sips = payload["tapi-common:context"]["service-interface-point"]
+    # The list is the body's one member (RFC 8040 §4.3); without it, a KeyError
+    # rather than "no SIPs".
+    sips = payload["tapi-common:service-interface-point"]
     out: dict[str, str] = {}
     for sip in sips:
         for name in sip.get("name", []):

@@ -9,6 +9,7 @@ import {
   createClient,
   parseRestconfRoot,
   resetRestconfRoots,
+  errorDetail,
 } from "@/api/client";
 
 const mockFetch = vi.fn();
@@ -155,7 +156,9 @@ describe("TapiApiClient authentication", () => {
   });
 
   it("keeps Content-Type alongside Authorization on writes", async () => {
-    mockFetch.mockResolvedValueOnce(makeResponse({}));
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ "tapi-connectivity:connectivity-service": [{ uuid: "svc-1" }] }, 201)
+    );
     await new TapiApiClient("http://dt", "tok-123").createConnectivityService(
       {} as never
     );
@@ -195,6 +198,42 @@ describe("TapiApiClient authentication", () => {
     expect(isAuthError(new ApiError(403, "x"))).toBe(true);
     expect(isAuthError(new ApiError(404, "x"))).toBe(false);
     expect(isAuthError(new NetworkError("x"))).toBe(false);
+  });
+});
+
+describe("connectivity-service entry bodies (RFC 7951 §5.4)", () => {
+  const entry = (body: unknown, status = 200) => {
+    mockFetch.mockResolvedValueOnce(makeResponse(body, status));
+  };
+
+  it("returns the created service from its array of one", async () => {
+    entry({ "tapi-connectivity:connectivity-service": [{ uuid: "svc-1" }] }, 201);
+    const created = await new TapiApiClient("http://dt").createConnectivityService({} as never);
+    expect(created.uuid).toBe("svc-1");
+  });
+
+  it("returns the patched service from its array of one", async () => {
+    entry({ "tapi-connectivity:connectivity-service": [{ uuid: "svc-1", "lifecycle-state": "PLANNED" }] });
+    const patched = await new TapiApiClient("http://dt").updateService("svc-1", {
+      "tapi-connectivity:connectivity-service": { "lifecycle-state": "PLANNED" },
+    });
+    expect(patched["lifecycle-state"]).toBe("PLANNED");
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe(
+      "http://dt/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=svc-1"
+    );
+    expect(init.method).toBe("PATCH");
+  });
+
+  it.each([
+    ["an object, the earlier body", { "tapi-connectivity:connectivity-service": { uuid: "svc-1" } }],
+    ["an empty list", { "tapi-connectivity:connectivity-service": [] }],
+    ["no member at all", {}],
+  ])("refuses %s rather than guessing", async (_what, body) => {
+    entry(body, 201);
+    await expect(
+      new TapiApiClient("http://dt").createConnectivityService({} as never)
+    ).rejects.toThrow("tapi-connectivity:connectivity-service");
   });
 });
 
@@ -246,6 +285,7 @@ describe("RESTCONF root discovery", () => {
 
   it("creates a service by POST on the connectivity-context (RFC 8040 §4.4.1)", async () => {
     const body = { "tapi-connectivity:connectivity-service": { "end-point": [] } };
+    dataBody = { "tapi-connectivity:connectivity-service": [{ uuid: "svc-1" }] };
     await new TapiApiClient("http://dt").createConnectivityService(body as never);
     expect(calls[1].url).toBe(
       `http://dt/restconf${CONTEXT}/tapi-connectivity:connectivity-context`
@@ -256,6 +296,7 @@ describe("RESTCONF root discovery", () => {
 
   it("creates on the container under a root other than /restconf", async () => {
     hostMeta = () => hostMetaResponse("/api");
+    dataBody = { "tapi-connectivity:connectivity-service": [{ uuid: "svc-1" }] };
     await new TapiApiClient("http://dt").createConnectivityService({} as never);
     expect(urls()[1]).toBe(
       "http://dt/api/data/tapi-common:context/tapi-connectivity:connectivity-context"
@@ -335,3 +376,21 @@ describe("parseRestconfRoot", () => {
     expect(parseRestconfRoot("<XRD><Link rel='lrdd' href='/x'/></XRD>")).toBe("");
   });
 });
+
+describe("errorDetail", () => {
+  it("shows the RESTCONF error-message of a T-API refusal (RFC 8040 §7)", () => {
+    const body = {
+      "ietf-restconf:errors": {
+        error: [{ "error-type": "application", "error-tag": "resource-denied",
+                  "error-message": "No path with sufficient GSNR" }],
+      },
+    };
+    expect(errorDetail(new ApiError(409, JSON.stringify(body)))).toBe("No path with sufficient GSNR");
+  });
+
+  it("falls back to FastAPI's detail, then to the raw message", () => {
+    expect(errorDetail(new ApiError(422, JSON.stringify({ detail: "bad" })))).toBe("bad");
+    expect(errorDetail(new ApiError(502, "Bad Gateway"))).toBe("HTTP 502: Bad Gateway");
+  });
+});
+

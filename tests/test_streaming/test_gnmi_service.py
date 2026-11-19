@@ -48,7 +48,7 @@ class Twin:
     async def add_service(self) -> str:
         sips = (await self.rest.get(
             "/restconf/data/tapi-common:context/service-interface-point"
-        )).json()["tapi-common:context"]["service-interface-point"]
+        )).json()["tapi-common:service-interface-point"]
         resp = await self.rest.post(
             "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
             json={"tapi-connectivity:connectivity-service": {"end-point": [
@@ -56,7 +56,7 @@ class Twin:
             ]}},
         )
         assert resp.status_code == 201, resp.text
-        return resp.json()["tapi-connectivity:connectivity-service"]["uuid"]
+        return resp.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
 
     async def close(self) -> None:
         await self.rest.aclose()

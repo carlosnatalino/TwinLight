@@ -47,6 +47,15 @@ class ConstraintError(ValueError):
     """A routing or topology constraint the twin cannot honour, or a malformed one."""
 
 
+class UnresolvedReferenceError(ConstraintError):
+    """A constraint naming a node or link that is not in the topology.
+
+    ``node-ref`` and ``link-ref`` are leafrefs into the topology context, so
+    this is the RFC 7950 §15.5 error (``data-missing``, ``instance-required``)
+    rather than a value the twin does not support.
+    """
+
+
 @dataclass(frozen=True)
 class NodeRef:
     """``tapi-topology:node-ref``."""

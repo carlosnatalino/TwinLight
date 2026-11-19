@@ -35,7 +35,7 @@ TAPI_DATE_AND_TIME = re.compile(r"^\d{14}\.\dZ$")
 
 def _sips(app: TestClient) -> list[str]:
     data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
-    return [s["uuid"] for s in data["tapi-common:context"]["service-interface-point"]]
+    return [s["uuid"] for s in data["tapi-common:service-interface-point"]]
 
 
 def create_service(app: TestClient, sip_a: str, sip_z: str) -> str:
@@ -43,7 +43,7 @@ def create_service(app: TestClient, sip_a: str, sip_z: str) -> str:
         "end-point": [tapi_end_point("a-end", sip_a), tapi_end_point("z-end", sip_z)],
     }})
     assert resp.status_code == 201, resp.text
-    return resp.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    return resp.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
 
 
 def _jobs(app: TestClient) -> list[dict]:
@@ -101,7 +101,7 @@ class TestLifecycle:
                 ],
             }
         })
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 204, resp.text  # replaced (RFC 8040 §4.5)
         [job] = _jobs(app)
         assert job["uuid"] == oam_job_uuid(svc_uuid)
         assert job["connectivity-service-end-point"][

@@ -9,7 +9,7 @@ _BASE_CONN = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-
 
 def _get_two_sips(app):
     data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
-    sips = data["tapi-common:context"]["service-interface-point"]
+    sips = data["tapi-common:service-interface-point"]
     assert len(sips) >= 2
     return sips[0]["uuid"], sips[1]["uuid"]
 
@@ -60,10 +60,10 @@ def test_spectrum_grid_includes_all_connectivity_services(app) -> None:
     sip_a, sip_z = _get_two_sips(app)
     r1 = app.post(_BASE_CONN, json=_create_payload(sip_a, sip_z))
     assert r1.status_code == 201
-    uuid1 = r1.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    uuid1 = r1.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
     r2 = app.post(_BASE_CONN, json=_create_payload(sip_a, sip_z))
     assert r2.status_code == 201
-    uuid2 = r2.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    uuid2 = r2.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
     grid = app.get("/internal/spectrum-grid")
     assert grid.status_code == 200
     alloc = grid.json()["service-allocation"]
@@ -83,7 +83,7 @@ def test_spectrum_grid_occupancy_includes_every_allocated_service(app) -> None:
     sip_a, sip_z = _get_two_sips(app)
     r = app.post(_BASE_CONN, json=_create_payload(sip_a, sip_z))
     assert r.status_code == 201
-    svc_uuid = r.json()["tapi-connectivity:connectivity-service"]["uuid"]
+    svc_uuid = r.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
     grid = app.get("/internal/spectrum-grid")
     assert grid.status_code == 200
     data = grid.json()

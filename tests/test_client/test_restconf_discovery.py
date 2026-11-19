@@ -70,8 +70,7 @@ def _client(twin_config: TwinConfig, token: str | None = None) -> tuple[TapiClie
 
 
 async def _sips(rest: TapiClient) -> list[dict]:
-    body = await rest.get_sips()
-    return body["tapi-common:context"]["service-interface-point"]
+    return await rest.get_sips()
 
 
 class TestTapiClient:

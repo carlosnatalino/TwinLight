@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { CheckCircle, XCircle, Loader2, PlusCircle, ArrowLeft } from "lucide-react";
 import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
-import { createClient, ApiError } from "@/api/client";
+import { createClient, ApiError, errorDetail } from "@/api/client";
 import { extractName } from "@/lib/tapi-helpers";
 import type { ModulationFormat, ServiceInterfacePoint, TapiNode } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -191,19 +191,12 @@ export default function AddServicePage() {
 
     try {
       const client = createClient(baseUrl);
-      const result = await client.createConnectivityService(body);
-      setCreatedUuid(result["tapi-connectivity:connectivity-service"].uuid);
+      const created = await client.createConnectivityService(body);
+      setCreatedUuid(created.uuid);
     } catch (err) {
       if (err instanceof ApiError) {
-        // Try to parse a structured error detail from the response body
-        let detail = err.message;
-        try {
-          const parsed = JSON.parse(err.message.replace(/^HTTP \d+: /, ""));
-          if (typeof parsed?.detail === "string") detail = parsed.detail;
-        } catch {
-          // keep raw message
-        }
-        setErrorMsg(detail);
+        // The RESTCONF error-message of the refusal (RFC 8040 §7).
+        setErrorMsg(errorDetail(err));
       } else {
         setErrorMsg(err instanceof Error ? err.message : "Unknown error");
       }

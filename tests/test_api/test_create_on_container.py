@@ -63,7 +63,7 @@ class TestConnectivityService:
         refs = MeshRefs(mesh.app.state.context)
         resp = mesh.post(f"/restconf{_CONNECTIVITY}", json=_service(refs, "trx A", "trx C"))
         assert resp.status_code == 201, resp.text
-        created = resp.json()[_SVC_KEY]
+        (created,) = resp.json()[_SVC_KEY]
         assert [s.uuid for s in mesh.app.state.context.get_services()] == [created["uuid"]]
 
         location = resp.headers["location"]
@@ -72,7 +72,7 @@ class TestConnectivityService:
         )
         fetched = mesh.get(location)
         assert fetched.status_code == 200, fetched.text
-        assert fetched.json() == {_SVC_KEY: created}
+        assert fetched.json() == {_SVC_KEY: [created]}
 
     def test_the_list_path_takes_no_post(self, mesh: TestClient) -> None:
         refs = MeshRefs(mesh.app.state.context)
@@ -101,7 +101,7 @@ class TestConnectivityService:
         assert resp.status_code == 201, resp.text
         location = resp.headers["location"]
         assert location.endswith("/connectivity-service=svc%201%3Aa")
-        assert mesh.get(location).json()[_SVC_KEY]["uuid"] == "svc 1:a"
+        assert mesh.get(location).json()[_SVC_KEY][0]["uuid"] == "svc 1:a"
 
 
 class TestPathCompService:
@@ -111,7 +111,7 @@ class TestPathCompService:
             f"/restconf{_PATH_COMPUTATION}", json=_path_comp_service(refs, "trx A", "trx C"),
         )
         assert resp.status_code == 201, resp.text
-        created = resp.json()[_PCS_KEY]
+        (created,) = resp.json()[_PCS_KEY]
         assert created["path"]
 
         location = resp.headers["location"]
@@ -120,7 +120,7 @@ class TestPathCompService:
         )
         fetched = mesh.get(location)
         assert fetched.status_code == 200, fetched.text
-        assert fetched.json() == {_PCS_KEY: created}
+        assert fetched.json() == {_PCS_KEY: [created]}
 
     def test_the_list_path_takes_no_post(self, mesh: TestClient) -> None:
         refs = MeshRefs(mesh.app.state.context)
@@ -150,10 +150,10 @@ class TestUnderAnotherRoot:
         refs = MeshRefs(client.app.state.context)
         resp = client.post(f"{root}{_CONNECTIVITY}", json=_service(refs, "trx A", "trx C"))
         assert resp.status_code == 201, resp.text
-        created = resp.json()[_SVC_KEY]
+        (created,) = resp.json()[_SVC_KEY]
         location = resp.headers["location"]
         assert location == f"{root}{_CONNECTIVITY}/connectivity-service={created['uuid']}"
-        assert client.get(location).json() == {_SVC_KEY: created}
+        assert client.get(location).json() == {_SVC_KEY: [created]}
         assert client.post(
             f"{root}{_CONNECTIVITY}/connectivity-service", json=_service(refs, "trx B", "trx C"),
         ).status_code == 405
@@ -165,10 +165,10 @@ class TestUnderAnotherRoot:
             f"{root}{_PATH_COMPUTATION}", json=_path_comp_service(refs, "trx A", "trx C"),
         )
         assert resp.status_code == 201, resp.text
-        created = resp.json()[_PCS_KEY]
+        (created,) = resp.json()[_PCS_KEY]
         location = resp.headers["location"]
         assert location == f"{root}{_PATH_COMPUTATION}/path-comp-service={created['uuid']}"
-        assert client.get(location).json() == {_PCS_KEY: created}
+        assert client.get(location).json() == {_PCS_KEY: [created]}
         assert client.post(
             f"{root}{_PATH_COMPUTATION}/path-comp-service",
             json=_path_comp_service(refs, "trx B", "trx C"),

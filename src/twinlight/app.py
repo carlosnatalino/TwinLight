@@ -26,6 +26,7 @@ from twinlight.api import (
     oam,
     parameters,
     path_computation,
+    restconf_resources,
     streaming,
     topology,
     transparent,
@@ -39,10 +40,20 @@ from twinlight.api import (
 from twinlight.api.middleware import (
     RESTCONF_MEDIA_TYPE,
     AllowHeaderMiddleware,
+    HeadMiddleware,
+    OptionsMiddleware,
     PathDecodeMiddleware,
-    RestconfContentTypeMiddleware,
+    RestconfHeadersMiddleware,
+    RestconfRequestMiddleware,
     TokenAuthMiddleware,
 )
+from twinlight.api.restconf import (
+    RestconfError,
+    error_type,
+    is_restconf_path,
+    validation_error_tag,
+)
+from twinlight.api.restconf_resources import YANG_LIBRARY_REVISION
 from twinlight.auth import TokenAuthenticator
 from twinlight.config import TwinConfig
 from twinlight.state.context import TapiContext
@@ -55,13 +66,16 @@ def _restconf_error_response(
     error_message: str,
     error_path: str | None = None,
     headers: Mapping[str, str] | None = None,
+    error_app_tag: str | None = None,
 ) -> JSONResponse:
     """Build a JSONResponse with ietf-restconf:errors format (RFC 8040)."""
     err: dict = {
-        "error-type": "application",
+        "error-type": error_type(error_tag),
         "error-tag": error_tag,
         "error-message": error_message,
     }
+    if error_app_tag:
+        err["error-app-tag"] = error_app_tag
     if error_path:
         err["error-path"] = error_path
     body = {"ietf-restconf:errors": {"error": [err]}}
@@ -73,12 +87,27 @@ def _restconf_error_response(
     )
 
 
-def _http_status_to_error_tag(status_code: int) -> str:
-    """Map HTTP status to RESTCONF error-tag (RFC 8040)."""
+def _http_status_to_error_tag(status_code: int, restconf: bool = True) -> str:
+    """Map an HTTP status to the RFC 8040 §7 error-tag of an error that names none.
+
+    A 404 on a RESTCONF resource is ``invalid-value``: RFC 8040 §4.3, "If a
+    retrieval request for a data resource represents an instance that does
+    not exist, then an error response containing a '404 Not Found'
+    status-line MUST be returned by the server. The error-tag value
+    'invalid-value' is used in this case"; §4.5, §4.6 and §4.7 let PUT,
+    PATCH and DELETE answer the same 404 ("A server MAY return a '404 Not
+    Found' status-line ... The error-tag value 'invalid-value' is used in
+    this case"), which keeps one answer for a missing resource whatever the
+    method. ``data-missing``
+    is paired with 409 only by the §7 table, and the IETF rejected
+    re-pairing it with 404 (erratum 5565). The proprietary endpoints
+    (``restconf=False``) keep ``data-missing`` on a 404: they are outside
+    the T-API rule, and nothing in this change is meant to alter them.
+    """
     if status_code in (401, 403):
         return "access-denied"
     if status_code == 404:
-        return "data-missing"
+        return "invalid-value" if restconf else "data-missing"
     if status_code == 405:
         return "operation-not-supported"
     if status_code == 409:
@@ -93,8 +122,9 @@ def _http_status_to_error_tag(status_code: int) -> str:
 
 
 # RFC 8040 §3.3 requires the root resource to expose the YANG library
-# version, which is the revision date of ietf-yang-library (RFC 8525).
-_YANG_LIBRARY_VERSION = "2019-01-04"
+# version, which is the revision date of ietf-yang-library (RFC 8525), the
+# revision restconf_resources serves.
+_YANG_LIBRARY_VERSION = YANG_LIBRARY_REVISION
 
 
 def _add_restconf_root_resources(app: FastAPI, root: str) -> None:
@@ -202,20 +232,37 @@ def create_app(config: TwinConfig) -> FastAPI:
     # AllowHeaderMiddleware is innermost of all: it rewrites the Allow header
     # of every 405 from the router's matching (RFC 9110 §15.5.6), so it must
     # see the decoded path and the exception handler's response.
+    # OptionsMiddleware, just outside it and inside PathDecodeMiddleware and
+    # the token check, answers OPTIONS on every route from the same method
+    # set (RFC 8040 §4.1). HeadMiddleware, just inside CORS and outside the
+    # token check, runs a HEAD as its GET and drops the body (RFC 8040
+    # §4.2), so it is authenticated as the GET would be.
+    # RestconfRequestMiddleware, inside the token check and path decoding,
+    # refuses the query parameters, Accept and body media types RFC 8040
+    # refuses (400, 406, 415); RestconfHeadersMiddleware, just inside CORS,
+    # stamps Content-Type and Cache-Control on every RESTCONF response, a
+    # 401 included.
+    refusals = (transparent.refused_methods,)
+    app.add_middleware(AllowHeaderMiddleware, refusals=refusals)
     app.add_middleware(
-        AllowHeaderMiddleware, refusals=(transparent.refused_methods,)
+        OptionsMiddleware,
+        restconf_root=config.server.restconf_root,
+        refusals=refusals,
+    )
+    app.add_middleware(
+        RestconfRequestMiddleware, restconf_root=config.server.restconf_root
     )
     app.add_middleware(PathDecodeMiddleware)
-    app.add_middleware(
-        RestconfContentTypeMiddleware,
-        restconf_root=config.server.restconf_root,
-    )
     if authenticator.enabled:
         app.add_middleware(
             TokenAuthMiddleware,
             authenticator=authenticator,
             public_paths=PUBLIC_PATHS,
         )
+    app.add_middleware(HeadMiddleware)
+    app.add_middleware(
+        RestconfHeadersMiddleware, restconf_root=config.server.restconf_root
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.server.cors_origins,
@@ -256,6 +303,9 @@ def create_app(config: TwinConfig) -> FastAPI:
         streaming.router,
     ):
         app.include_router(tapi_router, prefix=root)
+    # The RESTCONF protocol's own data resources: the datastore, the YANG
+    # library and restconf-state (RFC 8040 §3.3.1, §9, §10).
+    app.include_router(restconf_resources.router, prefix=root)
 
     app.include_router(internal.router)
     app.include_router(diagrams.router)
@@ -268,6 +318,7 @@ def create_app(config: TwinConfig) -> FastAPI:
 
     if root:
         _add_restconf_root_resources(app, root)
+        app.include_router(restconf_resources.operations_router, prefix=root)
 
     if authenticator.enabled:
         _document_bearer_auth(app, PUBLIC_PATHS)
@@ -281,9 +332,15 @@ def create_app(config: TwinConfig) -> FastAPI:
         request: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
         msg = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-        tag = _http_status_to_error_tag(exc.status_code)
-        # Carry the exception's headers through: a 401 without its
-        # WWW-Authenticate challenge, or a 405 without Allow, is malformed.
+        if isinstance(exc, RestconfError):
+            # Carry the exception's headers through: a 401 without its
+            # WWW-Authenticate challenge, or a 405 without Allow, is malformed.
+            return _restconf_error_response(
+                exc.status_code, exc.error_tag, msg, error_path=exc.error_path,
+                headers=exc.headers, error_app_tag=exc.error_app_tag,
+            )
+        restconf = is_restconf_path(request.url.path, root)
+        tag = _http_status_to_error_tag(exc.status_code, restconf)
         return _restconf_error_response(
             exc.status_code, tag, msg, headers=exc.headers
         )
@@ -295,6 +352,13 @@ def create_app(config: TwinConfig) -> FastAPI:
         msg = "; ".join(
             f"{e['loc']}: {e['msg']}" for e in exc.errors()
         ) if exc.errors() else str(exc)
+        if is_restconf_path(request.url.path, root):
+            # RFC 8040 does not use 422: §7 pairs every tag that describes a
+            # request the server cannot accept as sent with 400.
+            return _restconf_error_response(400, validation_error_tag(exc.errors()), msg)
+        # The proprietary endpoints keep FastAPI's 422: they are outside the
+        # T-API rule, and their clients (the UI's diagrams and compute-path,
+        # the soft-failure client, scripts) are written against it.
         return _restconf_error_response(422, "invalid-value", msg)
 
     return app

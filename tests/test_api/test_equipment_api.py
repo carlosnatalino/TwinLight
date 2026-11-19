@@ -50,15 +50,16 @@ class TestLookups:
         context = app.get(_BASE).json()["tapi-equipment:physical-context"]
         device = context["device"][0]
         equipment = device["equipment"][0]
-        got = app.get(f"{_BASE}/device={device['uuid']}").json()["tapi-equipment:device"]
-        assert got == device
+        # A list entry is the body's one member, an array of one (RFC 7951 §5.4).
+        got = app.get(f"{_BASE}/device={device['uuid']}").json()
+        assert got == {"tapi-equipment:device": [device]}
         got_eq = app.get(
             f"{_BASE}/device={device['uuid']}/equipment={equipment['uuid']}"
-        ).json()["tapi-equipment:equipment"]
-        assert got_eq == equipment
+        ).json()
+        assert got_eq == {"tapi-equipment:equipment": [equipment]}
         span = context["physical-span"][0]
-        assert app.get(f"{_BASE}/physical-span={span['uuid']}").json()[
-            "tapi-equipment:physical-span"] == span
+        assert app.get(f"{_BASE}/physical-span={span['uuid']}").json() == {
+            "tapi-equipment:physical-span": [span]}
         assert app.get(f"{_BASE}/device").json()["tapi-equipment:device"] == context["device"]
         assert app.get(f"{_BASE}/physical-span").json()[
             "tapi-equipment:physical-span"] == context["physical-span"]

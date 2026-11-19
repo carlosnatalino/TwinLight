@@ -19,7 +19,7 @@ modules implement only the standard (see
 | # | Issue | Handled in |
 |---|-------|------------|
 | A1 | ONOS parses a port number from the SIP UUID tail | Adapter |
-| A2 | ONOS reads the per-SIP GET response unwrapped | Adapter — and a separate twin issue |
+| A2 | ONOS reads the per-SIP GET response unwrapped | Adapter |
 | A3 | ONOS deletes pre-existing connectivity services | Adapter |
 | A4 | ONOS cannot express a modulation format | Adapter (policy) |
 | A5 | ONOS reads the T-API **2.1** photonic SIP shape | Adapter |
@@ -31,6 +31,7 @@ modules implement only the standard (see
 | B5 | Assigned-spectrum location | Twin |
 | B6 | No invented `tapi-photonic-media` resources | Twin |
 | B7 | Create by POST on the connectivity-context | Twin |
+| B8 | Standard response bodies | Twin |
 
 ---
 
@@ -62,27 +63,19 @@ annotation.
 ### A2. Per-SIP GET must be unwrapped
 
 ONOS reads the photonic spec from the **top level** of the response to
-`.../service-interface-point={uuid}`. TwinLight returns the *parent* container:
-
-```json
-{"tapi-common:context": {"service-interface-point": [ { ... } ]}}
-```
-
-Neither is what RFC 8040 §4.3 specifies. For a GET on a list-entry data
-resource the body should be the target resource keyed by its own identifier,
-module-qualified per RFC 7951 §4:
+`.../service-interface-point={uuid}`: it expects the bare SIP object. RFC 8040
+§4.3 returns the target resource, module-qualified per RFC 7951 §4 and, being
+a list entry, as an array of one per RFC 7951 §5.4 — which is what the twin
+answers:
 
 ```json
 {"tapi-common:service-interface-point": [ { ... } ]}
 ```
 
-So **both sides deviate here, in different directions**: ONOS wants no wrapper
-at all, and TwinLight uses the wrong one.
-
-**Handled in the adapter**, which is needed either way — fixing the twin would
-still not satisfy ONOS. The twin's side is a known issue that affects every
-standards-conformant client, and a fix is planned; see
-[docs/ROADMAP.md](../../docs/ROADMAP.md).
+**Handled in the adapter**, which serves ONOS the bare object. Earlier
+releases of the twin answered with the parent container instead,
+`{"tapi-common:context": {"service-interface-point": [ … ]}}`, so both sides
+deviated; the twin's side is fixed (B8), and what is left is ONOS's.
 
 ### A3. ONOS deletes pre-existing connectivity services
 
@@ -205,9 +198,11 @@ and RFC 7951 §5.4 is categorical: *"A list instance is encoded as a name/array
 pair"* — no exception for a single entry. `connectivity-service` is a YANG
 `list`, so the array-of-one ONOS sends is the correct encoding.
 
-POST and PUT accept both the array and the bare-object spelling. A multi-entry
-array is a `400`, since the handler admits one service, and body validation
-errors are reported as `422`.
+POST and PUT accept both the array and the bare-object spelling, and the
+adapter forwards ONOS's array as it is. A multi-entry
+array is a `400`, since the handler admits one service, and so is a body that
+does not validate, with the RFC 8040 §7 `error-tag` that names the problem
+(`malformed-message`, `missing-element`, `bad-element`, `invalid-value`).
 
 ### B4. Modulation format location
 
@@ -224,8 +219,8 @@ with `MT` identities — note that ONF spells 16QAM as `MT_DP-QAM16`. The twin
 emits and accepts only that location; the module-prefixed identityref spelling
 is accepted too, per RFC 7951 §6.8.
 
-A payload carrying a bare top-level `modulation-format` key gets a **422 naming
-the standard location**, rather than silently defaulting to DP-QPSK — which
+A payload carrying a bare top-level `modulation-format` key gets a **400
+(`invalid-value`) naming the standard location**, rather than silently defaulting to DP-QPSK — which
 would provision a working lightpath of the wrong format.
 
 ### B5. Assigned-spectrum location
@@ -273,6 +268,20 @@ The twin now creates on the container (and on the
 `path-computation-context` for a `path-comp-service`), answers `201` with a
 `Location` naming the new entry, and refuses a POST on the list path with
 `405`. The adapter forwards the create to the same path ONOS used.
+
+### B8. Standard response bodies
+
+RFC 8040 §4.3 has a GET return its target resource, and RFC 7951 §4 names the
+body's one member with the module that defines it. The twin's SIP list
+answers `{"tapi-common:service-interface-point": […]}` and every list entry
+— a SIP, a connectivity-service, a path-comp-service — `{"<module>:<list>":
+[{…}]}`, an array of one (RFC 7951 §5.4). The `201` of a create carries that
+same body. Earlier releases answered the SIP resources with the context's
+envelope and some entries as bare objects.
+
+The adapter reads the SIP list strictly: a body without
+`tapi-common:service-interface-point` is a `502` to ONOS, never an empty port
+list.
 
 ---
 

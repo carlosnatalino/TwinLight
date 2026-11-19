@@ -392,10 +392,13 @@ then authentication, then the rest):
 | Middleware | Purpose |
 |------------|---------|
 | `CORSMiddleware` | Answers preflights and adds CORS headers, including to a 401, so a browser client can read it. |
+| `RestconfHeadersMiddleware` | Stamps `Content-Type: application/yang-data+json` on every JSON body under the RESTCONF root (the API resource included) and `Cache-Control: no-cache` on every RESTCONF response (RFC 8040 §3.3, §5.5). Just inside CORS, so a 401 gets them too. |
+| `HeadMiddleware` | Runs a `HEAD` as the `GET` it mirrors and drops the body (RFC 8040 §4.2), on every route. Outside authentication, so a `HEAD` is authenticated as its `GET` would be and a 401 to it has no body either. |
 | `TokenAuthMiddleware` | Only when API tokens are configured. A pure ASGI middleware that rejects every request without a valid bearer token (401, RFC 6750 challenge, RFC 8040 `access-denied` body) before routing; `/health` is the one exemption. Without tokens it is not installed. Its gRPC counterpart, `streaming/interceptors.py:TokenAuthInterceptor`, checks the same `app.state.authenticator` and is likewise installed only with tokens. |
 | `PathDecodeMiddleware` | URL-decodes `%3A` → `:` before routing. Browsers percent-encode colons in paths per the WHATWG URL spec, but T-API RESTCONF paths contain literal colons. |
-| `RestconfContentTypeMiddleware` | Sets `Content-Type: application/yang-data+json` on all `{restconf_root}/data/` responses, as RESTCONF requires. |
-| `AllowHeaderMiddleware` | Innermost. Rewrites the `Allow` header of every 405 to name all the methods the resource serves (RFC 9110 §15.5.6), from the router's own matching: Starlette names only the first route that matches the path, and FastAPI registers one route per method. A route added later is covered automatically; only a handler that refuses a method its route serves (`api/transparent.py:refused_methods`) has to say so. |
+| `RestconfRequestMiddleware` | Under the RESTCONF root only, after authentication: refuses an unexpected or repeated query parameter (400), an `Accept` without JSON (406) and a body that is not JSON (415), as RFC 8040 §4.8 and §5.2 require. |
+| `OptionsMiddleware` | Answers `OPTIONS` on every route with `200` and the `Allow` set a 405 there would name, plus `Accept-Patch` on a RESTCONF resource that takes `PATCH` (RFC 8040 §4.1). Inside authentication and path decoding. |
+| `AllowHeaderMiddleware` | Innermost. Rewrites the `Allow` header of every 405 to name all the methods the resource serves (RFC 9110 §15.5.6), from the router's own matching, plus `HEAD` where `GET` is and `OPTIONS`: Starlette names only the first route that matches the path, and FastAPI registers one route per method. A route added later is covered automatically; only a handler that refuses a method its route serves (`api/transparent.py:refused_methods`) has to say so. |
 
 ## Extension points
 

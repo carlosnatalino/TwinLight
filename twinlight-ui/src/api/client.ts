@@ -9,11 +9,10 @@ import type {
   HealthResponse,
   WhoamiResponse,
   CreateConnectivityServiceRequest,
-  CreateConnectivityServiceResponse,
+  ConnectivityServiceEntryResponse,
   ConnectivityService,
   ConnectivityServiceListResponse,
   UpdateConnectivityServiceRequest,
-  UpdateConnectivityServiceResponse,
   ServiceInfoResponse,
   PhysicalContextResponse,
   TransparentElementListResponse,
@@ -54,6 +53,24 @@ export function isAuthError(err: unknown): boolean {
  * user can act on rather than the RESTCONF error body; every other status
  * keeps the raw body, which some pages parse for its error details.
  */
+/**
+ * The message to show for an ApiError: the RFC 8040 `error-message` of a
+ * RESTCONF error body (`ietf-restconf:errors`), which is what every T-API
+ * error carries, else FastAPI's `detail`, else the raw text.
+ */
+export function errorDetail(err: ApiError): string {
+  const raw = err.message.replace(/^HTTP \d+: /, "");
+  try {
+    const parsed = JSON.parse(raw);
+    const message = parsed?.["ietf-restconf:errors"]?.error?.[0]?.["error-message"];
+    if (typeof message === "string") return message;
+    if (typeof parsed?.detail === "string") return parsed.detail;
+  } catch {
+    // not JSON: keep the raw message
+  }
+  return err.message;
+}
+
 async function apiErrorFrom(resp: Response): Promise<ApiError> {
   if (resp.status === 401 || resp.status === 403) {
     return new ApiError(
@@ -105,6 +122,21 @@ const restconfRoots = new Map<string, Promise<string>>();
 /** Forget every discovered root (tests; a twin restarted with a new root). */
 export function resetRestconfRoots(): void {
   restconfRoots.clear();
+}
+
+/**
+ * The one connectivity-service of an entry body: RFC 7951 §5.4 encodes a
+ * list entry as an array of one. Any other body is an error, never a
+ * service read from the wrong place.
+ */
+export function singleService(body: ConnectivityServiceEntryResponse): ConnectivityService {
+  const entries = body?.["tapi-connectivity:connectivity-service"];
+  if (!Array.isArray(entries) || entries.length !== 1) {
+    throw new Error(
+      "The response carries no tapi-connectivity:connectivity-service entry (an array of one)"
+    );
+  }
+  return entries[0];
 }
 
 export class TapiApiClient {
@@ -295,13 +327,16 @@ export class TapiApiClient {
   }
 
   // RFC 8040 §4.4.1: a list entry is created by POST on its parent, here
-  // the connectivity-context; the new connectivity-service is the body.
+  // the connectivity-context; the new connectivity-service is the body. The
+  // 201 carries the created entry, as an array of one.
   async createConnectivityService(
     body: CreateConnectivityServiceRequest
-  ): Promise<CreateConnectivityServiceResponse> {
-    return this.post<CreateConnectivityServiceResponse>(
-      await this.tapi("/tapi-common:context/tapi-connectivity:connectivity-context"),
-      body
+  ): Promise<ConnectivityService> {
+    return singleService(
+      await this.post<ConnectivityServiceEntryResponse>(
+        await this.tapi("/tapi-common:context/tapi-connectivity:connectivity-context"),
+        body
+      )
     );
   }
 
@@ -323,13 +358,16 @@ export class TapiApiClient {
     return services;
   }
 
+  /** A plain patch (RFC 8040 §4.6.1); the 200 carries the patched entry. */
   async updateService(
     uuid: string,
     body: UpdateConnectivityServiceRequest
-  ): Promise<UpdateConnectivityServiceResponse> {
-    return this.patch<UpdateConnectivityServiceResponse>(
-      await this.tapi(`/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`),
-      body
+  ): Promise<ConnectivityService> {
+    return singleService(
+      await this.patch<ConnectivityServiceEntryResponse>(
+        await this.tapi(`/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${uuid}`),
+        body
+      )
     );
   }
 

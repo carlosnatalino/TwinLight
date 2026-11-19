@@ -47,7 +47,7 @@ class TestGetSips:
 
     def test_returns_sip_list(self, app: TestClient) -> None:
         data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
-        sips = data["tapi-common:context"]["service-interface-point"]
+        sips = data["tapi-common:service-interface-point"]
         assert len(sips) == 2
 
 
@@ -55,7 +55,7 @@ class TestGetSipByUuid:
     def test_returns_existing_sip(self, app: TestClient) -> None:
         # Get a SIP uuid first
         data = app.get("/restconf/data/tapi-common:context/service-interface-point").json()
-        sip_uuid = data["tapi-common:context"]["service-interface-point"][0]["uuid"]
+        sip_uuid = data["tapi-common:service-interface-point"][0]["uuid"]
         resp = app.get(f"/restconf/data/tapi-common:context/service-interface-point={sip_uuid}")
         assert resp.status_code == 200
 

@@ -55,7 +55,7 @@ def test_the_default_form_is_admitted(client: TestClient) -> None:
     ctx = client.app.state.context
     resp = client.post(_CREATE, json=_request("defaults", ctx))
     assert resp.status_code == 201, resp.text
-    service = resp.json()["tapi-connectivity:connectivity-service"]
+    service = resp.json()["tapi-connectivity:connectivity-service"][0]
     assert [ep["direction"] for ep in service["end-point"]] == ["SOURCE", "SINK"]
     # Automatic format: whatever admission chose is reported.
     cfg = service["end-point"][0]["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0]
@@ -66,7 +66,7 @@ def test_every_option_of_the_form_is_honoured(client: TestClient) -> None:
     ctx = client.app.state.context
     resp = client.post(_CREATE, json=_request("full", ctx))
     assert resp.status_code == 201, resp.text
-    service = resp.json()["tapi-connectivity:connectivity-service"]
+    service = resp.json()["tapi-connectivity:connectivity-service"][0]
     cfg = service["end-point"][0]["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0]
     assert cfg["modulation"]["standard-modulation-technique"] == "MT_DP-QAM16"
     assert cfg["central-frequency"] == 191_306_250_000_000
@@ -82,9 +82,37 @@ def test_the_service_list_answers_with_the_member_the_ui_reads(client: TestClien
     ctx = client.app.state.context
     resp = client.post(_CREATE, json=_request("defaults", ctx))
     assert resp.status_code == 201, resp.text
-    created = resp.json()["tapi-connectivity:connectivity-service"]
+    created = resp.json()["tapi-connectivity:connectivity-service"][0]
     body = client.get(_SERVICE_LIST).json()
     assert set(body) == {"tapi-connectivity:connectivity-service"}
     assert [s["uuid"] for s in body["tapi-connectivity:connectivity-service"]] == [
         created["uuid"]
     ]
+
+
+def _the_created_service(resp) -> dict:
+    """What createConnectivityService (singleService) returns: the one entry
+    of an array of one, any other body an error."""
+    entries = resp.json()["tapi-connectivity:connectivity-service"]
+    assert isinstance(entries, list) and len(entries) == 1, entries
+    return entries[0]
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("administrative-state", "LOCKED"), ("lifecycle-state", "PLANNED"),
+])
+def test_the_state_change_the_ui_sends_is_applied(
+    client: TestClient, field: str, value: str,
+) -> None:
+    """ServicesPage.handleUpdate sends {"tapi-connectivity:connectivity-service":
+    {field: value}} as a PATCH; earlier releases ignored the envelope and
+    answered 200 without changing anything."""
+    ctx = client.app.state.context
+    created = _the_created_service(client.post(_CREATE, json=_request("defaults", ctx)))
+    url = f"{_SERVICE_LIST}={created['uuid']}"
+    resp = client.patch(url, json={"tapi-connectivity:connectivity-service": {field: value}})
+    assert resp.status_code == 200, resp.text
+    patched = _the_created_service(resp)  # what the store puts in its list
+    assert patched[field] == value
+    assert client.get(url).json() == resp.json()
+

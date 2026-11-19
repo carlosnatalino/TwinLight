@@ -48,11 +48,24 @@ def _allow(resp) -> list[str]:
     return [m.strip() for m in value.split(",")] if value.strip() else []
 
 
+def _with_head_and_options(methods: set[str] | list[str]) -> set[str]:
+    """``methods`` with what the middleware serves on top of the routes:
+    OPTIONS on every resource, HEAD wherever GET is (RFC 8040 §4.1, §4.2)."""
+    served = set(methods)
+    if served:
+        served.add("OPTIONS")
+    if "GET" in served:
+        served.add("HEAD")
+    return served
+
+
 def _assert_405(resp, allowed: set[str] | list[str]) -> None:
+    """A 405 whose Allow is ``allowed`` (the routed methods) plus HEAD and OPTIONS."""
     assert resp.status_code == 405, (resp.request.method, resp.request.url)
     allow = _allow(resp)
     assert len(allow) == len(set(allow)), allow
-    assert set(allow) == set(allowed), (resp.request.method, resp.request.url, allow)
+    expected = _with_head_and_options(allowed) - {resp.request.method}
+    assert set(allow) == expected, (resp.request.method, resp.request.url, allow)
     if resp.request.method == "HEAD":
         return  # no body on a HEAD response
     assert resp.headers["content-type"].startswith(_RESTCONF)
@@ -80,7 +93,7 @@ class TestEveryDocumentedPath:
         failures = []
         refused_somewhere = False
         for path, operations in paths.items():
-            documented = {m.upper() for m in operations}
+            documented = _with_head_and_options({m.upper() for m in operations})
             url = _concrete(path)
             responses = {m: _send(client, m, url) for m in _METHODS}
             # Served: the methods that do not themselves answer 405.
@@ -122,7 +135,7 @@ class TestMultiRoutePaths:
         if path not in paths:
             pytest.skip(f"{path} is no longer a documented path")
         documented = {m.upper() for m in paths[path]}
-        for method in sorted(set(_METHODS) - documented):
+        for method in sorted(set(_METHODS) - _with_head_and_options(documented)):
             _assert_405(_send(client, method, _concrete(path)), documented)
 
     def test_the_two_reported_examples(self, app: TestClient) -> None:
@@ -166,8 +179,9 @@ class TestHandWritten:
             _assert_405(resp, {"GET", "PUT", "PATCH", "DELETE"})
             assert "Nothing can be created" in resp.json()[
                 "ietf-restconf:errors"]["error"][0]["error-message"]
-        _assert_405(_send(app, "OPTIONS", "/transparent/data"),
-                    {"GET", "PUT", "PATCH", "DELETE"})
+        options = _send(app, "OPTIONS", "/transparent/data")
+        assert options.status_code == 200
+        assert set(_allow(options)) == {"GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"}
 
     @pytest.mark.parametrize("datastore", [
         "startup", "operational", "ietf-datastores:startup",
@@ -194,13 +208,21 @@ class TestHandWritten:
 
 
 class TestHeadAndOptions:
-    """Listed only where a route serves them; FastAPI GET routes do not."""
+    """Served on every route by the middleware (RFC 8040 §4.1, §4.2), so a
+    405 lists them; see test_head_options.py for the methods themselves."""
 
-    def test_head_and_options_are_not_listed_unless_served(self, app: TestClient) -> None:
+    def test_head_and_options_are_served_and_listed(self, app: TestClient) -> None:
         sips = "/restconf/data/tapi-common:context/service-interface-point"
-        for method in ("HEAD", "OPTIONS"):
-            resp = _send(app, method, sips)
-            _assert_405(resp, {"GET"})
+        assert _send(app, "HEAD", sips).status_code == 200
+        options = _send(app, "OPTIONS", sips)
+        assert options.status_code == 200
+        assert _allow(options) == ["GET", "HEAD", "OPTIONS"]
+        _assert_405(_send(app, "POST", sips), {"GET"})
+
+    def test_head_is_refused_where_get_is(self, app: TestClient) -> None:
+        resp = _send(app, "HEAD", "/admin/snapshot")
+        _assert_405(resp, {"POST"})
+        assert resp.content == b""
 
     def test_a_cors_preflight_is_still_answered(self, app: TestClient) -> None:
         resp = app.options("/internal/opm", headers={

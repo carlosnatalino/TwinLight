@@ -153,10 +153,8 @@ class TwinStub:
         if not path.startswith(f"{data}/tapi-common:context/"):
             return httpx.Response(404)  # the twin serves T-API only there
         if path.endswith("/service-interface-point"):
-            return httpx.Response(
-                200,
-                json={"tapi-common:context": {"service-interface-point": self.sips}},
-            )
+            # RFC 8040 §4.3: the list as the body's one member.
+            return httpx.Response(200, json={"tapi-common:service-interface-point": self.sips})
         # Like the twin: created by POST on the container (RFC 8040 §4.4.1);
         # the list path serves GET only.
         if path.endswith("/tapi-connectivity:connectivity-context") and request.method == "POST":
@@ -378,7 +376,8 @@ def test_onos_first_och_signal_is_computable(client):
 
 def test_single_sip_is_served_unwrapped(client):
     """TapiDeviceLambdaQuery reads mc-pool off the top level of the response;
-    the twin wraps it in tapi-common:context."""
+    the twin answers the entry as an array of one under
+    tapi-common:service-interface-point (RFC 8040 §4.3, RFC 7951 §5.4)."""
     uuid = context(client)[0]["uuid"]
     body = client.get(
         f"/restconf/data/tapi-common:context/service-interface-point={uuid}"
@@ -419,12 +418,12 @@ def onos_connectivity_request(sip_a: str, sip_z: str, uuid: str = "onos-uuid-1")
     }
 
 
-def test_list_body_is_translated_to_the_twins_object_form(client, twin):
+def test_the_list_body_is_forwarded_in_its_standard_form(client, twin):
     twin.create_body = {
-        "tapi-connectivity:connectivity-service": {
+        "tapi-connectivity:connectivity-service": [{
             "uuid": "onos-uuid-1",
             "end-point": [_admitted_end_point()],
-        }
+        }]
     }
     r = client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
@@ -432,8 +431,10 @@ def test_list_body_is_translated_to_the_twins_object_form(client, twin):
     )
     assert r.status_code == 201
 
-    sent = twin.posted[0]["tapi-connectivity:connectivity-service"]
-    assert isinstance(sent, dict), "twin expects a single object, not a list"
+    entries = twin.posted[0]["tapi-connectivity:connectivity-service"]
+    # RFC 7951 §5.4: an array of one, as ONOS sent it; nothing to reshape.
+    assert isinstance(entries, list) and len(entries) == 1
+    (sent,) = entries
     # ONOS's UUID is reused so its later DELETE resolves without a lookup.
     assert sent["uuid"] == "onos-uuid-1"
     # Modulation goes in the T-API 2.6 place -- an augment on the end-point,
@@ -449,14 +450,14 @@ def test_service_name_carries_the_onos_port_pair(client, twin):
     """The port pair is the only identifier ONOS and the twin share, so it is
     stamped into the T-API name list — that is what makes a row in the ONOS
     Flows view findable in the TwinLight UI, which renders "service-name"."""
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
     )
     names = {
         n["value-name"]: n["value"]
-        for n in twin.posted[0]["tapi-connectivity:connectivity-service"]["name"]
+        for n in twin.posted[0]["tapi-connectivity:connectivity-service"][0]["name"]
     }
     assert names["onos-port-pair"] == "1->2"
     assert names["provisioned-by"] == "onos-odtn"
@@ -467,7 +468,7 @@ def test_service_name_carries_the_onos_port_pair(client, twin):
 
 def test_status_exposes_the_join_key(client, twin):
     """correlate.sh joins ONOS flows to twin services on the port pair."""
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
@@ -517,7 +518,7 @@ def test_delete_still_surfaces_real_failures(client, twin):
 
 
 def test_endpoints_are_forgotten_on_delete(client, twin):
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
@@ -557,7 +558,7 @@ def test_qot_refusal_is_relayed_unchanged_and_recorded(client, twin):
 
 
 def test_delete_returns_204_which_is_all_onos_accepts(client, twin):
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
@@ -596,7 +597,7 @@ def test_twin_native_services_are_hidden_from_onos(client, twin):
 
 
 def test_onos_created_services_remain_visible_for_resync(client, twin):
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
@@ -652,13 +653,13 @@ def test_a_list_body_without_the_list_is_a_bad_gateway(client, twin, monkeypatch
 
 @pytest.mark.parametrize("fmt", ["DP-QPSK", "DP-16QAM", "DP-64QAM"])
 def test_modulation_switch_changes_what_the_twin_is_asked_for(client, twin, fmt):
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "u"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "u"}]}
     client.post("/adapter/modulation", json={"modulation-format": fmt})
     client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
     )
-    sent = twin.posted[-1]["tapi-connectivity:connectivity-service"]
+    (sent,) = twin.posted[-1]["tapi-connectivity:connectivity-service"]
     assert tapi_adapter._modulation_of(sent) == fmt
 
 
@@ -693,13 +694,13 @@ def test_modulation_augment_has_the_tapi_2_6_shape(client, twin):
     but the shape it sends has to be the standard one, or the twin refuses
     it and every ONOS flow rule fails.
     """
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "u"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "u"}]}
     client.post("/adapter/modulation", json={"modulation-format": "DP-16QAM"})
     client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
     )
-    sent = twin.posted[-1]["tapi-connectivity:connectivity-service"]
+    (sent,) = twin.posted[-1]["tapi-connectivity:connectivity-service"]
     for end_point in sent["end-point"]:
         constraint = end_point["layer-protocol-constraint"][0]
         assert constraint["layer-protocol-name"] == "PHOTONIC_MEDIA"
@@ -716,7 +717,7 @@ def test_list_or_object_both_reach_the_twin(client, twin):
     strip SIP index suffixes -- but it no longer does so to work around a
     twin limitation.
     """
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "u"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "u"}]}
     body = onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2")
     assert isinstance(body["tapi-connectivity:connectivity-service"], list)
     r = client.post(
@@ -746,7 +747,7 @@ def test_upstream_calls_use_the_discovered_root(client, twin):
 
 
 def test_services_are_created_on_the_twins_connectivity_context(client, twin):
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     r = client.post(
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
         json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
@@ -760,7 +761,7 @@ def test_services_are_created_on_the_twins_connectivity_context(client, twin):
 
 def test_a_custom_root_is_followed_on_create(twin):
     twin.restconf_root = "/api"
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     with _client_for(twin) as c:
         r = c.post(
             "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
@@ -883,7 +884,7 @@ def test_start_up_loads_the_token_into_the_twin_client(monkeypatch):
 
 def test_every_upstream_request_carries_the_token(twin):
     twin.tokens = {TOKEN}
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     with _client_for(twin, token=TOKEN) as c:
         responses = _drive_every_endpoint(c)
     assert [r.status_code for r in responses] == [200, 200, 200, 200, 201, 204, 200, 200]
@@ -895,7 +896,7 @@ def test_every_upstream_request_carries_the_token(twin):
 
 
 def test_without_a_token_no_authorization_header_is_sent(twin):
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     with _client_for(twin) as c:
         responses = _drive_every_endpoint(c)
         health = c.get("/health").json()
@@ -998,7 +999,7 @@ def test_the_token_never_leaves_the_adapter(twin, caplog, accepted):
     """Not in a response body or header, not in a log record -- whether the
     twin accepts it or not. DEBUG, so httpx's own records are included."""
     twin.tokens = {TOKEN if accepted else "the-twins-real-token-0123456789"}
-    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [{"uuid": "onos-uuid-1"}]}
     caplog.set_level("DEBUG")
     with _client_for(twin, token=TOKEN) as c:
         responses = _drive_every_endpoint(c)
@@ -1059,12 +1060,10 @@ def test_against_a_real_twin_that_requires_tokens(tmp_path, monkeypatch):
         "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
         "/connectivity-service"
     ).json()
-    uuids = [
-        s["uuid"]
-        for s in listed.get("tapi-connectivity:connectivity-context", {}).get(
-            "connectivity-service", []
-        )
-    ]
+    # The list GET's standard body (RFC 8040 §4.3). Read leniently, as the
+    # container's envelope with a default, it would find "no services"
+    # whatever the twin held.
+    uuids = [s["uuid"] for s in listed["tapi-connectivity:connectivity-service"]]
     assert "onos-real-1" not in uuids
 
     with _client_for(stub, token=WRONG, transport=httpx.ASGITransport(app=twin_app)) as c:
@@ -1073,3 +1072,267 @@ def test_against_a_real_twin_that_requires_tokens(tmp_path, monkeypatch):
     assert health["status"] == "unauthorized"
     assert health["twin-auth-error"].startswith("the twin rejected the adapter's token (HTTP 401)")
     assert refused.status_code == 502
+
+
+# --- The twin's standard bodies are read strictly -------------------------
+
+
+def test_a_sip_list_without_its_member_is_502_not_zero_ports(client, twin, monkeypatch):
+    """The twin's SIP list answers {"tapi-common:service-interface-point": [...]}
+    (RFC 8040 §4.3). Any other body -- the parent's envelope earlier releases
+    sent, say -- must not read as "no SIPs", which ONOS would turn into a
+    device with no ports."""
+    original = twin.handler
+
+    def envelope(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/service-interface-point"):
+            return httpx.Response(
+                200, json={"tapi-common:context": {"service-interface-point": twin.sips}}
+            )
+        return original(request)
+
+    monkeypatch.setattr(twin, "handler", envelope)
+    tapi_adapter.connect_twin(
+        client.app, None, transport=httpx.MockTransport(envelope), base_url="http://twin"
+    )
+    r = client.get("/restconf/data/tapi-common:context")
+    assert r.status_code == 502
+    assert "tapi-common:service-interface-point" in r.json()["detail"]
+    assert len(tapi_adapter.catalogue) == 0
+
+
+def test_a_201_without_an_entry_is_logged_not_read_as_no_spectrum(client, twin, caplog):
+    twin.create_body = {"tapi-connectivity:connectivity-service": {"uuid": "onos-uuid-1"}}
+    r = client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    assert r.status_code == 201  # the twin did admit it
+    assert "carries no tapi-connectivity:connectivity-service entry" in caplog.text
+    assert "no spectrum reported" not in caplog.text
+
+
+# --- A twin that is down, or answers unreadably ----------------------------
+
+
+class _Switch:
+    """A twin that can be taken down and brought back between requests."""
+
+    def __init__(self, twin: TwinStub) -> None:
+        self.twin, self.up = twin, True
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if not self.up:
+            raise httpx.ConnectError("connection refused", request=request)
+        return self.twin.handler(request)
+
+
+def test_a_create_with_the_twin_down_is_502_not_500(twin):
+    """The SIP catalogue is built on ONOS's first POST when nothing else has
+    built it; with the twin down that must be the gateway's 502."""
+    switch = _Switch(twin)
+    switch.up = False
+    with _client_for(twin, transport=httpx.MockTransport(switch.handler)) as c:
+        r = c.post(CONNECTIVITY, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"))
+    assert r.status_code == 502
+    assert "connection refused" in r.json()["detail"]
+
+
+def test_an_outage_is_logged_once_and_its_end_once(twin, caplog):
+    switch = _Switch(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, transport=httpx.MockTransport(switch.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        switch.up = False
+        polls = [c.get(CONTEXT) for _ in range(5)]
+        switch.up = True
+        after = [c.get(CONTEXT) for _ in range(3)]
+    assert [r.status_code for r in polls] == [502] * 5
+    assert [r.status_code for r in after] == [200] * 3
+    messages = [r.getMessage() for r in caplog.records]
+    assert sum("twin unreachable" in m for m in messages) == 1
+    assert sum("the twin answers again" in m for m in messages) == 1
+    assert [r.levelname for r in caplog.records if "twin unreachable" in r.getMessage()] == ["ERROR"]
+
+
+def test_an_unreadable_sip_list_is_logged_once(twin, caplog, monkeypatch):
+    caplog.set_level("INFO", logger="tapi-adapter")
+    original = twin.handler
+
+    def envelope(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/service-interface-point"):
+            return httpx.Response(200, json={"tapi-common:context": {}})
+        return original(request)
+
+    with _client_for(twin, transport=httpx.MockTransport(envelope)) as c:
+        polls = [c.get(CONTEXT) for _ in range(4)]
+    assert [r.status_code for r in polls] == [502] * 4
+    messages = [r.getMessage() for r in caplog.records]
+    assert sum("cannot read" in m for m in messages) == 1
+    assert not any("twin unreachable" in m for m in messages)
+
+
+def test_adapter_status_answers_200_whatever_the_twin_does(twin):
+    """Down, or refusing the token: the same 200, with the reason in the body."""
+    switch = _Switch(twin)
+    switch.up = False
+    with _client_for(twin, transport=httpx.MockTransport(switch.handler)) as c:
+        down = c.get("/adapter/status")
+        switch.up = True
+        up = c.get("/adapter/status")
+    assert down.status_code == 200
+    assert down.json()["twin-reachable"] is False
+    assert "connection refused" in down.json()["twin-error"]
+    assert up.status_code == 200
+    assert up.json()["twin-reachable"] is True and up.json()["twin-error"] is None
+    twin.tokens = {TOKEN}
+    with _client_for(twin) as c:  # no token: the twin refuses the adapter
+        refused = c.get("/adapter/status")
+    assert refused.status_code == 200
+    assert refused.json()["twin-authorized"] is False
+    assert refused.json()["twin-reachable"] is True
+
+
+# --- An outage ends only when the twin answers usably ----------------------
+
+
+class _Faulty:
+    """A twin whose T-API resources can answer an error status, refuse the
+    connection, or (``mode=None``) answer normally; /health stays up."""
+
+    def __init__(self, twin: TwinStub) -> None:
+        self.twin, self.mode = twin, None
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        mode = self.mode
+        if mode is not None and "tapi-common:context" in request.url.path:
+            if mode == "refused" or (mode == "alternate" and self.flip()):
+                raise httpx.ConnectError("connection refused", request=request)
+            return httpx.Response(503, json={})
+        return self.twin.handler(request)
+
+    _n = 0
+
+    def flip(self) -> bool:
+        self._n += 1
+        return self._n % 2 == 1
+
+
+def _outage_lines(caplog) -> tuple[list[str], list[str]]:
+    records = [r for r in caplog.records if r.name == "tapi-adapter"]
+    down = [r.levelname for r in records if "twin unreachable" in r.getMessage()]
+    back = [r.levelname for r in records if "the twin answers again" in r.getMessage()]
+    return down, back
+
+
+def test_an_error_status_on_every_poll_is_one_outage(twin, caplog):
+    """A 503 (a proxy in front of the twin) or a 404 (a twin of another
+    version) on every ONOS poll: one ERROR when it starts, one INFO when the
+    twin answers usably again -- not two lines per poll."""
+    faulty = _Faulty(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        faulty.mode = "503"
+        polls = [c.get(CONTEXT).status_code for _ in range(5)]
+        status_during, health_during = c.get("/adapter/status").json(), c.get("/health").json()
+        polls.append(c.get(CONTEXT).status_code)
+        assert _outage_lines(caplog) == (["ERROR"], [])
+        faulty.mode = None
+        after = [c.get(CONTEXT).status_code for _ in range(3)]
+        status_after, health_after = c.get("/adapter/status").json(), c.get("/health").json()
+    assert polls == [502] * 6 and after == [200] * 3
+    assert _outage_lines(caplog) == (["ERROR"], ["INFO"])
+    for during in (status_during, health_during):
+        assert during["twin-reachable"] is False
+        assert "HTTP 503" in during["twin-error"]
+    assert health_during["status"] == "degraded"
+    for done in (status_after, health_after):
+        assert done["twin-reachable"] is True and done["twin-error"] is None
+    assert health_after["status"] == "ok"
+
+
+def test_refused_and_503_alternating_is_still_one_outage(twin, caplog):
+    faulty = _Faulty(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        faulty.mode = "alternate"
+        polls = [c.get(CONTEXT).status_code for _ in range(6)]
+        assert _outage_lines(caplog) == (["ERROR"], [])
+        faulty.mode = None
+        assert c.get(CONTEXT).status_code == 200
+    assert polls == [502] * 6
+    assert _outage_lines(caplog) == (["ERROR"], ["INFO"])
+
+
+def test_a_health_probe_that_works_does_not_end_an_outage(twin, caplog):
+    """/health is public and can answer while the T-API resources do not
+    (a 503 in front of /restconf only): it must not end the outage, or every
+    healthcheck between two polls would log it ending and starting again."""
+    faulty = _Faulty(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        faulty.mode = "503"
+        for _ in range(3):
+            assert c.get(CONTEXT).status_code == 502
+            assert c.get("/health").json()["twin-reachable"] is False
+    assert _outage_lines(caplog) == (["ERROR"], [])
+
+
+def test_a_refusal_or_a_missing_service_is_no_outage(twin, caplog):
+    """A 409 (admission refused) and a 404 on DELETE (already gone) are the
+    twin answering usably: they neither start an outage nor fail to end one."""
+    caplog.set_level("INFO", logger="tapi-adapter")
+    twin.create_status = 409
+    twin.create_body = {"ietf-restconf:errors": {"error": [
+        {"error-tag": "resource-denied", "error-message": "no spectrum"}]}}
+    original = twin.handler
+
+    def gone(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(404, json={})
+        return original(request)
+
+    with _client_for(twin, transport=httpx.MockTransport(gone)) as c:
+        create = c.post(CONNECTIVITY, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"))
+        delete = c.delete(f"{CONNECTIVITY}connectivity-service=onos-uuid-1")
+        status_body = c.get("/adapter/status").json()
+    assert (create.status_code, delete.status_code) == (409, 204)
+    assert _outage_lines(caplog) == ([], [])
+    assert status_body["twin-reachable"] is True and status_body["twin-error"] is None
+
+
+def test_a_409_ends_an_outage_the_twin_has_recovered_from(twin, caplog):
+    faulty = _Faulty(twin)
+    caplog.set_level("INFO", logger="tapi-adapter")
+    twin.create_status = 409
+    twin.create_body = {"ietf-restconf:errors": {"error": [{"error-message": "no spectrum"}]}}
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200  # the catalogue is built
+        faulty.mode = "refused"
+        assert c.get(CONTEXT).status_code == 502
+        faulty.mode = None
+        create = c.post(CONNECTIVITY, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"))
+    assert create.status_code == 409
+    assert _outage_lines(caplog) == (["ERROR"], ["INFO"])
+
+
+def test_a_refused_token_after_an_outage_is_not_reported_unreachable(twin):
+    """The twin answering 401 is reachable; the refusal is TwinAuthorization's
+    to report, so /adapter/status must not say both "unreachable" and
+    "unauthorized"."""
+    faulty = _Faulty(twin)
+    with _client_for(twin, transport=httpx.MockTransport(faulty.handler)) as c:
+        assert c.get(CONTEXT).status_code == 200
+        faulty.mode = "refused"
+        assert c.get(CONTEXT).status_code == 502
+        faulty.mode = None
+        twin.tokens = {TOKEN}  # the twin comes back requiring a token the adapter lacks
+        assert c.get(CONTEXT).status_code == 502
+        status_body = c.get("/adapter/status").json()
+        health = c.get("/health").json()
+    assert status_body["twin-reachable"] is True and status_body["twin-error"] is None
+    assert status_body["twin-authorized"] is False
+    assert health["status"] == "unauthorized" and health["twin-reachable"] is True

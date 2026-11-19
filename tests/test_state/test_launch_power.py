@@ -40,16 +40,17 @@ def test_channel_output_power_is_hundredths_of_a_dbm(mesh_app: TestClient, wire)
     refs = MeshRefs(mesh_app.app.state.context)
     resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), wire))
     assert resp.status_code == 201, resp.text
-    service = resp.json()["tapi-connectivity:connectivity-service"]
+    service = resp.json()["tapi-connectivity:connectivity-service"][0]
     assert mesh_app.app.state.context._service_launch_power[service["uuid"]] == 1.5
     assert _reported_power(service) == 150.0
 
 
 @pytest.mark.parametrize("wire", ["abc", True, "nan"])
-def test_malformed_power_is_422(mesh_app: TestClient, wire) -> None:
+def test_malformed_power_is_refused(mesh_app: TestClient, wire) -> None:
     refs = MeshRefs(mesh_app.app.state.context)
     resp = mesh_app.post(_CONTAINER, json=_body(refs.sip("trx A"), refs.sip("trx C"), wire))
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
     assert "channel-output-power" in resp.text
 
 

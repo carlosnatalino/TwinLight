@@ -60,3 +60,29 @@ describe("fetchServices", () => {
     expect(state.services).toEqual([{ uuid: "svc-0" }]);
   });
 });
+
+describe("updateService", () => {
+  it("replaces the service with the entry the PATCH answers", async () => {
+    useServicesStore.setState({
+      services: [{ uuid: "svc-1", "lifecycle-state": "INSTALLED" }, { uuid: "svc-2" }] as never,
+    });
+    const patched = { uuid: "svc-1", "lifecycle-state": "PLANNED" };
+    mockFetch.mockResolvedValueOnce(
+      respond({ "tapi-connectivity:connectivity-service": [patched] })
+    );
+
+    await useServicesStore.getState().updateService("http://twin", "svc-1", {
+      "tapi-connectivity:connectivity-service": { "lifecycle-state": "PLANNED" },
+    });
+
+    expect(useServicesStore.getState().services).toEqual([patched, { uuid: "svc-2" }]);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe(
+      "http://twin/restconf/data/tapi-common:context" +
+        "/tapi-connectivity:connectivity-context/connectivity-service=svc-1"
+    );
+    expect(JSON.parse(init.body)).toEqual({
+      "tapi-connectivity:connectivity-service": { "lifecycle-state": "PLANNED" },
+    });
+  });
+});

@@ -1,6 +1,7 @@
 # API reference
 
-TwinLight exposes 75 REST operations plus a gNMI gRPC service carrying the
+TwinLight exposes 89 REST operations (the OpenAPI schema's count; every
+resource also answers `HEAD` and `OPTIONS`) plus a gNMI gRPC service carrying the
 T-API performance-measurement stream. This document is
 the catalogue; a live, interactive version is served at
 <http://localhost:8080/docs> (OpenAPI/Swagger) and <http://localhost:8080/redoc>
@@ -40,7 +41,8 @@ and each operation one way to do it. Paths earlier releases served anywhere
 else are removed, not redirected, and answer `404` (`401` without a token when
 authentication is on). Creation moved from the list path to its parent, as
 RFC 8040 §4.4.1 specifies; a `POST` on the list path answers `405`, since the
-path still serves `GET`. One response body changed too, in the last row:
+path still serves `GET`. Some response bodies and status codes changed too,
+in the rows after the paths:
 
 | Removed path or body | Standard path or body |
 |----------------------|-----------------------|
@@ -54,11 +56,27 @@ path still serves `GET`. One response body changed too, in the last row:
 | `/restconf/data/tapi-equipment:physical-context/…` | `/restconf/data/tapi-common:context/tapi-equipment:physical-context/…` |
 | `/data/tapi-common:context` and every path below it (the bare mount) | `/restconf/data/tapi-common:context` and the same path below it |
 | `GET …/tapi-connectivity:connectivity-context/connectivity-service` answering `{"tapi-connectivity:connectivity-context": {"connectivity-service": […]}}` | The list GET answers `{"tapi-connectivity:connectivity-service": […]}` (RFC 8040 §4.3); the old body is the container GET's, `GET …/tapi-connectivity:connectivity-context` |
+| `404` with `error-tag: data-missing`, on any T-API resource | `404` with `invalid-value` (RFC 8040 §4.3; `data-missing` is a `409` tag) |
+| `422` (`invalid-value`) for a T-API request that does not validate | `400`, with the tag that names the problem: `malformed-message`, `missing-element`, `bad-element` or `invalid-value` (see [Error format](#error-format)) |
+| `422` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required` (RFC 7950 §15.5) |
+| `GET …/service-interface-point` answering `{"tapi-common:context": {"service-interface-point": […]}}` | `{"tapi-common:service-interface-point": […]}` (RFC 8040 §4.3); the old body is the full context's SIP section |
+| `GET …/service-interface-point={uuid}` answering `{"tapi-common:context": {"service-interface-point": [{…}]}}` | `{"tapi-common:service-interface-point": [{…}]}` |
+| `GET` of one `connectivity-service=`, `path-comp-service=`, `path=`, `device=`, `device=/equipment=` or `physical-span=` answering `{"<module>:<list>": {…}}` | An array of one, `{"<module>:<list>": [{…}]}` (RFC 7951 §5.4), as `topology=`, `node=`, `link=` and `oam-job=` already answered |
+| `GET …/supported-stream-type={uuid}`, `…/available-stream={uuid}` answering the whole list | That one entry, `{"tapi-streaming:<list>": [{…}]}`; another UUID is `404` |
+| The `201` of a creating `POST` carrying `{"tapi-connectivity:connectivity-service": {…}}` or `{"tapi-path-computation:path-comp-service": {…}}` | The entry's `GET` body, an array of one; the status and `Location` are unchanged |
+| `PUT …/connectivity-service={uuid}` answering `200` with the entry | `204` with no body when it replaced a service; `201` with `Location` and the entry when it created one (RFC 8040 §4.5) |
+| `PATCH …/connectivity-service={uuid}` with `{"tapi-connectivity:connectivity-service": {…}}` answering `200` and changing nothing (only a bare body was read), with the entry as an object | The envelope (array of one or object) is read and merged; any leaf `PATCH` cannot merge is a `400` naming it; the `200` carries the entry's `GET` body |
+| `GET /restconf` and `/restconf/yang-library-version` served as `application/json` | `application/yang-data+json`, like every RESTCONF response, with `Cache-Control: no-cache` |
+| Any query parameter on a T-API resource ignored (`?depth=1` answered the full resource) | `400` (`invalid-value`) for anything but `content=all`; `content=config`/`nonconfig` is `501` |
+| A non-JSON `Accept` (`application/yang-data+xml`) answered with JSON | `406` |
+| A request body in any media type parsed as JSON when it parsed | `415` unless it is `application/yang-data+json` or `application/json` |
+| `GET /restconf/data`, the YANG library, `restconf-state` and `/restconf/operations` answering `404` | Served (RFC 8040 §3.3, §9, §10) |
+| `HEAD` and `OPTIONS` answering `405` on every resource | `HEAD` answers as `GET` without the body, `OPTIONS` answers `200` with `Allow` (and `Accept-Patch` where `PATCH` is allowed); a `405` lists both in `Allow` (see [HEAD and OPTIONS](#head-and-options)) |
 
 The standard paths are given for the default root, `/restconf`; on a twin
 configured with another, substitute it. Everything after the container is
-unchanged, and so are request and response bodies, except the
-connectivity-service list GET's (last row); a create sends the same body to
+unchanged, and so are request and response bodies, except those in the rows
+after the paths; a create sends the same body to
 the container that it sent to the list path, and gets the same answer, now
 with a `Location` header. A twin configured with
 `server.restconf_root: ""` serves the data resource at `/data/…` by
@@ -182,6 +200,20 @@ GET returns (built by the same function), so a client may read either. Each
 SIP's `name` list carries the underlying GNPy element UID under the value-name
 `node-name`, which is how SIPs map back to physical elements.
 
+**Response bodies.** Every GET returns the target resource as the body's one
+member, named with the module that defines it (RFC 8040 §4.3; RFC 7951 §4,
+"A namespace-qualified member name MUST be used for all members of a
+top-level JSON object"), and a list entry is an array of one (RFC 7951 §5.4,
+"A list instance is encoded as a name/array pair"). So the SIP list answers
+`{"tapi-common:service-interface-point": [ … ]}` and one SIP
+`{"tapi-common:service-interface-point": [ { … } ]}`; the same holds for
+every keyed resource below — `topology=`, `node=`, `link=`,
+`owned-node-edge-point=`, `connectivity-service=`, `path-comp-service=`,
+`path=`, `device=`, `equipment=`, `physical-span=`, `oam-job=`,
+`supported-stream-type=` and `available-stream=` — each answering
+`{"<module>:<list>": [ { … } ]}`, the entry exactly as the parent's GET lists
+it.
+
 ### Topology
 
 | Method | Path |
@@ -227,9 +259,10 @@ RFC 8040 §4.4.1 makes the parent the target of a creating `POST`. The list
 path `…/connectivity-service` serves `GET` only, and a `POST` there is a
 `405`. A created service answers `201` with a `Location` header naming it,
 `{restconf_root}/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service={uuid}`
-(the key percent-encoded), and with the created entry as the body, which
-carries the UUID, the format and the spectrum admission chose; RFC 8040 sends
-no body there (a deliberate deviation, see
+(the key percent-encoded), and with the created entry as the body — the same
+body a `GET` of that entry returns, `{"tapi-connectivity:connectivity-service":
+[ { … } ]}` — which carries the UUID, the format and the spectrum admission
+chose; RFC 8040 sends no body there (a deliberate deviation, see
 [TAPI_COMPLIANCE.md § 2.2](TAPI_COMPLIANCE.md#22-restconf-protocol-gaps)).
 
 ```bash
@@ -273,7 +306,7 @@ The modulation format is the end-point's
 — `tapi-connectivity` has no modulation leaf of its own. `standard-modulation-technique`
 accepts `MT_DP-QPSK`, `MT_DP-QAM16` or `MT_DP-QAM64`; the module-prefixed identityref spelling is accepted too
 (RFC 7951 §6.8). A bare top-level `modulation-format` key is rejected with a
-`422` naming the standard location, rather than silently defaulting.
+`400` naming the standard location, rather than silently defaulting.
 
 The body may be a single object, as above, or a one-entry JSON array — RFC 7951
 §5.4 encodes a list entry as an array, and that is the form some controllers
@@ -302,12 +335,12 @@ to the one marked `SINK`, or, when neither says, from the first end-point to
 the second. Reads report what was provisioned: the service is
 `direction: UNIDIRECTIONAL` and `layer-protocol-name: PHOTONIC_MEDIA`, and the
 end-points are listed `SOURCE` first, then `SINK`. Two `SOURCE` (or two `SINK`)
-end-points are a `422`. An end-point `name` is kept and echoed.
+end-points are a `400`. An end-point `name` is kept and echoed.
 
 Standard leaves the twin does not act on fail the create or PUT with `501`
 (`operation-not-supported`). The error message names each one by path, so no
 service is admitted while ignoring part of the request. A value the leaf's
-YANG type does not admit (a `direction` of `"x"`) is a `422` instead. A
+YANG type does not admit (a `direction` of `"x"`) is a `400` instead. A
 `BIDIRECTIONAL` direction is refused with a note on how to get both
 directions: one service each way.
 
@@ -327,15 +360,16 @@ sent, and can be changed with `PATCH`.
 A service may carry the standard `routing-constraint` container and
 `topology-constraint` list; they constrain the route exactly as on a
 path-comp-service (see [Route constraints](#route-constraints)) and are echoed
-on reads. An unsupported constraint is a `422` naming the leaf; a constraint no
-route satisfies is a `409`.
+on reads. An unsupported constraint is a `400` naming the leaf, and one naming
+a node or link that does not exist a `409` (`data-missing`, see
+[Error format](#error-format)); a constraint no route satisfies is a `409`.
 
 **Semantics of the mutating verbs:**
 
 | Verb | Behaviour |
 |------|-----------|
-| PUT | Full replacement at the given UUID; the body must be a complete connectivity-service and its UUID must match the path |
-| PATCH | Partial update of `name`, `administrative-state`, `lifecycle-state` only — **not** the modulation format, which would invalidate the admission decision |
+| PUT | Full replacement at the given UUID; the body must be a complete connectivity-service and its UUID must match the path. `204` with no body when it replaced a service, `201` with a `Location` and the entry (like a creating `POST`) when it created one (RFC 8040 §4.5); read what admission chose for a replacement with a `GET` |
+| PATCH | A plain patch (RFC 8040 §4.6.1) of `name`, `administrative-state`, `lifecycle-state` only — **not** the modulation format or anything else admission decided, which is refused by name (`400`, replace the service with `PUT`). The body is the entry, `{"tapi-connectivity:connectivity-service": [{…}]}` (a bare object, or the bare entry, are accepted too); a `uuid` in it must be the path's. `200` with the patched entry, as its `GET` returns it |
 | DELETE | Releases spectrum, invalidates the cached baseline, records the channel drop with the EDFA tracker; returns 204 |
 
 A service with a spectrum allocation carries it on **each end-point**, beside
@@ -388,7 +422,7 @@ grid — edges on slot edges, a central frequency at the centre of a block — a
 exactly one media channel wide for the format, the width a GET reports, so a
 fetched service can be sent back unchanged; numbers or RFC 7951 decimal
 strings are accepted. An `edge-frequency-constraint`, if sent, must be this
-twin's grid. These are `422`s naming the problem, as are
+twin's grid. These are `400`s naming the problem, as are
 `mc-bandwidth-config-pac`, `mc-flexi-grid-config-pac`, more than one media
 channel, and end-points that disagree. On each candidate route the requested
 block must lie in the band every amplifier on the route passes and be free on
@@ -406,17 +440,18 @@ the whole grid is assignable.
 **Requesting launch power.** `otsi-config/channel-output-power` is optional,
 in 0.01 dBm, as a number or decimal string; end-points that carry it must
 agree. A malformed value, or one outside the −20 to +10 dBm the twin models
-(−2000 to 1000), is a `422`.
+(−2000 to 1000), is a `400`.
 
 `otsi-config/modulation` is optional too: an `otsi-config` carrying only a
 central frequency or a launch power leaves the format to admission. A
-`modulation` that is not an object (`null` included) is a `422`.
+`modulation` that is not an object (`null` included) is a `400`.
 
 **Request checks.** A connectivity-service is a point-to-point lightpath:
-anything but exactly two end-points is a `422`. A `POST` naming the UUID of
+anything but exactly two end-points is a `400`. An end-point whose SIP does
+not exist is a `409` (`data-missing`). A `POST` naming the UUID of
 an existing service is a `409` (`resource-denied`, RFC 8040 §4.4.1) and
 changes nothing; replace a service with `PUT`. A body of the wrong shape (a
-string where an object belongs, an object where a list does) is a `422`,
+string where an object belongs, an object where a list does) is a `400`,
 never a `500`.
 
 **Operational state.** `operational-state` reports whether the lightpath can
@@ -446,7 +481,7 @@ T-API v2.6.0 has no path-computation RPC: computation is a resource. A
 `path-computation-context`, with the entry below as the body (RFC 8040
 §4.4.1; a `POST` on `…/path-comp-service` is a `405`). The `201` carries a
 `Location` naming the new entry, `…/path-comp-service={uuid}`, and the entry
-itself, with its `path` references. Creating
+itself as its `GET` returns it (an array of one), with its `path` references. Creating
 a `path-comp-service` computes up to `rmsa.k_shortest_paths` routes, shortest
 fiber length first (GNPy's ranking, see
 [ARCHITECTURE.md](ARCHITECTURE.md#creating-a-connectivity-service)), stores each as a `path` in the context and lists them in the service's
@@ -494,7 +529,7 @@ does not claim either way:
 | `topology-constraint/explicit-route` | Yes — the includes must name every hop between the end-points' ROADMs; the route is not completed for you |
 | `routing-constraint/route-objective-function` | `MIN_WORK_ROUTE_LATENCY` only — routes are ranked by fiber length, and link latency is fiber length over a constant group velocity |
 | `routing-constraint/is-exclusive` | `true` only |
-| everything else (diversity, max-allowed-cost/hops/delay, cost/latency/risk characteristics, include/exclude topology, path and NEP, partitions, path sets) | Refused with a `422` naming the leaf |
+| everything else (diversity, max-allowed-cost/hops/delay, cost/latency/risk characteristics, include/exclude topology, path and NEP, partitions, path sets) | Refused with a `400` (`invalid-value`) naming the leaf |
 
 The ranked view with a candidate count, which T-API has no leaf for, is
 [`POST /internal/compute-path`](#internal--observation-and-metadata).
@@ -675,7 +710,7 @@ Errors under `/restconf/data/` use the RESTCONF format of
     "error": [
       {
         "error-type": "application",
-        "error-tag": "invalid-value",
+        "error-tag": "resource-denied",
         "error-message": "No path with sufficient GSNR: best 12.1 dB, required 16.0 dB"
       }
     ]
@@ -683,28 +718,65 @@ Errors under `/restconf/data/` use the RESTCONF format of
 }
 ```
 
+Each status is paired with the tag RFC 8040 §7 gives the condition (the tags
+themselves are NETCONF's, RFC 6241 Appendix A). RFC 8040 does not use `422`,
+so no T-API resource answers it:
+
 | HTTP status | `error-tag` | Used for |
 |-------------|-------------|----------|
-| 400 | `bad-element` | A malformed envelope (e.g. a list of more than one entry) |
-| 404 | `data-missing` | An unknown resource |
+| 400 | `malformed-message` (`error-type: rpc`) | A body that is not JSON |
+| 400 | `missing-element` | A mandatory leaf left out (an end-point without its `service-interface-point`) |
+| 400 | `bad-element` | A value of the wrong JSON type, or a malformed envelope (a list of more than one entry, a string where the entry belongs) |
+| 400 | `invalid-value` | A value the leaf or the twin does not accept: outside the YANG type, an unsupported constraint, a spectrum off the grid, a launch power outside the modelled range, a key in the body that differs from the one in the path, a `PUT` with no body (RFC 8040 §4.5) |
+| 404 | `invalid-value` | A resource that does not exist, whatever the method (RFC 8040 §4.3, §4.5–§4.7) |
 | 405 | `operation-not-supported` | A method the resource does not serve |
-| 409 | `resource-denied` | Admission refused: no route, spectrum or QoT |
-| 422 | `invalid-value` | A body that does not validate, or a constraint or value the twin cannot honour |
+| 409 | `data-missing` (`error-app-tag: instance-required`) | A reference to a SIP, node or link that does not exist: a leafref with no instance (RFC 7950 §15.5); `error-path` names the leaf where the twin knows it |
+| 409 | `resource-denied` | Admission refused (no route, spectrum or QoT), or a `POST` of an entry that already exists (RFC 8040 §4.4.1) |
 | 501 | `operation-not-supported` | A standard leaf the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
+
+The first problem a body has decides the tag; the message lists every one.
+The proprietary endpoints (`/internal`, `/admin`, `/config`, `/transparent`)
+use the same error body but keep FastAPI's `422` (`invalid-value`) for a
+request that does not validate, and `data-missing` on a `404`.
 
 A 405 also carries an `Allow` header (RFC 9110 §15.5.6) naming every method
 the resource serves at that path, on every path of the twin: T-API resources
 under any `server.restconf_root` and the proprietary ones (`/internal`,
-`/admin`, `/config`, `/transparent`, …) alike. `PATCH …/connectivity-service`,
-for example, answers `Allow: GET, POST`. The header is computed from the
-router's own matching (`AllowHeaderMiddleware`), so it is complete however
-many routes share the path. `HEAD` and `OPTIONS` are listed only where a
-route serves them, which today is nowhere: the T-API routes answer neither,
-and CORS preflights are answered by the CORS middleware before routing. A
+`/admin`, `/config`, `/transparent`, …) alike. `PATCH …/tapi-connectivity:connectivity-context`,
+for example, answers `Allow: GET, HEAD, POST, OPTIONS`. The header is computed
+from the router's own matching (`AllowHeaderMiddleware`), so it is complete
+however many routes share the path. `HEAD` is listed wherever `GET` is and
+`OPTIONS` everywhere, since both are served on every route (see
+[HEAD and OPTIONS](#head-and-options)). A
 method a route accepts only to refuse it for that resource is left out —
 `POST /transparent/data…`, and writes to the read-only `startup` and
 `operational` datastores, whose `Allow` is `GET`. With authentication on, an
 unauthenticated request gets 401 before routing, so it never sees a 405.
+
+### HEAD and OPTIONS
+
+Every resource that serves `GET` serves `HEAD` (RFC 8040 §4.2): the same
+status and header fields as the `GET`, `Content-Length` included, and no
+body. Every resource serves `OPTIONS` (RFC 8040 §4.1): `200` with an `Allow`
+header naming the methods it supports — the same set a `405` there names —
+and no content. On a RESTCONF resource that takes `PATCH` (a
+connectivity-service entry) the answer also carries
+`Accept-Patch: application/yang-data+json`, the plain patch of §4.6.1:
+
+```
+$ curl -i -X OPTIONS http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=<uuid>
+HTTP/1.1 200 OK
+allow: GET, HEAD, PUT, PATCH, DELETE, OPTIONS
+accept-patch: application/yang-data+json
+content-length: 0
+```
+
+Both apply to every route, the proprietary ones too, and to any route added
+later, without declaring them: two middlewares serve them from the router's
+own matching. With authentication on, both need a token like `GET` (RFC 8040
+§4.2 enforces access control on a `HEAD` "as if the method was GET"). A CORS
+preflight — an `OPTIONS` with `Access-Control-Request-Method` — is not an
+`OPTIONS` of the resource: the CORS middleware answers it, without a token.
 
 ### A note on percent-encoded colons
 
@@ -713,18 +785,48 @@ percent-encode those to `%3A` per the WHATWG URL specification, which would
 otherwise miss the route. `PathDecodeMiddleware` decodes them before routing, so
 both spellings work.
 
-### RESTCONF root
+### RESTCONF root and protocol resources
 
 | Method | Path | Returns |
 |--------|------|---------|
 | GET | `/.well-known/host-meta` | XRD (RFC 6415) advertising the RESTCONF root |
 | GET | `/restconf` | `ietf-restconf:restconf` with `data`, `operations`, `yang-library-version` |
 | GET | `/restconf/yang-library-version` | `{"ietf-restconf:yang-library-version": "2019-01-04"}` |
+| GET | `/restconf/operations` | `{"ietf-restconf:operations": {}}` — T-API v2.6.0 defines no RPC (§3.3.2) |
+| GET | `/restconf/data` | The datastore (§3.4): `{"ietf-restconf:data": {…}}` holding `tapi-common:context` and the three IETF containers below |
+| GET | `/restconf/data/ietf-yang-library:yang-library` | RFC 8525: one module set, every module the twin implements (with `tapi-streaming`'s feature `tapi-streaming`) and those it only imports |
+| GET | `/restconf/data/ietf-yang-library:modules-state` | The same list in the RFC 7895 form RFC 8040 §10.1 names, with `conformance-type` |
+| GET | `/restconf/data/ietf-restconf-monitoring:restconf-state[/capabilities]` | RFC 8040 §9: the mandatory `defaults` capability, `basic-mode=explicit`; no optional query parameter is supported, so none other is listed |
 
 RFC 8040 §3.1 has a client discover the root rather than assume it, so
 `host-meta` is XML by specification — a JSON variant would not be found. The
 root path itself is `server.restconf_root`; setting it to `""` puts the data
-resource at `/data/…` and omits these three resources.
+resource at `/data/…` (and the datastore, YANG library and restconf-state
+there too) and omits host-meta, the API resource, `yang-library-version` and
+`operations` (a known gap, see
+[TAPI_COMPLIANCE.md § 2.7](TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix)).
+None of these resources is writable: `POST`, `PUT`, `PATCH` and `DELETE` on
+the datastore are `405`.
+
+### Media types, caching and query parameters
+
+Every RESTCONF response — everything under the root, errors and `401`s
+included — is `application/yang-data+json` when it has a body and carries
+`Cache-Control: no-cache` (RFC 8040 §5.5: "The server MUST include a
+'Cache-Control' header field in every response").
+
+| Request | Answer |
+|---------|--------|
+| `Accept` that admits none of `application/yang-data+json`, `application/yang-data`, `application/json`, `application/*`, `*/*` (e.g. `application/yang-data+xml`) | `406`, `invalid-value` (RFC 8040 §5.2) |
+| A body whose `Content-Type` is not `application/yang-data+json` or `application/json`, or that has none (XML, `text/plain`, a form, `application/yang-patch+json`) | `415`, `invalid-value` (§5.2) |
+| A query parameter other than `content`, or one given twice (`depth`, `fields`, `filter`, `with-defaults`, `insert`, `point`, …) | `400`, `invalid-value` (§4.8: "A server MUST return an error with a '400 Bad Request' status-line if a query parameter is unexpected") |
+| `content=all` on `GET`/`HEAD` | The full resource, as without it |
+| `content=config` or `content=nonconfig` | `501`, `operation-not-supported`: the twin cannot split configuration from state yet |
+| `content` on any other method | `400` (§4.8.1) |
+
+`application/json` is accepted as a request body beside the RESTCONF media
+type, since it names the same JSON and is what generic HTTP clients send.
+The proprietary endpoints do none of these checks.
 
 ## Non-standard endpoints
 

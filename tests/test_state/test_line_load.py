@@ -236,10 +236,10 @@ class TestOperationalState:
                           tapi_end_point("z", refs.sip("trx C"), "DP-64QAM")],
         }]})
         assert created.status_code == 201, created.text
-        uuid = created.json()["tapi-connectivity:connectivity-service"]["uuid"]
+        uuid = created.json()["tapi-connectivity:connectivity-service"][0]["uuid"]
 
         ctx.apply_element_overrides({"fiber (A → B)": {"loss_coef": 0.3}})
-        one = client.get(f"{_SVC}={uuid}").json()["tapi-connectivity:connectivity-service"]
+        one = client.get(f"{_SVC}={uuid}").json()["tapi-connectivity:connectivity-service"][0]
         assert one["operational-state"] == "DISABLED"
 
         ctx.apply_element_overrides({"fiber (A → B)": {"loss_coef": 0.2}})
