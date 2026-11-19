@@ -48,22 +48,72 @@ require_stack
 # topology only metro-distance hops reach DP-64QAM, which is the point worth
 # showing -- the twin's answer depends on the format, not just the route.
 #
+# A probe is not the admission decision, though: the probe's GSNR includes the
+# twin's time-varying transient terms and admission's does not, so a pair a
+# few tenths of a dB above a threshold in the probe can be refused (see
+# find_pairs.py). The search therefore also finds a spare pair per format;
+# a spare is provisioned only when a pair of its format is refused. A refused
+# create leaves its ONOS flow rule in PENDING_ADD, retried for ever, so the
+# script removes that flow and says so: ONOS ends with one ADDED flow per
+# lightpath and nothing else.
+#
 #   SEED_QPSK / SEED_16QAM / SEED_64QAM   how many of each to look for
+#   SEED_SPARES                           extra pairs per format, used on a refusal
 #   SEED_ATTEMPTS                         probe budget
-#   SEED_RANDOM_SEED                      set for a reproducible demo
+#   SEED_RANDOM_SEED                      fixes the order pairs are drawn in
 QPSK_WANTED="${SEED_QPSK:-3}"
 Q16_WANTED="${SEED_16QAM:-3}"
 Q64_WANTED="${SEED_64QAM:-2}"
+SPARES="${SEED_SPARES:-1}"
 ATTEMPTS="${SEED_ATTEMPTS:-40}"
 
-say "Searching for admissible pairs (probing up to ${ATTEMPTS} at random)"
+# Cleared before the search, so the probes see the line the creates will.
+if [ "${1:-}" = "--reset" ]; then
+  say "Clearing existing ONOS flows"
+  "$(dirname "$0")/lightpath.sh" clear >/dev/null 2>&1 || true
+fi
+
+say "Searching for admissible pairs (probing up to ${ATTEMPTS} at random${SEED_RANDOM_SEED:+, seed ${SEED_RANDOM_SEED}})"
 PAIRS="$(TWIN_URL="${TWIN_URL}" \
   QPSK_WANTED="${QPSK_WANTED}" Q16_WANTED="${Q16_WANTED}" Q64_WANTED="${Q64_WANTED}" \
-  ATTEMPTS="${ATTEMPTS}" SEED_RANDOM_SEED="${SEED_RANDOM_SEED:-}" \
+  SPARES="${SPARES}" ATTEMPTS="${ATTEMPTS}" SEED_RANDOM_SEED="${SEED_RANDOM_SEED:-}" \
   python3 "$(dirname "$0")/find_pairs.py")" \
   || die "pair search failed — is the twin up at ${TWIN_URL}?"
 
 [ -n "${PAIRS}" ] || die "no admissible pairs found in ${ATTEMPTS} probes"
+
+wanted_of() {
+  case "$1" in
+    DP-QPSK) echo "${QPSK_WANTED}" ;; DP-16QAM) echo "${Q16_WANTED}" ;;
+    DP-64QAM) echo "${Q64_WANTED}" ;; *) echo 0 ;;
+  esac
+}
+ADMITTED_FORMATS=""   # one line per admitted lightpath, its format
+admitted_of() { printf '%s' "${ADMITTED_FORMATS}" | grep -cx -- "$1" || true; }
+service_count() {
+  curl -sS "${ADAPTER_URL}/adapter/status" \
+    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["onos-created-services"]))'
+}
+# The newest refusal the adapter recorded, as "<uuid> <time>", or "none".
+last_rejection() {
+  curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c '
+import json, sys
+r = json.load(sys.stdin).get("recent-rejections") or []
+print("%s %s" % (r[-1]["uuid"], r[-1]["at"]) if r else "none")'
+}
+rejection_detail() {
+  curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c '
+import json, sys
+r = json.load(sys.stdin).get("recent-rejections") or []
+print(("%s: %s" % (r[-1]["reason"], r[-1]["detail"]))[:160] if r else "no reason recorded")'
+}
+flow_present() {
+  onos_api GET "/onos/v1/flows/${DEVICE_ID}" | python3 -c '
+import json, sys
+sys.exit(0 if any(f.get("id") == sys.argv[1] for f in json.load(sys.stdin).get("flows", [])) else 1)
+' "$1"
+}
+flow_gone() { ! flow_present "$1"; }
 
 # Restore the adapter's configured default when we are done, however we exit:
 # leaving it on whatever the last pair used would silently change what Act 2
@@ -79,11 +129,6 @@ restore_modulation() {
 }
 trap restore_modulation EXIT
 
-if [ "${1:-}" = "--reset" ]; then
-  say "Clearing existing ONOS flows"
-  "$(dirname "$0")/lightpath.sh" clear >/dev/null 2>&1 || true
-fi
-
 say "Seeding lightpaths through ONOS"
 printf '\n'
 
@@ -94,6 +139,8 @@ refused=0
 # $PAIRS would split each description into separate loop iterations.
 while IFS=':' read -r a_city z_city modulation label; do
   [ -n "${a_city}" ] || continue
+  # A spare is for a refusal: skip it once its format has what was asked for.
+  [ "$(admitted_of "${modulation}")" -lt "$(wanted_of "${modulation}")" ] || continue
 
   a_port="$(port_for_node "${a_city}" 2>/dev/null)" || { warn "skipping ${a_city}: not found"; continue; }
   z_port="$(port_for_node "${z_city}" 2>/dev/null)" || { warn "skipping ${z_city}: not found"; continue; }
@@ -110,8 +157,8 @@ while IFS=':' read -r a_city z_city modulation label; do
     "${ADAPTER_URL}/adapter/modulation" >/dev/null \
     || { warn "skipping ${a_city} -> ${z_city}: adapter rejected ${modulation}"; continue; }
 
-  before="$(curl -sS "${ADAPTER_URL}/adapter/status" \
-    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["onos-created-services"]))')"
+  before="$(service_count)"
+  rejected_before="$(last_rejection)"
 
   body="$(printf '{"priority":100,"timeout":0,"isPermanent":true,"deviceId":"%s",' "${DEVICE_ID}"
           printf '"treatment":{"instructions":[{"type":"OUTPUT","port":"%s"}]},' "${z_port}"
@@ -124,27 +171,44 @@ while IFS=':' read -r a_city z_city modulation label; do
     || { warn "    ONOS rejected the flow rule"; continue; }
 
   # The driver POSTs asynchronously; GNPy propagation for a long path takes a
-  # few seconds, so poll rather than sleeping a fixed amount.
-  admitted=""
+  # few seconds, so poll rather than sleeping a fixed amount. The adapter
+  # records a refusal as soon as the twin answers 409.
+  outcome=""
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     sleep 3
-    now="$(curl -sS "${ADAPTER_URL}/adapter/status" \
-      | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["onos-created-services"]))')"
-    if [ "${now}" -gt "${before}" ]; then admitted=yes; break; fi
+    if [ "$(service_count)" -gt "${before}" ]; then outcome=admitted; break; fi
+    if [ "$(last_rejection)" != "${rejected_before}" ]; then outcome=refused; break; fi
   done
 
-  if [ -n "${admitted}" ]; then
+  if [ "${outcome}" = admitted ]; then
     created=$((created + 1))
-  else
-    refused=$((refused + 1))
-    printf '    refused by the twin (see %s/adapter/status)\n' "${ADAPTER_URL}"
+    ADMITTED_FORMATS="${ADMITTED_FORMATS}${modulation}
+"
+    continue
   fi
+  refused=$((refused + 1))
+  if [ "${outcome}" = refused ]; then
+    printf '    refused by the twin (%s)\n' "$(rejection_detail)"
+  else
+    printf '    no answer from the twin within 60 s\n'
+  fi
+  # ONOS would retry the flow for ever in PENDING_ADD: remove it.
+  flow="$(onos_flow_on_port "${a_port}")"
+  [ -n "${flow}" ] || die "the flow on port ${a_port} is not in ONOS; check ${ONOS_URL}/onos/ui"
+  onos_api DELETE "/onos/v1/flows/${DEVICE_ID}/${flow}" >/dev/null \
+    && wait_for "ONOS to drop flow ${flow}" 60 flow_gone "${flow}" \
+    || die "could not remove flow ${flow}: ONOS keeps it in PENDING_ADD"
+  printf '    removed its flow %s from ONOS\n' "${flow}"
 done <<EOF
 ${PAIRS}
 EOF
 
 printf '\n'
-ok "${created} lightpath(s) admitted, ${refused} refused"
+ok "${created} lightpath(s) admitted, ${refused} refused (their flows removed)"
+for fmt in DP-64QAM DP-16QAM DP-QPSK; do
+  [ "$(admitted_of "${fmt}")" -ge "$(wanted_of "${fmt}")" ] \
+    || warn "${fmt}: $(admitted_of "${fmt}") of $(wanted_of "${fmt}") admitted"
+done
 
 say "Twin optical performance monitoring"
 curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c "

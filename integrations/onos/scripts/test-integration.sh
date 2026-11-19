@@ -15,6 +15,9 @@
 # running, and the whole stack runs with tokens on; an extra step checks that
 # the twin refuses an anonymous request. Unset, authentication is off.
 #
+# Seeding draws its pairs with SEED_RANDOM_SEED, `twinlight-onos-test` unless
+# exported; the run prints the seed, so a failure can be replayed with it.
+#
 # e2e options:
 #   --keep        leave the stack up afterwards, for inspection
 #   --reuse       test a stack that is already up instead of booting one; it is
@@ -47,7 +50,7 @@ REPO_ROOT="$(cd "${HERE}/../../.." && pwd)"
 ADAPTER_DIR="${HERE}/../adapter"
 LABEL="org.twinlight.onos-test"
 
-usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 MODE="${1:-}"; [ -n "${MODE}" ] || usage; shift
 PINNED=""; KEEP=""; REUSE=""; BOOTS=1; RMI=""; OUT=""
@@ -83,6 +86,8 @@ export TWINLIGHT_ONOS_SUBNET_PREFIX="${TWINLIGHT_ONOS_SUBNET_PREFIX:-172.30}"
 # The URLs and the device id follow the variables above; an inherited value
 # would point the checks at some other stack.
 unset ONOS_URL ADAPTER_URL TWIN_URL DEVICE_ID
+# The order seed-demo.sh draws its pairs in (see find_pairs.py).
+export SEED_RANDOM_SEED="${SEED_RANDOM_SEED:-twinlight-onos-test}"
 
 RUN_DIR="${OUT:-${TMPDIR:-/tmp}/twinlight-onos-test-$(date +%Y%m%d-%H%M%S)}"
 RUN_DIR="${RUN_DIR%/}"
@@ -399,6 +404,7 @@ flows_match_services() {
 }
 check_seed() {
   local out admitted
+  echo "SEED_RANDOM_SEED=${SEED_RANDOM_SEED}"
   out="$("${HERE}/seed-demo.sh" --reset)" || { printf '%s\n' "${out}"; return 1; }
   printf '%s\n' "${out}"
   admitted="$(printf '%s' "${out}" | sed -n 's/.* \([0-9][0-9]*\) lightpath(s) admitted.*/\1/p')"
@@ -587,6 +593,7 @@ e2e() {
     "${COMPOSE_PROJECT_NAME}" "${TL_PREFIX}" "${TWINLIGHT_IMAGE_TAG}"
   printf '            twin %s  adapter %s  ONOS %s  device %s\n' \
     "${TWIN_URL}" "${ADAPTER_URL}" "${ONOS_URL}" "${DEVICE_ID}"
+  printf '            seeding with SEED_RANDOM_SEED=%s\n' "${SEED_RANDOM_SEED}"
   printf '            authentication %s\n\n' \
     "$([ -n "${TWINLIGHT_API_TOKENS:-}" ] && echo "on (TWINLIGHT_API_TOKENS for the twin, TWINLIGHT_API_TOKEN for the adapter and scripts)" || echo off)"
 

@@ -426,8 +426,24 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 |--------|---------|
 | `scripts/demo-up.sh` | Build and boot the stack, verify the ODTN apps, push the netcfg, wait for discovery |
 | `scripts/validate.sh` | 16 end-to-end checks across all layers; non-zero exit on any failure |
-| `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range *and all three modulation formats*, so every UI has state to show (`--reset` clears first). Pairs are discovered by probing, not hardcoded — see `scripts/find_pairs.py` |
-| `scripts/find_pairs.py` | Probe random endpoint pairs through `/internal/path-info` and report which modulation format each can carry. Used by `seed-demo.sh`; useful on its own when a topology changes |
+| `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range *and all three modulation formats*, so every UI has state to show (`--reset` clears first). Pairs are discovered by probing, not hardcoded — see `scripts/find_pairs.py`. A pair the twin refuses at create is replaced by a spare of the same format, and its flow is removed from ONOS (see below) |
+| `scripts/find_pairs.py` | Probe random endpoint pairs through `/internal/path-info` and report which modulation format each can carry, plus a spare per format. Used by `seed-demo.sh`; useful on its own when a topology changes |
+
+**Why a probed pair can still be refused.** `/internal/path-info` reports the
+GSNR an OPM read would give now: the GNPy baseline after the twin's
+time-varying transient models. Admission gates on the pristine baseline
+([Part 2](#part-2--onos-provisions-a-lightpath-the-twin-supplies-the-physics),
+"Why the live GSNR differs from the admission figure"). The two differ by a few
+tenths of a dB, so a pair that probes just above a format's threshold can be
+refused. San_Jose → Louisville probed at 10.3 dB against DP-QPSK's 10.0 dB, and
+admission found 9.9 dB (the load of the other seeded lightpaths moved that
+figure by less than 0.1 dB). Left alone, the refused flow sits in ONOS in
+`PENDING_ADD`, retried for ever. `seed-demo.sh` therefore detects the refusal
+(a new entry in the adapter's `recent-rejections`), removes the flow, says so,
+and provisions that format's spare instead. It exits non-zero if ONOS will not
+drop the flow. `SEED_RANDOM_SEED` fixes the sequence of pairs drawn. It cannot
+make the result fully repeatable: a pair that probes within the transient swing
+of a threshold can be filed differently from one run to the next.
 | `scripts/lightpath.sh` | `create <A> <Z>` / `list` / `delete <flow-id>` / `clear` — provisioning driven from ONOS |
 | `scripts/correlate.sh` | Join the ONOS Flows view to the twin's service list, one row per flow (`--json` for the raw join) |
 | `scripts/resync.sh` | Force ONOS to re-discover ports (`--check` just compares the two sides) |
@@ -489,7 +505,7 @@ every other script and checks what it did:
 | `correlate.sh`, `--json` | every ONOS flow joins a twin service |
 | `fault.sh cut-path`, `heal-all`, `list` | OPM reports `link-failed`, then recovers |
 | `lightpath.sh delete` | the twin releases the service |
-| `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number |
+| `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number, so no flow was left in `PENDING_ADD` without a lightpath. The pairs are drawn with `SEED_RANDOM_SEED`, `twinlight-onos-test` unless you export another, and the run prints it |
 | delete scope, across an adapter restart | a lightpath created on the twin directly is not listed to ONOS and survives a `DELETE` through the adapter (`204`, reported under `refused-deletes`); after the adapter restarts, ONOS is shown the same services as before and `/adapter/status` reports them, and removing a flow in ONOS still releases its lightpath. The restart is skipped with `--reuse` |
 | `resync.sh --check`, `resync.sh` | ONOS-created lightpaths survive, every port enabled |
 | `onos-cli.sh devices` | the CLI answers and lists the device |

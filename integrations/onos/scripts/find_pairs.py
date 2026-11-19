@@ -27,6 +27,28 @@ half from anywhere. Both halves are still random; the adjacency pool only
 makes the short end of the reach distribution reachable in a sane number of
 probes.
 
+**A probe is not the admission decision.** ``/internal/path-info`` reports
+the GSNR an OPM read would give now: the GNPy baseline *after* the twin's
+time-varying transient models (PDL and SOP drift, phase noise, EDFA
+dynamics). Admission gates on the pristine baseline, with no transient term
+(integrations/onos/README.md, "Why the live GSNR differs from the admission
+figure"). The two differ by a few tenths of a dB, more on paths with many
+ROADMs, in either direction and with the time of the probe. So a pair whose
+pristine GSNR lies just below a threshold can probe above it and be refused
+at create: San_Jose -> Louisville on CORONET probed at 10.3 dB against
+DP-QPSK's 10.0 dB, and admission found 9.9 dB. The line load of the pairs
+seeded before it moved that figure by less than 0.1 dB. No twin endpoint
+gives the pristine figure without provisioning, so the search finds up to
+``SPARES`` extra pairs per format (default 1), printed after that format's
+winners. ``seed-demo.sh`` provisions a spare only when a winner is refused,
+and removes the refused flow.
+
+``SEED_RANDOM_SEED`` fixes the sequence of pairs drawn. The search is then
+repeatable up to that same transient term: a pair probing within a few
+tenths of a dB of a threshold can land on either side of it on another run,
+and since a winner takes its A-end, what is probed after it can differ too.
+Against the same twin state at the same moment, it is the same search.
+
 Only the standard library, matching the rest of the demo scripts.
 """
 
@@ -37,6 +59,7 @@ import os
 import random
 import sys
 import urllib.error
+from collections.abc import Callable
 
 from tapi_fields import twin_data_root, twin_urlopen  # same directory: on sys.path when run
 
@@ -109,27 +132,28 @@ def _probe(base: str, sip_a: str, sip_z: str) -> tuple[float, float] | None:
     return float(gsnr), float(info.get("total-fiber-km") or 0.0)
 
 
-def main() -> int:
-    base = os.environ.get("TWIN_URL", "http://localhost:8080").rstrip("/")
-    wanted = {
-        "DP-64QAM": int(os.environ.get("Q64_WANTED", "2")),
-        "DP-16QAM": int(os.environ.get("Q16_WANTED", "3")),
-        "DP-QPSK": int(os.environ.get("QPSK_WANTED", "3")),
-    }
-    attempts = int(os.environ.get("ATTEMPTS", "40"))
-    seed = os.environ.get("SEED_RANDOM_SEED") or None
-    rng = random.Random(seed) if seed else random.Random()
+Found = dict[str, list[tuple[str, str, float, float]]]
 
-    cities = _cities(base)
-    if len(cities) < 2:
-        print("twin reported fewer than two SIPs", file=sys.stderr)
-        return 1
 
-    names = sorted(cities)
-    adjacent = _adjacent(base, cities)
-    found: dict[str, list[tuple[str, str, float, float]]] = {
-        fmt: [] for fmt in wanted
-    }
+def search(
+    rng: random.Random,
+    names: list[str],
+    adjacent: list[tuple[str, str]],
+    probe: Callable[[str, str], tuple[float, float] | None],
+    wanted: dict[str, int],
+    spares: int,
+    attempts: int,
+) -> tuple[Found, int]:
+    """Draw and probe pairs; per format, up to ``wanted`` + ``spares`` winners.
+
+    ``probe(a, z)`` returns (GSNR dB, path km) or None. Winners are kept in
+    the order found, so the first ``wanted`` of a format are its pairs and
+    the rest its spares. ``names`` and ``adjacent`` must be in a fixed order
+    for a seeded ``rng`` to repeat the draw. Returns the winners and how many
+    distinct pairs were drawn.
+    """
+    limit = {fmt: wanted[fmt] + spares for fmt in wanted}
+    found: Found = {fmt: [] for fmt in wanted}
     tried: set[tuple[str, str]] = set()
     # ONOS keys an OLS flow rule on its selector, the in-port, and not on the
     # out-port: a second lightpath from the same A-end gets the first one's
@@ -139,7 +163,7 @@ def main() -> int:
     sources: set[str] = set()
 
     for attempt in range(attempts):
-        if all(len(found[f]) >= wanted[f] for f in wanted):
+        if all(len(found[f]) >= limit[f] for f in wanted):
             break
         # Alternate the two pools so both the short and the long end of the
         # reach distribution get probed within the budget.
@@ -156,17 +180,46 @@ def main() -> int:
                 continue
             a, z = z, a
 
-        result = _probe(base, cities[a], cities[z])
+        result = probe(a, z)
         if result is None:
             continue
         gsnr, km = result
 
         # File under the best format this pair supports and still needs.
         for fmt, threshold in THRESHOLDS:
-            if gsnr >= threshold and len(found[fmt]) < wanted[fmt]:
+            if fmt in found and gsnr >= threshold and len(found[fmt]) < limit[fmt]:
                 found[fmt].append((a, z, gsnr, km))
                 sources.add(a)
                 break
+    return found, len(tried)
+
+
+def main() -> int:
+    base = os.environ.get("TWIN_URL", "http://localhost:8080").rstrip("/")
+    wanted = {
+        "DP-64QAM": int(os.environ.get("Q64_WANTED", "2")),
+        "DP-16QAM": int(os.environ.get("Q16_WANTED", "3")),
+        "DP-QPSK": int(os.environ.get("QPSK_WANTED", "3")),
+    }
+    spares = int(os.environ.get("SPARES", "1"))
+    attempts = int(os.environ.get("ATTEMPTS", "40"))
+    seed = os.environ.get("SEED_RANDOM_SEED") or None
+    rng = random.Random(seed) if seed else random.Random()
+
+    cities = _cities(base)
+    if len(cities) < 2:
+        print("twin reported fewer than two SIPs", file=sys.stderr)
+        return 1
+
+    found, tried = search(
+        rng,
+        sorted(cities),
+        _adjacent(base, cities),
+        lambda a, z: _probe(base, cities[a], cities[z]),
+        wanted,
+        spares,
+        attempts,
+    )
 
     for fmt, _threshold in THRESHOLDS:
         for a, z, gsnr, km in found[fmt]:
@@ -182,7 +235,7 @@ def main() -> int:
         # Not fatal: a topology may simply have nothing short enough for
         # DP-64QAM. Say so rather than silently seeding fewer lightpaths.
         print(
-            f"probed {len(tried)} pairs; short of target: {', '.join(short)}",
+            f"probed {tried} pairs; short of target: {', '.join(short)}",
             file=sys.stderr,
         )
     return 0
