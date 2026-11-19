@@ -37,6 +37,7 @@ from twinlight.api import (
 from twinlight.api import (
     metrics as metrics_api,
 )
+from twinlight.api.conditional import ConditionalRequestMiddleware
 from twinlight.api.middleware import (
     RESTCONF_MEDIA_TYPE,
     AllowHeaderMiddleware,
@@ -241,13 +242,19 @@ def create_app(config: TwinConfig) -> FastAPI:
     # refuses the query parameters, Accept and body media types RFC 8040
     # refuses (400, 406, 415); RestconfHeadersMiddleware, just inside CORS,
     # stamps Content-Type and Cache-Control on every RESTCONF response, a
-    # 401 included.
+    # 401 included. ConditionalRequestMiddleware, just inside
+    # RestconfRequestMiddleware, sends the validators, evaluates the
+    # conditional headers and holds the write gate (RFC 8040 §3.4.1; RFC
+    # 9110 §13).
     refusals = (transparent.refused_methods,)
     app.add_middleware(AllowHeaderMiddleware, refusals=refusals)
     app.add_middleware(
         OptionsMiddleware,
         restconf_root=config.server.restconf_root,
         refusals=refusals,
+    )
+    app.add_middleware(
+        ConditionalRequestMiddleware, restconf_root=config.server.restconf_root
     )
     app.add_middleware(
         RestconfRequestMiddleware, restconf_root=config.server.restconf_root

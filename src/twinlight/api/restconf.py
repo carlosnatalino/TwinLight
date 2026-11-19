@@ -36,6 +36,15 @@ def is_restconf_path(path: str, root: str) -> bool:
     return path == base or path.startswith(base + "/")
 
 
+def is_data_path(path: str, root: str) -> bool:
+    """Whether ``path`` is the datastore resource ``{root}/data`` or a data
+    resource below it (RFC 8040 §3.3.1, §3.5): the resources that carry
+    entity-tags and take the ``content`` query parameter, as opposed to the
+    API resource, ``yang-library-version`` and ``operations``."""
+    base = f"{root}/data"
+    return path == base or path.startswith(base + "/")
+
+
 class RestconfError(HTTPException):
     """An error with the RFC 8040 §7 ``error-tag`` the condition calls for.
 

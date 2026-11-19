@@ -175,6 +175,14 @@ The same method bumps the running revision (the transparent controller's ETag)
 and captures the startup value its reverts restore; twin-config changes go
 through `apply_twin_overrides` for the same reasons.
 
+The T-API datastore's entity-tags (`state/revision.py`, served by
+`api/conditional.py`) follow the same discipline: every `TapiContext` method
+that changes something a T-API body shows calls `_tapi_changed` —
+`config=True` when a `config true` node of the YANG changed (services,
+path-comp-services, restores) — and `_bump_revision` does it for element,
+failure and twin-config changes. A mutation that skips it, or a route that
+mutates a model directly, makes a `304` confirm a body that has changed.
+
 Under a backend with `uses_line_load` (EGN), a baseline also depends on the
 lightpaths sharing its fibers: `add_service` re-evaluates them and
 `delete_service` invalidates them (`_sharing_services`). The reverse index

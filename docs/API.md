@@ -68,6 +68,7 @@ in the rows after the paths:
 | `PATCH …/connectivity-service={uuid}` with `{"tapi-connectivity:connectivity-service": {…}}` answering `200` and changing nothing (only a bare body was read), with the entry as an object | The envelope (array of one or object) is read and merged; any leaf `PATCH` cannot merge is a `400` naming it; the `200` carries the entry's `GET` body |
 | `GET /restconf` and `/restconf/yang-library-version` served as `application/json` | `application/yang-data+json`, like every RESTCONF response, with `Cache-Control: no-cache` |
 | Any query parameter on a T-API resource ignored (`?depth=1` answered the full resource) | `400` (`invalid-value`) for anything but `content=all`; `content=config`/`nonconfig` is `501` |
+| No `ETag` or `Last-Modified` on any T-API resource; `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since` ignored | Every `GET`/`HEAD` of the datastore and the data resources carries both; a matching `If-None-Match` or an `If-Modified-Since` not older than the data is a `304`, and a failed `If-Match` or `If-Unmodified-Since` a `412` (`operation-failed`) that leaves the twin unchanged (see [Entity-tags and conditional requests](#entity-tags-and-conditional-requests)). A client sending none of these sees no other change |
 | A non-JSON `Accept` (`application/yang-data+xml`) answered with JSON | `406` |
 | A request body in any media type parsed as JSON when it parsed | `415` unless it is `application/yang-data+json` or `application/json` |
 | `GET /restconf/data`, the YANG library, `restconf-state` and `/restconf/operations` answering `404` | Served (RFC 8040 §3.3, §9, §10) |
@@ -827,6 +828,63 @@ included — is `application/yang-data+json` when it has a body and carries
 `application/json` is accepted as a request body beside the RESTCONF media
 type, since it names the same JSON and is what generic HTTP clients send.
 The proprietary endpoints do none of these checks.
+
+### Entity-tags and conditional requests
+
+Every `GET` and `HEAD` of the datastore (`{root}/data`) and of a data
+resource below it that answers `2xx` carries an `ETag` and a `Last-Modified`
+(RFC 8040 §3.4.1, §3.5.1, §3.5.2). The tags are the datastore's, shared by
+every resource (§3.5.2: without a tag of its own, "the resource entity-tag
+for the datastore MUST be used instead"), strong, opaque, and unique per
+process: a tag from before a restart never matches one after it.
+
+Every change of what a body shows moves them: creating, replacing, patching
+or deleting a connectivity-service, creating or deleting a path-comp-service,
+a restore, and every change of what the twin derives — a link failure, an
+element parameter, a twin setting (through `/config`, `/config/parameters` or
+`/transparent`), a redesign, the measurement stream turning `ACTIVE`. The
+bodies carry operational states, spectrum occupancy and stream state besides
+configuration, so a tag that only configuration moved would let a client keep
+a stale `operational-state` through a `304`. A validator here never confirms
+a body that differs. Behind it the twin keeps the configuration's own tag,
+RFC 8040's datastore entity-tag, "only affected by configuration data
+resources" (§3.4.1.2), which a write's `If-Match` accepts as well.
+
+| Header | On `GET`/`HEAD` | On `POST`, `PUT`, `PATCH`, `DELETE` |
+|--------|-----------------|-------------------------------------|
+| `If-None-Match` | Matches the current tag (weak comparison, or `*`): `304` with the `ETag` and no body | Matches the current tag, or `*` on an existing target: `412` |
+| `If-Modified-Since` | Not modified since: `304`. Ignored with `If-None-Match` | Ignored (RFC 9110 §13.1.3) |
+| `If-Match` | Does not match the current tag (strong comparison): `412` | Passes when it names the current configuration tag or the current full tag, or is `*` on an existing target; `412` otherwise, and on a `PUT` that would create |
+| `If-Unmodified-Since` | Modified since: `412` | Compared with the configuration's time: `412` when modified since |
+
+They are evaluated in RFC 9110 §13.2.2's order, after authentication (a `401`
+comes first), after the `400`/`406`/`415` checks, and only where the request
+without them would succeed: a `405`, and a `404` for a target that does not
+exist (unless a `PUT` would create it), win over a precondition. A `412` has
+`error-tag: operation-failed` (RFC 8040 §7) and the current configuration
+`ETag`, and changes nothing; it is decided before the body is read, so a
+stale tag on a malformed body is a `412`, not a `400`. A write's response
+carries no validator (RFC 9110 §9.3.4: admission transforms what was sent);
+read the resource again for the new tag.
+
+To guard a read-modify-write, send the tag you read back in `If-Match`:
+
+```
+$ curl -sI 'http://localhost:8080/restconf/data' | grep -i etag
+etag: "5f1c0e9a2b7d-f7"
+$ curl -i -X DELETE -H 'If-Match: "5f1c0e9a2b7d-f7"' \
+    'http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=<uuid>'
+HTTP/1.1 412 Precondition Failed      (if the twin changed in between)
+```
+
+A conditional write holds the twin's write gate from the check until its
+response is sent: no write through any interface (T-API, `/config`,
+`/transparent`, `/admin`) lands in between, so of two clients writing with
+the same tag exactly one succeeds. Writes without a precondition still run
+concurrently, as before. `Last-Modified` has whole-second resolution: when a
+second saw two states (or is the second the twin started in), a date equal to
+it is treated as modified, never as a `304`. The transparent controller keeps
+its own tags (below), which a service change does not move.
 
 ## Non-standard endpoints
 

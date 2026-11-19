@@ -537,12 +537,11 @@ async def update_service(uuid: str, body: dict, request: Request) -> dict:
                 for e in exc.errors()
             ),
         ) from exc
-    if patch.name is not None:
-        svc.name = patch.name
-    if patch.administrative_state is not None:
-        svc.administrative_state = patch.administrative_state
-    if patch.lifecycle_state is not None:
-        svc.lifecycle_state = patch.lifecycle_state
+    # Through the state layer, which moves the datastore's validators.
+    svc = ctx.update_service(
+        uuid, name=patch.name, administrative_state=patch.administrative_state,
+        lifecycle_state=patch.lifecycle_state,
+    )
     await ctx.get_or_compute_baseline(svc)  # current operational-state
     return _entry_body(ctx, svc)
 
