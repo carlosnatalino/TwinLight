@@ -81,6 +81,7 @@ way a deployed coherent receiver's telemetry moves.
 - **T-API v2.6.0 northbound** — context, topology, connectivity-service CRUD,
   path computation, physical inventory and photonic-media spectrum, over
   RESTCONF (RFC 8040): standard response bodies, the RFC 8040 §7 error tags,
+  64-bit numbers as JSON strings (RFC 7951 §6.1),
   `HEAD` and `OPTIONS` everywhere, the datastore and YANG library, and
   `application/yang-data+json`. What does and does not conform is in
   [docs/TAPI_COMPLIANCE.md](docs/TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix).

@@ -15,6 +15,7 @@ import {
   type LayerProtocolConstraint,
   type ModulationFormat,
 } from "@/api/types";
+import { formatDecimal64Integer, formatUint64 } from "@/lib/yangNumbers";
 
 /** A T-API node reference, as topology-constraint lists carry them. */
 export interface NodeRef {
@@ -60,6 +61,10 @@ export function serviceFormError(form: ServiceForm): string | null {
     if (!Number.isFinite(form.centralFrequencyThz) || form.centralFrequencyThz <= 0) {
       return "Central frequency must be a positive number of THz";
     }
+    // Sent in Hz as a uint64 string, exact only below 2^53 Hz (9007 THz).
+    if (!Number.isSafeInteger(Math.round(form.centralFrequencyThz * 1e12))) {
+      return "Central frequency is too large";
+    }
   }
   const included = new Set(form.constraints.include.map((n) => n["node-uuid"]));
   if (form.constraints.exclude.some((n) => included.has(n["node-uuid"]))) {
@@ -101,13 +106,14 @@ function endPoint(
       "standard-modulation-technique": MODULATION_TO_MT[form.modulation],
     };
   }
+  // Both are 64-bit leaves, sent as strings (RFC 7951 §6.1; lib/yangNumbers.ts).
   if (form.centralFrequencyThz !== null) {
     // uint64 Hz; rounded to the Hz so float noise never makes it off-grid.
-    otsiConfig["central-frequency"] = Math.round(form.centralFrequencyThz * 1e12);
+    otsiConfig["central-frequency"] = formatUint64(Math.round(form.centralFrequencyThz * 1e12));
   }
   if (form.launchPowerDbm !== null) {
-    // decimal64 in 0.01 dBm.
-    otsiConfig["channel-output-power"] = Math.round(form.launchPowerDbm * 100);
+    // decimal64 in 0.01 dBm, e.g. "-235.0".
+    otsiConfig["channel-output-power"] = formatDecimal64Integer(Math.round(form.launchPowerDbm * 100));
   }
   const says = Object.keys(otsiConfig).length > 1;
   return {

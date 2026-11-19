@@ -25,6 +25,7 @@ import type {
   ConstellationResponse,
   EyeDiagramResponse,
 } from "./types";
+import { spectrumOf } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -136,7 +137,17 @@ export function singleService(body: ConnectivityServiceEntryResponse): Connectiv
       "The response carries no tapi-connectivity:connectivity-service entry (an array of one)"
     );
   }
-  return entries[0];
+  return checkedService(entries[0]);
+}
+
+/**
+ * A service whose assigned spectrum parses. Its band edges are uint64
+ * strings (RFC 7951 §6.1); one that does not parse fails the request here,
+ * where the page shows the error, instead of a page rendering it later.
+ */
+function checkedService(service: ConnectivityService): ConnectivityService {
+  spectrumOf(service);
+  return service;
 }
 
 export class TapiApiClient {
@@ -355,7 +366,7 @@ export class TapiApiClient {
         "The connectivity-service list has no tapi-connectivity:connectivity-service member"
       );
     }
-    return services;
+    return services.map(checkedService);
   }
 
   /** A plain patch (RFC 8040 §4.6.1); the 200 carries the patched entry. */

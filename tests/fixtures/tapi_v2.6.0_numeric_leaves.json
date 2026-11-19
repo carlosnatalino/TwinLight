@@ -1,0 +1,1955 @@
+{
+ "$comment": [
+  "Every leaf of the TAPI v2.6.0 data tree whose YANG type is, or resolves to",
+  "through typedefs and unions, an integer or decimal64 type: 542 leaves, keyed by",
+  "schema path as RFC 7951 names members (module-qualified where the module changes;",
+  "choice and case nodes left out; list entries at their list's path).",
+  "Derived with pyang 2.7.1 from the v2.6.0 modules tapi-common, tapi-topology,",
+  "tapi-connectivity, tapi-path-computation, tapi-equipment, tapi-oam, tapi-streaming,",
+  "tapi-gnmi-streaming and tapi-photonic-media",
+  "(https://github.com/Open-Network-Models-and-Interfaces-ONMI/TAPI/tree/v2.6.0/YANG):",
+  "augments applied, groupings expanded; rpcs, notifications and tapi-notification",
+  "(imported, not served) left out. The modules are published by the ONMI project",
+  "(formerly ONF) under the Apache License 2.0; this table holds only names and types.",
+  "T-API v2.6.0 has no int8..int32 or uint8..uint32 leaf, and every decimal64 leaf",
+  "has fraction-digits 7. The ietf-yang-library (RFC 8525) and",
+  "ietf-restconf-monitoring (RFC 8040 section 9.3) nodes the twin serves have no",
+  "numeric leaf."
+ ],
+ "leaves": {
+  "tapi-common:context": {
+   "profile": {
+    "tapi-oam:oam-profile": {
+     "pm-parameter-config": {
+      "granularity-period": {
+       "value": "uint64"
+      },
+      "pm-parameter": {
+       "threshold-config": {
+        "pm-parameter-value": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      }
+     }
+    },
+    "tapi-photonic-media:amplification-profile": {
+     "extended-gain-range": {
+      "max-gain": "decimal64:7",
+      "min-gain": "decimal64:7"
+     },
+     "frequency-range": {
+      "lower-frequency": "uint64",
+      "upper-frequency": "uint64"
+     },
+     "gain-range": {
+      "max-gain": "decimal64:7",
+      "min-gain": "decimal64:7"
+     },
+     "max-power": "decimal64:7",
+     "noise-figure-range": {
+      "max-noise-figure": "decimal64:7",
+      "min-noise-figure": "decimal64:7"
+     }
+    },
+    "tapi-photonic-media:connectivity-impairment-profile": {
+     "frequency-range": {
+      "lower-frequency": "uint64",
+      "upper-frequency": "uint64"
+     },
+     "roadm-cd": "decimal64:7",
+     "roadm-inband-crosstalk": "decimal64:7",
+     "roadm-maxloss": "decimal64:7",
+     "roadm-minloss": "decimal64:7",
+     "roadm-noise-figure": "decimal64:7",
+     "roadm-osnr": "decimal64:7",
+     "roadm-pdl": "decimal64:7",
+     "roadm-pmax": "decimal64:7",
+     "roadm-pmd": "decimal64:7",
+     "roadm-pmin": "decimal64:7",
+     "roadm-ptyp": "decimal64:7",
+     "roadm-typloss": "decimal64:7"
+    },
+    "tapi-photonic-media:fiber-profile": {
+     "effective-area": "decimal64:7",
+     "fiber-pmd": "decimal64:7",
+     "loss-coef": "decimal64:7"
+    },
+    "tapi-photonic-media:transceiver-profile": {
+     "transceiver-explicit-profile": {
+      "common-explicit": {
+       "baud-rate": "uint64",
+       "bit-rate": "decimal64:7",
+       "chromatic-dispersion-penalty": {
+        "chromatic-dispersion": "decimal64:7",
+        "index": "uint64",
+        "penalty": "decimal64:7"
+       },
+       "fec-code-rate": "decimal64:7",
+       "fec-threshold": "decimal64:7",
+       "in-band-osnr": "decimal64:7",
+       "max-chromatic-dispersion": "decimal64:7",
+       "max-diff-group-delay": "uint64",
+       "max-polarization-dependent-loss": "uint64",
+       "max-polarization-mode-dispersion": "decimal64:7",
+       "min-carrier-spacing": "uint64",
+       "min-osnr": "decimal64:7",
+       "min-qfactor": "decimal64:7",
+       "out-of-band-osnr": "decimal64:7",
+       "polarization-dependent-loss-penalty": {
+        "index": "uint64",
+        "penalty": "decimal64:7",
+        "polarization-dependent-loss": "decimal64:7"
+       },
+       "polarization-mode-dispersion-penalty": {
+        "index": "uint64",
+        "penalty": "decimal64:7",
+        "polarization-mode-dispersion": "decimal64:7"
+       },
+       "polarization-skew": "uint64",
+       "roll-off": "decimal64:7",
+       "rx-channel-power-penalty": {
+        "index": "uint64",
+        "penalty": "decimal64:7",
+        "rx-channel-power": "decimal64:7"
+       },
+       "rx-reference-channel-power": "decimal64:7",
+       "tx-polarization-power-difference": "decimal64:7"
+      },
+      "common-transceiver-parameters": {
+       "central-frequency-range": {
+        "lower-frequency": "uint64",
+        "upper-frequency": "uint64"
+       },
+       "rx-channel-power-max": "decimal64:7",
+       "rx-channel-power-min": "decimal64:7",
+       "rx-total-power-max": "decimal64:7",
+       "tunability": "uint64",
+       "tx-channel-power-max": "decimal64:7",
+       "tx-channel-power-min": "decimal64:7"
+      }
+     },
+     "transceiver-organizational-profile": {
+      "common-transceiver-parameters": {
+       "central-frequency-range": {
+        "lower-frequency": "uint64",
+        "upper-frequency": "uint64"
+       },
+       "rx-channel-power-max": "decimal64:7",
+       "rx-channel-power-min": "decimal64:7",
+       "rx-total-power-max": "decimal64:7",
+       "tunability": "uint64",
+       "tx-channel-power-max": "decimal64:7",
+       "tx-channel-power-min": "decimal64:7"
+      },
+      "external-transceiver-parameters": {
+       "baud-rate": "uint64"
+      }
+     },
+     "transceiver-standard-profile": {
+      "common-transceiver-parameters": {
+       "central-frequency-range": {
+        "lower-frequency": "uint64",
+        "upper-frequency": "uint64"
+       },
+       "rx-channel-power-max": "decimal64:7",
+       "rx-channel-power-min": "decimal64:7",
+       "rx-total-power-max": "decimal64:7",
+       "tunability": "uint64",
+       "tx-channel-power-max": "decimal64:7",
+       "tx-channel-power-min": "decimal64:7"
+      }
+     }
+    },
+    "transmission-capability-profile": {
+     "supported-payload-structure": {
+      "capacity": {
+       "value": "decimal64:7"
+      },
+      "number-of-cep-instances": "uint64"
+     }
+    }
+   },
+   "service-interface-point": {
+    "available-capacity": {
+     "total-size": {
+      "value": "decimal64:7"
+     }
+    },
+    "available-cep-layer-protocol-qualifier-instances": {
+     "number-of-cep-instances": "uint64"
+    },
+    "available-payload-structure": {
+     "capacity": {
+      "value": "decimal64:7"
+     },
+     "number-of-cep-instances": "uint64"
+    },
+    "supported-cep-layer-protocol-qualifier-instances": {
+     "number-of-cep-instances": "uint64"
+    },
+    "supported-payload-structure": {
+     "capacity": {
+      "value": "decimal64:7"
+     },
+     "number-of-cep-instances": "uint64"
+    },
+    "tapi-photonic-media:photonic-media-service-interface-point-spec": {
+     "power-management-capability-pac": {
+      "spectrum": {
+       "lower-frequency": "uint64",
+       "upper-frequency": "uint64"
+      },
+      "supportable-max-output-power": {
+       "power-spectral-density": "decimal64:7",
+       "total-power": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      },
+      "supportable-min-output-power": {
+       "power-spectral-density": "decimal64:7",
+       "total-power": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      },
+      "tolerable-max-input-power": {
+       "power-spectral-density": "decimal64:7",
+       "total-power": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      },
+      "tolerable-min-input-power": {
+       "power-spectral-density": "decimal64:7",
+       "total-power": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      }
+     },
+     "spectrum-capability-pac": {
+      "available-spectrum": {
+       "lower-frequency": "uint64",
+       "upper-frequency": "uint64"
+      },
+      "occupied-spectrum": {
+       "lower-frequency": "uint64",
+       "upper-frequency": "uint64"
+      },
+      "supportable-spectrum": {
+       "lower-frequency": "uint64",
+       "upper-frequency": "uint64"
+      }
+     },
+     "total-power-threshold-pac": {
+      "spectrum": {
+       "lower-frequency": "uint64",
+       "upper-frequency": "uint64"
+      },
+      "total-power-lower-warn-threshold-default": "decimal64:7",
+      "total-power-lower-warn-threshold-max": "decimal64:7",
+      "total-power-lower-warn-threshold-min": "decimal64:7",
+      "total-power-upper-warn-threshold-default": "decimal64:7",
+      "total-power-upper-warn-threshold-max": "decimal64:7",
+      "total-power-upper-warn-threshold-min": "decimal64:7"
+     }
+    },
+    "total-potential-capacity": {
+     "total-size": {
+      "value": "decimal64:7"
+     }
+    }
+   },
+   "tapi-connectivity:connectivity-context": {
+    "connection": {
+     "route": {
+      "resilience-route": {
+       "priority": "uint64"
+      }
+     },
+     "switch-control": {
+      "control-parameters": {
+       "hold-off-time": "uint64",
+       "max-switch-times": "uint64",
+       "resiliency-route-constraint": {
+        "priority": "uint64",
+        "routing-constraint": {
+         "max-allowed-cost": {
+          "priority": "uint64",
+          "value": "uint64"
+         },
+         "max-allowed-delay": {
+          "priority": "uint64",
+          "value": "uint64"
+         },
+         "max-allowed-hops": {
+          "priority": "uint64",
+          "value": "uint64"
+         }
+        },
+        "topology-constraint": {
+         "constraint-weight": "uint64",
+         "exclude-link-and-partition": {
+          "index": "uint64"
+         },
+         "exclude-nep-and-partition": {
+          "index": "uint64"
+         },
+         "include-link-and-partition": {
+          "index": "uint64"
+         },
+         "include-nep-and-partition": {
+          "index": "uint64"
+         }
+        }
+       },
+       "restore-priority": "uint64",
+       "set-up-priority": "uint64",
+       "wait-to-revert-time": {
+        "value": "uint64"
+       }
+      }
+     }
+    },
+    "connectivity-service": {
+     "connectivity-constraint": {
+      "requested-capacity": {
+       "total-size": {
+        "value": "decimal64:7"
+       }
+      }
+     },
+     "end-point": {
+      "capacity": {
+       "total-size": {
+        "value": "decimal64:7"
+       }
+      },
+      "layer-protocol-constraint": {
+       "tapi-photonic-media:mcg-connectivity-service-end-point-spec": {
+        "mc-bandwidth-config-pac": {
+         "power-management-config-pac": {
+          "max-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "max-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          }
+         },
+         "spectrum-bandwidth": "uint64"
+        },
+        "mc-flexi-grid-config-pac": {
+         "flexi-grid-config-pac": {
+          "m": "uint64",
+          "n": "int64"
+         },
+         "power-management-config-pac": {
+          "max-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "max-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          }
+         }
+        },
+        "mc-spectrum-config-pac": {
+         "power-management-config-pac": {
+          "max-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "max-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          }
+         },
+         "spectrum": {
+          "lower-frequency": "uint64",
+          "upper-frequency": "uint64"
+         }
+        },
+        "number-of-mc": "uint64"
+       },
+       "tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec": {
+        "number-of-otsi-mc": "uint64",
+        "otsi-mc-bandwidth-config-pac": {
+         "center-frequency-offset": "uint64",
+         "non-adjacent-spectrum": "uint64",
+         "power-management-config-pac": {
+          "max-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "max-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          }
+         },
+         "spectrum-bandwidth": "uint64"
+        },
+        "otsi-mc-flexi-grid-config-pac": {
+         "flexi-grid-config-pac": {
+          "m": "uint64",
+          "n": "int64"
+         },
+         "power-management-config-pac": {
+          "max-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "max-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          }
+         }
+        },
+        "otsi-mc-frequency-config-pac": {
+         "center-frequency-offset": "int64",
+         "central-frequency": "uint64",
+         "power-management-config-pac": {
+          "max-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "max-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          }
+         },
+         "spectrum-bandwidth": "uint64"
+        },
+        "otsi-mc-spectrum-config-pac": {
+         "center-frequency-offset": "uint64",
+         "power-management-config-pac": {
+          "max-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "max-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          }
+         },
+         "spectrum": {
+          "lower-frequency": "uint64",
+          "upper-frequency": "uint64"
+         }
+        }
+       },
+       "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
+        "number-of-otsi": "uint64",
+        "otsi-config": {
+         "central-frequency": "uint64",
+         "channel-output-power": "decimal64:7",
+         "otsi-threshold-power-config": {
+          "total-power-warn-threshold-lower": "decimal64:7",
+          "total-power-warn-threshold-upper": "decimal64:7"
+         },
+         "power-management-config-pac": {
+          "max-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "max-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-input-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          },
+          "min-output-power": {
+           "power-spectral-density": "decimal64:7",
+           "total-power": {
+            "metric-values": {
+             "pm-parameter-value": "decimal64:7"
+            }
+           }
+          }
+         }
+        },
+        "total-power-warn-threshold-lower": "decimal64:7",
+        "total-power-warn-threshold-upper": "decimal64:7"
+       }
+      }
+     },
+     "resilience-constraint": {
+      "hold-off-time": "uint64",
+      "max-switch-times": "uint64",
+      "resiliency-route-constraint": {
+       "priority": "uint64",
+       "routing-constraint": {
+        "max-allowed-cost": {
+         "priority": "uint64",
+         "value": "uint64"
+        },
+        "max-allowed-delay": {
+         "priority": "uint64",
+         "value": "uint64"
+        },
+        "max-allowed-hops": {
+         "priority": "uint64",
+         "value": "uint64"
+        }
+       },
+       "topology-constraint": {
+        "connection-and-partition-constraint": {
+         "exclude-connection-and-partition": {
+          "index": "uint64"
+         },
+         "include-connection-and-partition": {
+          "index": "uint64"
+         }
+        },
+        "connection-and-route-constraint": {
+         "exclude-connection-and-route": {
+          "index": "uint64"
+         },
+         "include-connection-and-route": {
+          "index": "uint64"
+         }
+        },
+        "constraint-weight": "uint64",
+        "exclude-link-and-partition": {
+         "index": "uint64"
+        },
+        "exclude-nep-and-partition": {
+         "index": "uint64"
+        },
+        "include-link-and-partition": {
+         "index": "uint64"
+        },
+        "include-nep-and-partition": {
+         "index": "uint64"
+        }
+       }
+      },
+      "restore-priority": "uint64",
+      "set-up-priority": "uint64",
+      "wait-to-revert-time": {
+       "value": "uint64"
+      }
+     },
+     "routing-constraint": {
+      "max-allowed-cost": {
+       "priority": "uint64",
+       "value": "uint64"
+      },
+      "max-allowed-delay": {
+       "priority": "uint64",
+       "value": "uint64"
+      },
+      "max-allowed-hops": {
+       "priority": "uint64",
+       "value": "uint64"
+      }
+     },
+     "tapi-oam:connectivity-oam-job-service": {
+      "oam-job-service": {
+       "pm-parameter-config": {
+        "granularity-period": {
+         "value": "uint64"
+        },
+        "pm-parameter": {
+         "threshold-config": {
+          "pm-parameter-value": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        }
+       }
+      }
+     },
+     "topology-constraint": {
+      "connection-and-partition-constraint": {
+       "exclude-connection-and-partition": {
+        "index": "uint64"
+       },
+       "include-connection-and-partition": {
+        "index": "uint64"
+       }
+      },
+      "connection-and-route-constraint": {
+       "exclude-connection-and-route": {
+        "index": "uint64"
+       },
+       "include-connection-and-route": {
+        "index": "uint64"
+       }
+      },
+      "constraint-weight": "uint64",
+      "exclude-link-and-partition": {
+       "index": "uint64"
+      },
+      "exclude-nep-and-partition": {
+       "index": "uint64"
+      },
+      "include-link-and-partition": {
+       "index": "uint64"
+      },
+      "include-nep-and-partition": {
+       "index": "uint64"
+      }
+     }
+    }
+   },
+   "tapi-equipment:physical-context": {
+    "device": {
+     "equipment": {
+      "actual-equipment": {
+       "actual-non-field-replaceable-module": {
+        "common-actual-properties": {
+         "temperature": "decimal64:7"
+        }
+       },
+       "common-actual-properties": {
+        "temperature": "decimal64:7"
+       }
+      },
+      "geolocation": {
+       "altitude": "decimal64:7",
+       "latitude": "decimal64:7",
+       "longitude": "decimal64:7"
+      }
+     }
+    }
+   },
+   "tapi-oam:oam-context": {
+    "cep-pm-data": {
+     "history-data": {
+      "pm-data-pac": {
+       "granularity-period": {
+        "period": {
+         "value": "uint64"
+        }
+       }
+      },
+      "tapi-photonic-media:photonic-performance-data": {
+       "amplification-performance-data": {
+        "input-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-gain": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-input-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-output-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-tilt": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "output-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "input-voa": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "optical-gain": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "optical-input-power": {
+        "power-spectral-density": "decimal64:7",
+        "total-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "optical-output-power": {
+        "power-spectral-density": "decimal64:7",
+        "total-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "optical-tilt": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "osc-monitoring-pac": {
+        "optical-input-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        },
+        "optical-output-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        }
+       },
+       "otsi-monitoring-pac": {
+        "chromatic-dispersion": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "diff-group-delay": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "frequency-offset": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "polarization-mode-dispersion": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "output-voa": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      }
+     }
+    },
+    "mep-pm-data": {
+     "history-data": {
+      "pm-data-pac": {
+       "granularity-period": {
+        "period": {
+         "value": "uint64"
+        }
+       }
+      },
+      "tapi-photonic-media:photonic-performance-data": {
+       "amplification-performance-data": {
+        "input-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-gain": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-input-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-output-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-tilt": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "output-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "input-voa": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "optical-gain": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "optical-input-power": {
+        "power-spectral-density": "decimal64:7",
+        "total-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "optical-output-power": {
+        "power-spectral-density": "decimal64:7",
+        "total-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "optical-tilt": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "osc-monitoring-pac": {
+        "optical-input-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        },
+        "optical-output-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        }
+       },
+       "otsi-monitoring-pac": {
+        "chromatic-dispersion": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "diff-group-delay": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "frequency-offset": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "polarization-mode-dispersion": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "output-voa": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      }
+     }
+    },
+    "mip-pm-data": {
+     "history-data": {
+      "pm-data-pac": {
+       "granularity-period": {
+        "period": {
+         "value": "uint64"
+        }
+       }
+      },
+      "tapi-photonic-media:photonic-performance-data": {
+       "amplification-performance-data": {
+        "input-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-gain": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-input-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-output-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-tilt": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "output-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "input-voa": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "optical-gain": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "optical-input-power": {
+        "power-spectral-density": "decimal64:7",
+        "total-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "optical-output-power": {
+        "power-spectral-density": "decimal64:7",
+        "total-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "optical-tilt": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "osc-monitoring-pac": {
+        "optical-input-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        },
+        "optical-output-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        }
+       },
+       "otsi-monitoring-pac": {
+        "chromatic-dispersion": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "diff-group-delay": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "frequency-offset": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "polarization-mode-dispersion": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "output-voa": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      }
+     }
+    },
+    "oam-job-service": {
+     "pm-parameter-config": {
+      "granularity-period": {
+       "value": "uint64"
+      },
+      "pm-parameter": {
+       "threshold-config": {
+        "pm-parameter-value": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      }
+     }
+    },
+    "oam-job": {
+     "current-data": {
+      "elapsed-time": {
+       "period": {
+        "value": "uint64"
+       }
+      },
+      "history-data": {
+       "pm-data-pac": {
+        "granularity-period": {
+         "period": {
+          "value": "uint64"
+         }
+        }
+       },
+       "tapi-photonic-media:photonic-performance-data": {
+        "amplification-performance-data": {
+         "input-voa": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         },
+         "optical-gain": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         },
+         "optical-input-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         },
+         "optical-output-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         },
+         "optical-tilt": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         },
+         "output-voa": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        },
+        "input-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-gain": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-input-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        },
+        "optical-output-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        },
+        "optical-tilt": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "osc-monitoring-pac": {
+         "optical-input-power": {
+          "power-spectral-density": "decimal64:7",
+          "total-power": {
+           "metric-values": {
+            "pm-parameter-value": "decimal64:7"
+           }
+          }
+         },
+         "optical-output-power": {
+          "power-spectral-density": "decimal64:7",
+          "total-power": {
+           "metric-values": {
+            "pm-parameter-value": "decimal64:7"
+           }
+          }
+         }
+        },
+        "otsi-monitoring-pac": {
+         "chromatic-dispersion": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         },
+         "diff-group-delay": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         },
+         "frequency-offset": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         },
+         "polarization-mode-dispersion": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        },
+        "output-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       }
+      },
+      "pm-data-pac": {
+       "granularity-period": {
+        "period": {
+         "value": "uint64"
+        }
+       }
+      },
+      "tapi-photonic-media:photonic-performance-data": {
+       "amplification-performance-data": {
+        "input-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-gain": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-input-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-output-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "optical-tilt": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "output-voa": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "input-voa": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "optical-gain": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "optical-input-power": {
+        "power-spectral-density": "decimal64:7",
+        "total-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "optical-output-power": {
+        "power-spectral-density": "decimal64:7",
+        "total-power": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "optical-tilt": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       },
+       "osc-monitoring-pac": {
+        "optical-input-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        },
+        "optical-output-power": {
+         "power-spectral-density": "decimal64:7",
+         "total-power": {
+          "metric-values": {
+           "pm-parameter-value": "decimal64:7"
+          }
+         }
+        }
+       },
+       "otsi-monitoring-pac": {
+        "chromatic-dispersion": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "diff-group-delay": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "frequency-offset": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        },
+        "polarization-mode-dispersion": {
+         "metric-values": {
+          "pm-parameter-value": "decimal64:7"
+         }
+        }
+       },
+       "output-voa": {
+        "metric-values": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      }
+     },
+     "pm-data": {
+      "granularity-period": {
+       "value": "uint64"
+      },
+      "pm-parameter": {
+       "threshold-config": {
+        "pm-parameter-value": {
+         "pm-parameter-value": "decimal64:7"
+        }
+       }
+      }
+     }
+    }
+   },
+   "tapi-path-computation:path-computation-context": {
+    "path-comp-service": {
+     "end-point": {
+      "capacity": {
+       "total-size": {
+        "value": "decimal64:7"
+       }
+      }
+     },
+     "path-set-constraint": {
+      "path-constraint": {
+       "path-service-end-point": {
+        "capacity": {
+         "total-size": {
+          "value": "decimal64:7"
+         }
+        }
+       },
+       "priority": "uint64",
+       "routing-constraint": {
+        "max-allowed-cost": {
+         "priority": "uint64",
+         "value": "uint64"
+        },
+        "max-allowed-delay": {
+         "priority": "uint64",
+         "value": "uint64"
+        },
+        "max-allowed-hops": {
+         "priority": "uint64",
+         "value": "uint64"
+        }
+       },
+       "topology-constraint": {
+        "constraint-weight": "uint64",
+        "exclude-link-and-partition": {
+         "index": "uint64"
+        },
+        "exclude-nep-and-partition": {
+         "index": "uint64"
+        },
+        "include-link-and-partition": {
+         "index": "uint64"
+        },
+        "include-nep-and-partition": {
+         "index": "uint64"
+        }
+       }
+      }
+     },
+     "routing-constraint": {
+      "max-allowed-cost": {
+       "priority": "uint64",
+       "value": "uint64"
+      },
+      "max-allowed-delay": {
+       "priority": "uint64",
+       "value": "uint64"
+      },
+      "max-allowed-hops": {
+       "priority": "uint64",
+       "value": "uint64"
+      }
+     },
+     "topology-constraint": {
+      "constraint-weight": "uint64",
+      "exclude-link-and-partition": {
+       "index": "uint64",
+       "tapi-photonic-media:photonic-position": {
+        "central-frequency": "uint64",
+        "spectrum": {
+         "lower-frequency": "uint64",
+         "upper-frequency": "uint64"
+        }
+       }
+      },
+      "exclude-nep-and-partition": {
+       "index": "uint64",
+       "tapi-photonic-media:photonic-position": {
+        "central-frequency": "uint64",
+        "spectrum": {
+         "lower-frequency": "uint64",
+         "upper-frequency": "uint64"
+        }
+       }
+      },
+      "include-link-and-partition": {
+       "index": "uint64",
+       "tapi-photonic-media:photonic-position": {
+        "central-frequency": "uint64",
+        "spectrum": {
+         "lower-frequency": "uint64",
+         "upper-frequency": "uint64"
+        }
+       }
+      },
+      "include-nep-and-partition": {
+       "index": "uint64",
+       "tapi-photonic-media:photonic-position": {
+        "central-frequency": "uint64",
+        "spectrum": {
+         "lower-frequency": "uint64",
+         "upper-frequency": "uint64"
+        }
+       }
+      }
+     }
+    },
+    "path": {
+     "routing-constraint": {
+      "max-allowed-cost": {
+       "priority": "uint64",
+       "value": "uint64"
+      },
+      "max-allowed-delay": {
+       "priority": "uint64",
+       "value": "uint64"
+      },
+      "max-allowed-hops": {
+       "priority": "uint64",
+       "value": "uint64"
+      }
+     }
+    }
+   },
+   "tapi-topology:topology-context": {
+    "topology": {
+     "link": {
+      "available-capacity": {
+       "total-size": {
+        "value": "decimal64:7"
+       }
+      },
+      "total-potential-capacity": {
+       "total-size": {
+        "value": "decimal64:7"
+       }
+      }
+     },
+     "node": {
+      "available-capacity": {
+       "total-size": {
+        "value": "decimal64:7"
+       }
+      },
+      "inter-rule-group": {
+       "available-capacity": {
+        "total-size": {
+         "value": "decimal64:7"
+        }
+       },
+       "rule": {
+        "override-priority": "uint64",
+        "signal-property": {
+         "number-of-signal-values": "uint64"
+        }
+       },
+       "total-potential-capacity": {
+        "total-size": {
+         "value": "decimal64:7"
+        }
+       }
+      },
+      "node-rule-group": {
+       "available-capacity": {
+        "total-size": {
+         "value": "decimal64:7"
+        }
+       },
+       "rule": {
+        "override-priority": "uint64",
+        "signal-property": {
+         "number-of-signal-values": "uint64"
+        }
+       },
+       "total-potential-capacity": {
+        "total-size": {
+         "value": "decimal64:7"
+        }
+       }
+      },
+      "owned-node-edge-point": {
+       "available-capacity": {
+        "total-size": {
+         "value": "decimal64:7"
+        }
+       },
+       "available-cep-layer-protocol-qualifier-instances": {
+        "number-of-cep-instances": "uint64"
+       },
+       "available-payload-structure": {
+        "capacity": {
+         "value": "decimal64:7"
+        },
+        "number-of-cep-instances": "uint64"
+       },
+       "supported-cep-layer-protocol-qualifier-instances": {
+        "number-of-cep-instances": "uint64"
+       },
+       "supported-payload-structure": {
+        "capacity": {
+         "value": "decimal64:7"
+        },
+        "number-of-cep-instances": "uint64"
+       },
+       "tapi-connectivity:cep-list": {
+        "connection-end-point": {
+         "tapi-photonic-media:mc-connection-end-point-spec": {
+          "flexi-grid-pac": {
+           "m": "uint64",
+           "n": "int64"
+          },
+          "power-measurement-pac": {
+           "measured-input-power": {
+            "power-spectral-density": "decimal64:7",
+            "total-power": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           },
+           "measured-output-power": {
+            "power-spectral-density": "decimal64:7",
+            "total-power": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           }
+          },
+          "spectrum-pac": {
+           "occupied-spectrum": {
+            "lower-frequency": "uint64",
+            "upper-frequency": "uint64"
+           }
+          }
+         },
+         "tapi-photonic-media:oms-connection-end-point-spec": {
+          "amplification": {
+           "actual-gain": "decimal64:7",
+           "actual-tilt": "decimal64:7",
+           "frequency-range": {
+            "lower-frequency": "uint64",
+            "upper-frequency": "uint64"
+           },
+           "in-voa": "decimal64:7",
+           "optical-input-power": "decimal64:7",
+           "optical-output-power": "decimal64:7",
+           "out-voa": "decimal64:7"
+          },
+          "flexi-grid-pac": {
+           "m": "uint64",
+           "n": "int64"
+          },
+          "oms-general-optical-params": {
+           "frequency-range": {
+            "lower-frequency": "uint64",
+            "upper-frequency": "uint64"
+           },
+           "generalized-snr": "decimal64:7",
+           "power-params": {
+            "channel-power": {
+             "nominal-carrier-power": "decimal64:7"
+            },
+            "power-spectral-density": {
+             "nominal-power-spectral-density": "decimal64:7"
+            }
+           }
+          },
+          "power-measurement-pac": {
+           "measured-input-power": {
+            "power-spectral-density": "decimal64:7",
+            "total-power": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           },
+           "measured-output-power": {
+            "power-spectral-density": "decimal64:7",
+            "total-power": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           }
+          },
+          "spectrum-pac": {
+           "occupied-spectrum": {
+            "lower-frequency": "uint64",
+            "upper-frequency": "uint64"
+           }
+          }
+         },
+         "tapi-photonic-media:ots-media-connection-end-point-spec": {
+          "flexi-grid-pac": {
+           "m": "uint64",
+           "n": "int64"
+          },
+          "osc-params": {
+           "power-measurement-pac": {
+            "measured-input-power": {
+             "power-spectral-density": "decimal64:7",
+             "total-power": {
+              "metric-values": {
+               "pm-parameter-value": "decimal64:7"
+              }
+             }
+            },
+            "measured-output-power": {
+             "power-spectral-density": "decimal64:7",
+             "total-power": {
+              "metric-values": {
+               "pm-parameter-value": "decimal64:7"
+              }
+             }
+            }
+           }
+          },
+          "ots-impairments": {
+           "impairment-route-entry": {
+            "ots-concentrated-loss": {
+             "concentrated-loss": "decimal64:7"
+            },
+            "ots-fiber-span-impairments": {
+             "connector-in": "decimal64:7",
+             "connector-out": "decimal64:7",
+             "length": "uint64",
+             "loss-coef": "decimal64:7",
+             "pmd": "decimal64:7",
+             "total-loss": "decimal64:7"
+            }
+           }
+          },
+          "power-measurement-pac": {
+           "measured-input-power": {
+            "power-spectral-density": "decimal64:7",
+            "total-power": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           },
+           "measured-output-power": {
+            "power-spectral-density": "decimal64:7",
+            "total-power": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           }
+          },
+          "spectrum-pac": {
+           "occupied-spectrum": {
+            "lower-frequency": "uint64",
+            "upper-frequency": "uint64"
+           }
+          }
+         },
+         "tapi-photonic-media:otsi-mc-connection-end-point-spec": {
+          "flexi-grid-pac": {
+           "m": "uint64",
+           "n": "int64"
+          },
+          "otsi-termination-pac": {
+           "laser-properties": {
+            "laser-bias-current": "decimal64:7",
+            "laser-temperature": "decimal64:7"
+           },
+           "otsi-monitoring-pac": {
+            "chromatic-dispersion": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            },
+            "diff-group-delay": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            },
+            "frequency-offset": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            },
+            "polarization-mode-dispersion": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           },
+           "selected-central-frequency": "uint64",
+           "selected-spectrum": {
+            "lower-frequency": "uint64",
+            "upper-frequency": "uint64"
+           }
+          },
+          "power-measurement-pac": {
+           "measured-input-power": {
+            "power-spectral-density": "decimal64:7",
+            "total-power": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           },
+           "measured-output-power": {
+            "power-spectral-density": "decimal64:7",
+            "total-power": {
+             "metric-values": {
+              "pm-parameter-value": "decimal64:7"
+             }
+            }
+           }
+          },
+          "spectrum-pac": {
+           "occupied-spectrum": {
+            "lower-frequency": "uint64",
+            "upper-frequency": "uint64"
+           }
+          }
+         }
+        }
+       },
+       "tapi-photonic-media:photonic-media-node-edge-point-spec": {
+        "power-management-capability-pac": {
+         "spectrum": {
+          "lower-frequency": "uint64",
+          "upper-frequency": "uint64"
+         },
+         "supportable-max-output-power": {
+          "power-spectral-density": "decimal64:7",
+          "total-power": {
+           "metric-values": {
+            "pm-parameter-value": "decimal64:7"
+           }
+          }
+         },
+         "supportable-min-output-power": {
+          "power-spectral-density": "decimal64:7",
+          "total-power": {
+           "metric-values": {
+            "pm-parameter-value": "decimal64:7"
+           }
+          }
+         },
+         "tolerable-max-input-power": {
+          "power-spectral-density": "decimal64:7",
+          "total-power": {
+           "metric-values": {
+            "pm-parameter-value": "decimal64:7"
+           }
+          }
+         },
+         "tolerable-min-input-power": {
+          "power-spectral-density": "decimal64:7",
+          "total-power": {
+           "metric-values": {
+            "pm-parameter-value": "decimal64:7"
+           }
+          }
+         }
+        },
+        "spectrum-capability-pac": {
+         "available-spectrum": {
+          "lower-frequency": "uint64",
+          "upper-frequency": "uint64"
+         },
+         "occupied-spectrum": {
+          "lower-frequency": "uint64",
+          "upper-frequency": "uint64"
+         },
+         "supportable-spectrum": {
+          "lower-frequency": "uint64",
+          "upper-frequency": "uint64"
+         }
+        },
+        "total-power-threshold-pac": {
+         "spectrum": {
+          "lower-frequency": "uint64",
+          "upper-frequency": "uint64"
+         },
+         "total-power-lower-warn-threshold-default": "decimal64:7",
+         "total-power-lower-warn-threshold-max": "decimal64:7",
+         "total-power-lower-warn-threshold-min": "decimal64:7",
+         "total-power-upper-warn-threshold-default": "decimal64:7",
+         "total-power-upper-warn-threshold-max": "decimal64:7",
+         "total-power-upper-warn-threshold-min": "decimal64:7"
+        },
+        "transceiver-capability-occurrence": {
+         "frequency-range": {
+          "lower-frequency": "uint64",
+          "upper-frequency": "uint64"
+         }
+        }
+       },
+       "total-potential-capacity": {
+        "total-size": {
+         "value": "decimal64:7"
+        }
+       }
+      },
+      "total-potential-capacity": {
+       "total-size": {
+        "value": "decimal64:7"
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

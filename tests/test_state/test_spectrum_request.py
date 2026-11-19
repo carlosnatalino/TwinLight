@@ -46,7 +46,8 @@ def _assigned(service: dict) -> tuple[tuple[int, int], int]:
     constraint = service["end-point"][0]["layer-protocol-constraint"][0]
     band = constraint[MCG_CSEP_SPEC]["mc-spectrum-config-pac"][0]["spectrum"]
     centre = constraint[OTSIA_CSEP_SPEC]["otsi-config"][0]["central-frequency"]
-    return (band["lower-frequency"], band["upper-frequency"]), centre
+    # uint64 Hz, decimal strings on the wire (RFC 7951 §6.1).
+    return (int(band["lower-frequency"]), int(band["upper-frequency"])), int(centre)
 
 
 def _error(resp) -> str:

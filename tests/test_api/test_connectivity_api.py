@@ -233,13 +233,13 @@ class TestGetAndDeleteConnectivityService:
         assert "frequency-slot" not in svc
         for end_point in svc["end-point"]:
             spec = end_point["layer-protocol-constraint"][0][MCG_CSEP_SPEC]
-            assert spec["number-of-mc"] == 1
+            assert spec["number-of-mc"] == "1"
             config = spec["mc-spectrum-config-pac"][0]
             spectrum = config["spectrum"]
-            # uint64 Hz, per grouping frequency-range.
-            assert isinstance(spectrum["lower-frequency"], int)
-            assert isinstance(spectrum["upper-frequency"], int)
-            assert spectrum["upper-frequency"] > spectrum["lower-frequency"]
+            # uint64 Hz, per grouping spectrum-band: a decimal string (RFC 7951 §6.1).
+            assert spectrum["lower-frequency"].isdigit()
+            assert spectrum["upper-frequency"].isdigit()
+            assert int(spectrum["upper-frequency"]) > int(spectrum["lower-frequency"])
             assert config["edge-frequency-constraint"]["grid-type"] == (
                 "GRID_TYPE_FLEX"
             )
@@ -684,12 +684,12 @@ class TestRequestValidation:
         assert resp.status_code == 201, resp.text
         service = resp.json()["tapi-connectivity:connectivity-service"][0]
         cfg = _spec(service["end-point"][0])["otsi-config"][0]
-        assert cfg["channel-output-power"] == 150.0
-        assert cfg["central-frequency"] == (lower + upper) // 2
+        assert cfg["channel-output-power"] == "150.0"
+        assert cfg["central-frequency"] == str((lower + upper) // 2)
         assert cfg["modulation"]["standard-modulation-technique"] in (
             "MT_DP-QAM64", "MT_DP-QAM16", "MT_DP-QPSK")
 
-    @pytest.mark.parametrize("centi_dbm", [2500, 1001, -2001, 10 ** 300])
+    @pytest.mark.parametrize("centi_dbm", [2500, 1001, -2001, 10 ** 11])
     def test_launch_power_outside_the_modelled_range_is_refused(
         self, app: TestClient, centi_dbm: float,
     ) -> None:

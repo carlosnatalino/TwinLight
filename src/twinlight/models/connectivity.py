@@ -23,7 +23,6 @@ standard").
 
 from __future__ import annotations
 
-import math
 import uuid as uuid_lib
 from typing import Any
 
@@ -50,6 +49,11 @@ from twinlight.models.common import (
     LifecycleState,
     NameAndValue,
     OperationalState,
+)
+from twinlight.models.yang_numbers import (
+    TAPI_FRACTION_DIGITS,
+    parse_decimal64,
+    parse_uint64,
 )
 from twinlight.physics.modulation import (
     MODULATION_TO_MT,
@@ -103,6 +107,22 @@ class OtsiConfig(BaseModel):
     # present on a read (the format in effect).
     modulation: ModulationTechnique | None = None
 
+    # The model holds numbers; RFC 7951 §6.1 strings are read here and
+    # written at the T-API boundary (models/yang_numbers.py).
+    @field_validator("central_frequency", mode="before")
+    @classmethod
+    def _central_frequency(cls, value: Any) -> int | None:
+        return None if value is None else parse_uint64(
+            value, "otsi-config/central-frequency",
+        )
+
+    @field_validator("channel_output_power", mode="before")
+    @classmethod
+    def _channel_output_power(cls, value: Any) -> float | None:
+        return None if value is None else float(parse_decimal64(
+            value, TAPI_FRACTION_DIGITS, "otsi-config/channel-output-power",
+        ))
+
     @model_serializer(mode="wrap")
     def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data: dict[str, Any] = handler(self)
@@ -117,7 +137,13 @@ class OtsiaCsepSpec(BaseModel):
     otsi_config: list[OtsiConfig] = Field(
         default_factory=list, alias="otsi-config"
     )
+    # uint64; the twin carries one OTSi per service (api/connectivity.py).
     number_of_otsi: int = Field(default=1, alias="number-of-otsi")
+
+    @field_validator("number_of_otsi", mode="before")
+    @classmethod
+    def _number_of_otsi(cls, value: Any) -> int:
+        return parse_uint64(value, "number-of-otsi")
 
 
 class LayerProtocolConstraint(BaseModel):
@@ -510,30 +536,17 @@ def _objects(value: Any) -> list[dict[str, Any]]:
 
 
 def _uint64(value: Any, where: str) -> int:
-    """A YANG uint64: a JSON number or, per RFC 7951 §6.1, a decimal string."""
-    if isinstance(value, bool):
-        raise ValueError(f"{where} must be a uint64, got {value!r}")  # noqa: TRY004
-    if isinstance(value, int) and value >= 0:
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    raise ValueError(f"{where} must be a uint64, got {value!r}")
+    """A YANG uint64: per RFC 7951 §6.1 a decimal string, or a JSON number."""
+    return parse_uint64(value, where)
 
 
 def _centi_dbm_to_dbm(value: Any) -> float:
     """otsi-config/channel-output-power (decimal64, 0.01 dBm) → dBm.
 
-    Accepted as a JSON number or, per RFC 7951 §6.1, a decimal string.
+    Accepted as, per RFC 7951 §6.1, a decimal string, or a JSON number.
     """
     where = "otsi-config/channel-output-power"
-    if isinstance(value, bool):
-        raise ValueError(f"{where} must be a decimal64, got {value!r}")  # noqa: TRY004
-    try:
-        centi = float(value)
-    except (TypeError, ValueError):
-        raise ValueError(f"{where} must be a decimal64, got {value!r}") from None
-    if not math.isfinite(centi):
-        raise ValueError(f"{where} must be finite, got {value!r}")
+    centi = float(parse_decimal64(value, TAPI_FRACTION_DIGITS, where))
     dbm = centi / 100.0
     if not LAUNCH_POWER_RANGE_DBM[0] <= dbm <= LAUNCH_POWER_RANGE_DBM[1]:
         low, high = LAUNCH_POWER_RANGE_DBM
@@ -563,7 +576,7 @@ def _requested_media_channel(
     pacs = mcg.get("mc-spectrum-config-pac") or []
     if not isinstance(pacs, list):
         raise ValueError(f"{where}/mc-spectrum-config-pac must be a list")  # noqa: TRY004
-    number = mcg.get("number-of-mc", 1)
+    number = _uint64(mcg.get("number-of-mc", "1"), f"{where}/number-of-mc")
     if number != 1 or len(pacs) > 1:
         raise ValueError(
             f"{where}: a connectivity-service holds one media channel; "

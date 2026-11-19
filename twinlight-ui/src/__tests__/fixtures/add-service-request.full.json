@@ -14,8 +14,8 @@
                 {
                   "local-id": "1",
                   "modulation": { "standard-modulation-technique": "MT_DP-QAM16" },
-                  "central-frequency": 191306250000000,
-                  "channel-output-power": 150
+                  "central-frequency": "191306250000000",
+                  "channel-output-power": "150.0"
                 }
               ]
             }
@@ -34,8 +34,8 @@
                 {
                   "local-id": "1",
                   "modulation": { "standard-modulation-technique": "MT_DP-QAM16" },
-                  "central-frequency": 191306250000000,
-                  "channel-output-power": 150
+                  "central-frequency": "191306250000000",
+                  "channel-output-power": "150.0"
                 }
               ]
             }

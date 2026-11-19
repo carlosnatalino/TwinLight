@@ -41,10 +41,13 @@ BAND_UPPER_MHZ = 195_496_875
 
 
 def _band(lower_hz: int, upper_hz: int) -> dict:
-    """A T-API v2.6.0 spectrum-band: uint64 Hz plus the real grid type."""
+    """A T-API v2.6.0 spectrum-band: uint64 Hz plus the real grid type.
+
+    The edges are strings, as the twin sends them (RFC 7951 §6.1).
+    """
     return {
-        "lower-frequency": lower_hz,
-        "upper-frequency": upper_hz,
+        "lower-frequency": str(lower_hz),
+        "upper-frequency": str(upper_hz),
         "frequency-constraint": {
             "grid-type": "GRID_TYPE_FLEX",
             "adjustment-granularity": "ADJUSTMENT_GRANULARITY_G_6_25GHZ",
@@ -89,14 +92,25 @@ def _admitted_end_point() -> dict:
         "layer-protocol-constraint": [
             {
                 "local-id": "otsi",
+                "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
+                    "number-of-otsi": "1",
+                    "otsi-config": [
+                        {
+                            "local-id": "1",
+                            "central-frequency": str(int(centre)),
+                            "channel-output-power": "-234.5",
+                            "modulation": {"standard-modulation-technique": "MT_DP-QPSK"},
+                        }
+                    ],
+                },
                 "tapi-photonic-media:mcg-connectivity-service-end-point-spec": {
-                    "number-of-mc": 1,
+                    "number-of-mc": "1",
                     "mc-spectrum-config-pac": [
                         {
                             "local-id": "1",
                             "spectrum": {
-                                "lower-frequency": int(centre - half),
-                                "upper-frequency": int(centre + half),
+                                "lower-frequency": str(int(centre - half)),
+                                "upper-frequency": str(int(centre + half)),
                             },
                         }
                     ],
@@ -104,6 +118,25 @@ def _admitted_end_point() -> dict:
             }
         ],
     }
+
+
+def _as_numbers(value):
+    """The same body as an earlier twin sent it: 64-bit leaves as numbers."""
+    if isinstance(value, dict):
+        return {
+            k: (float(v) if k == "channel-output-power" else int(v))
+            if k in _SIXTY_FOUR_BIT else _as_numbers(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_as_numbers(v) for v in value]
+    return value
+
+
+_SIXTY_FOUR_BIT = {
+    "lower-frequency", "upper-frequency", "central-frequency", "channel-output-power",
+    "number-of-mc", "number-of-otsi",
+}
 
 
 class TwinStub:
@@ -685,6 +718,116 @@ def test_spectrum_is_read_from_the_end_point_augment(client, twin):
     # A service with no allocation reports nothing rather than zeroes.
     assert tapi_adapter._spectrum_of({"end-point": [{"local-id": "1"}]}) is None
     assert tapi_adapter._spectrum_of({}) is None
+
+
+# --- 64-bit numbers (RFC 7951 §6.1) ------------------------------------------
+#
+# The twin sends its uint64/decimal64 leaves as strings. The adapter parses
+# them and hands ONOS exactly the numbers it was always given.
+
+
+def test_spectrum_reads_strings_and_an_earlier_twins_numbers(client, twin):
+    service = {"uuid": "u", "end-point": [_admitted_end_point()]}
+    for body in (service, _as_numbers(service)):
+        centre, width = tapi_adapter._spectrum_of(body)
+        assert centre == pytest.approx(ADMITTED_CENTRE_THZ)
+        assert width == pytest.approx(ADMITTED_WIDTH_GHZ)
+
+
+@pytest.mark.parametrize("bad", ["1.9e14", "190696875000000.0", "", "abc", "-1", True, None,
+                                 190696875000000.0, "18446744073709551616"])
+def test_a_band_edge_that_is_not_a_uint64_is_refused(bad):
+    service = {"uuid": "u", "end-point": [_admitted_end_point()]}
+    mcg = service["end-point"][0]["layer-protocol-constraint"][0][
+        "tapi-photonic-media:mcg-connectivity-service-end-point-spec"]
+    mcg["mc-spectrum-config-pac"][0]["spectrum"]["lower-frequency"] = bad
+    with pytest.raises(tapi_adapter.TwinProtocolError, match="lower-frequency"):
+        tapi_adapter._spectrum_of(service)
+    with pytest.raises(tapi_adapter.TwinProtocolError, match="lower-frequency"):
+        tapi_adapter._onos_numbers(service)
+
+
+def test_onos_is_served_the_service_list_with_numbers(client, twin, monkeypatch):
+    """What ONOS reads is what it read when the twin sent numbers."""
+    monkeypatch.setattr(tapi_adapter, "EXPOSE_TWIN_SERVICES", True)
+    service = {"uuid": "svc-1", "end-point": [_admitted_end_point()]}
+    url = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"
+    twin.services = [_as_numbers(service)]
+    before = client.get(url)
+    twin.services = [service]
+    after = client.get(url)
+    assert before.status_code == after.status_code == 200
+    assert after.content == before.content
+    (sent,) = after.json()["tapi-connectivity:connectivity-context"]["connectivity-service"]
+    lpc = sent["end-point"][0]["layer-protocol-constraint"][0]
+    otsi = lpc["tapi-photonic-media:otsia-connectivity-service-end-point-spec"]
+    mcg = lpc["tapi-photonic-media:mcg-connectivity-service-end-point-spec"]
+    assert otsi["number-of-otsi"] == 1
+    assert otsi["otsi-config"][0]["central-frequency"] == 190_725_000_000_000
+    assert otsi["otsi-config"][0]["channel-output-power"] == -234.5
+    assert mcg["number-of-mc"] == 1
+    assert mcg["mc-spectrum-config-pac"][0]["spectrum"] == {
+        "lower-frequency": 190_696_875_000_000, "upper-frequency": 190_753_125_000_000,
+    }
+
+
+def test_onos_is_answered_a_create_with_numbers(client, twin):
+    url = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/"
+    entry = {"uuid": "onos-uuid-1", "end-point": [_admitted_end_point()]}
+    twin.create_body = {"tapi-connectivity:connectivity-service": [_as_numbers(entry)]}
+    before = client.post(url, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"))
+    twin.create_body = {"tapi-connectivity:connectivity-service": [entry]}
+    after = client.post(url, json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"))
+    assert before.status_code == after.status_code == 201
+    assert after.content == before.content
+    # The registry (/adapter/status) keeps the twin's own body.
+    assert tapi_adapter.registry.all()["onos-uuid-1"] == twin.create_body
+
+
+def test_the_mc_pool_is_unchanged_by_the_encoding(client, twin):
+    strings = context(client)
+    tapi_adapter.catalogue = tapi_adapter.SipCatalogue()
+    twin.sips = [_as_numbers(sip) for sip in SIPS]
+    assert context(client) == strings
+    pool = strings[0]["tapi-photonic-media:media-channel-service-interface-point-spec"]["mc-pool"]
+    assert pool["supportable-spectrum"][0]["lower-frequency"] == BAND_LOWER_MHZ
+
+
+@pytest.mark.parametrize("bad", ["1.9e14", "", 1.5e14])
+def test_a_sip_band_that_is_not_a_uint64_is_a_bad_gateway(client, twin, bad):
+    sip = json.loads(json.dumps(SIPS[1]))
+    sip["tapi-photonic-media:photonic-media-service-interface-point-spec"][
+        "spectrum-capability-pac"]["available-spectrum"][0]["upper-frequency"] = bad
+    twin.sips = [SIPS[0], sip]
+    assert client.get("/restconf/data/tapi-common:context").status_code == 502
+    r = client.get(f"/restconf/data/tapi-common:context/service-interface-point={TWIN_SIP_A}-1")
+    assert r.status_code == 502
+
+
+def test_a_service_list_that_does_not_parse_is_a_bad_gateway(client, twin, monkeypatch):
+    monkeypatch.setattr(tapi_adapter, "EXPOSE_TWIN_SERVICES", True)
+    service = {"uuid": "svc-1", "end-point": [_admitted_end_point()]}
+    service["end-point"][0]["layer-protocol-constraint"][0][
+        "tapi-photonic-media:otsia-connectivity-service-end-point-spec"]["number-of-otsi"] = "one"
+    twin.services = [service]
+    r = client.get("/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context")
+    assert r.status_code == 502
+    assert "number-of-otsi" in r.text
+
+
+def test_a_created_service_that_does_not_parse_is_still_created(client, twin):
+    """The lightpath is up: the 201 is relayed as the twin sent it, and logged."""
+    entry = {"uuid": "onos-uuid-1", "end-point": [_admitted_end_point()]}
+    entry["end-point"][0]["layer-protocol-constraint"][0][
+        "tapi-photonic-media:otsia-connectivity-service-end-point-spec"]["otsi-config"][0][
+        "channel-output-power"] = "loud"
+    twin.create_body = {"tapi-connectivity:connectivity-service": [entry]}
+    r = client.post(
+        "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/",
+        json=onos_connectivity_request(TWIN_SIP_A + "-1", TWIN_SIP_Z + "-2"),
+    )
+    assert r.status_code == 201
+    assert r.json() == twin.create_body
 
 
 def test_modulation_augment_has_the_tapi_2_6_shape(client, twin):

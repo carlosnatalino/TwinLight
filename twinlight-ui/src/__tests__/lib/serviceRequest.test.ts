@@ -53,12 +53,17 @@ describe("buildServiceRequest", () => {
     expect(body["end-point"].map((ep) => ep.direction)).toEqual(["SOURCE", "SINK"]);
   });
 
-  it("rounds to integer Hz and hundredths of a dBm", () => {
+  it("rounds to integer Hz and hundredths of a dBm, sent as RFC 7951 strings", () => {
     const body = JSON.stringify(
       buildServiceRequest({ ...defaults, centralFrequencyThz: 193.1, launchPowerDbm: -2.345 }),
     );
-    expect(body).toContain('"central-frequency":193100000000000');
-    expect(body).toContain('"channel-output-power":-235');
+    expect(body).toContain('"central-frequency":"193100000000000"');
+    expect(body).toContain('"channel-output-power":"-235.0"');
+  });
+
+  it("sends zero power as the canonical decimal64 zero", () => {
+    const body = JSON.stringify(buildServiceRequest({ ...defaults, launchPowerDbm: -0.001 }));
+    expect(body).toContain('"channel-output-power":"0.0"');
   });
 });
 
@@ -73,6 +78,7 @@ describe("serviceFormError", () => {
     [{ launchPowerDbm: 25 }, "between -20 and 10 dBm"],
     [{ launchPowerDbm: Number.NaN }, "between -20 and 10 dBm"],
     [{ centralFrequencyThz: -1 }, "positive"],
+    [{ centralFrequencyThz: 1e4 }, "too large"],
     [{ constraints: { include: [node("roadm B")], exclude: [node("roadm B")] } }, "both included and excluded"],
   ])("refuses %j", (change, message) => {
     expect(serviceFormError({ ...full, ...change } as ServiceForm)).toContain(message);

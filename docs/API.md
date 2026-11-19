@@ -71,6 +71,7 @@ in the rows after the paths:
 | A non-JSON `Accept` (`application/yang-data+xml`) answered with JSON | `406` |
 | A request body in any media type parsed as JSON when it parsed | `415` unless it is `application/yang-data+json` or `application/json` |
 | `GET /restconf/data`, the YANG library, `restconf-state` and `/restconf/operations` answering `404` | Served (RFC 8040 §3.3, §9, §10) |
+| `uint64` and `decimal64` leaves as JSON numbers: `"lower-frequency": 191278125000000`, `"upper-frequency"`, `"central-frequency"`, `"number-of-mc": 1`, `"number-of-otsi": 1`, `"channel-output-power": 150.0` | JSON strings, as RFC 7951 §6.1 encodes 64-bit types: `"191278125000000"`, `"1"`, `"150.0"` (see [Numbers](#numbers-rfc-7951-61)). Requests may still send the numbers; a reader that did arithmetic on them must parse the strings first |
 | `HEAD` and `OPTIONS` answering `405` on every resource | `HEAD` answers as `GET` without the body, `OPTIONS` answers `200` with `Allow` (and `Accept-Patch` where `PATCH` is allowed); a `405` lists both in `Allow` (see [HEAD and OPTIONS](#head-and-options)) |
 
 The standard paths are given for the default root, `/restconf`; on a twin
@@ -349,7 +350,7 @@ directions: one service each way.
 | `connectivity-service` | `layer-protocol-qualifier`, `connectivity-constraint`, `resilience-constraint`, `connectivity-service`, `internal-point`, `connectivity-protection-service` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `UNIDIRECTIONAL` |
 | `end-point` | `layer-protocol-qualifier`, `role`, `protection-role`, `capacity`, `administrative-state`, the `peer-fwd-`, `server-`, `protecting-` and `assembled-connectivity-service-end-point` references, `profile`, `sink-profile`, `source-profile` | `layer-protocol-name` = `PHOTONIC_MEDIA`; `direction` = `SOURCE` or `SINK` |
 | `layer-protocol-constraint` | `layer-protocol-qualifier`, `name`, `tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec` | `layer-protocol-name` = `PHOTONIC_MEDIA` |
-| `otsia-connectivity-service-end-point-spec` | `total-power-warn-threshold-upper`, `total-power-warn-threshold-lower` | `number-of-otsi` = `1` |
+| `otsia-connectivity-service-end-point-spec` | `total-power-warn-threshold-upper`, `total-power-warn-threshold-lower` | `number-of-otsi` = `"1"` (or `1`) |
 | `otsi-config` | `name`, `application-identifier`, `laser-control`, `otsi-threshold-power-config`, `power-management-config-pac` | — |
 
 Config-false leaves (`operational-state`, `connection`, `csep-role`,
@@ -384,18 +385,19 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
     "tapi-photonic-media:otsia-connectivity-service-end-point-spec": {
       "otsi-config": [
         { "local-id": "1",
-          "central-frequency": 191306250000000,
+          "central-frequency": "191306250000000",
+          "channel-output-power": "0.0",
           "modulation": { "standard-modulation-technique": "MT_DP-QPSK" } }
       ],
-      "number-of-otsi": 1
+      "number-of-otsi": "1"
     },
     "tapi-photonic-media:mcg-connectivity-service-end-point-spec": {
-      "number-of-mc": 1,
+      "number-of-mc": "1",
       "mc-spectrum-config-pac": [
         { "local-id": "1",
           "spectrum": {
-            "lower-frequency": 191278125000000,
-            "upper-frequency": 191334375000000
+            "lower-frequency": "191278125000000",
+            "upper-frequency": "191334375000000"
           },
           "edge-frequency-constraint": {
             "grid-type": "GRID_TYPE_FLEX",
@@ -407,7 +409,11 @@ the modulation augment, as T-API v2.6.0 specifies — `tapi-connectivity` has no
 ]
 ```
 
-Frequencies are uint64 Hz. A service with no allocation carries no MCG spec at
+Frequencies are uint64 Hz. Every number here is a JSON string: T-API types
+the frequencies and counts as `uint64` and `channel-output-power` as
+`decimal64` (`fraction-digits 7`), and RFC 7951 §6.1 encodes those types as
+strings in their canonical form — `"191306250000000"`, `"-234.5"`, `"0.0"`
+(see [Numbers](#numbers-rfc-7951-61)). A service with no allocation carries no MCG spec at
 all, rather than a zeroed one. The `spectrum` is the media channel — the
 channel's slots plus `rmsa.default_guardband_slots` — and `central-frequency`
 is its centre, where the carrier sits. `channel-output-power` is the launch
@@ -420,8 +426,9 @@ send `mc-spectrum-config-pac/spectrum`, `otsi-config/central-frequency`, or
 both, on one or both end-points (they must agree). The request must be on the
 grid — edges on slot edges, a central frequency at the centre of a block — and
 exactly one media channel wide for the format, the width a GET reports, so a
-fetched service can be sent back unchanged; numbers or RFC 7951 decimal
-strings are accepted. An `edge-frequency-constraint`, if sent, must be this
+fetched service can be sent back unchanged; the RFC 7951 decimal strings a
+GET returns are the standard spelling, and the JSON numbers earlier releases
+took are still accepted (see [Numbers](#numbers-rfc-7951-61)). An `edge-frequency-constraint`, if sent, must be this
 twin's grid. These are `400`s naming the problem, as are
 `mc-bandwidth-config-pac`, `mc-flexi-grid-config-pac`, more than one media
 channel, and end-points that disagree. On each candidate route the requested
@@ -438,8 +445,8 @@ it. The example above is the first such block under GNPy's default EDFA band
 the whole grid is assignable.
 
 **Requesting launch power.** `otsi-config/channel-output-power` is optional,
-in 0.01 dBm, as a number or decimal string; end-points that carry it must
-agree. A malformed value, or one outside the −20 to +10 dBm the twin models
+in 0.01 dBm, as a decimal string (`"-234.5"`) or a number; end-points that
+carry it must agree. A malformed value, or one outside the −20 to +10 dBm the twin models
 (−2000 to 1000), is a `400`.
 
 `otsi-config/modulation` is optional too: an `otsi-config` carrying only a
@@ -589,8 +596,8 @@ Per-SIP spectrum is the standard surface, carried on every
     "spectrum-capability-pac": {
       "supportable-spectrum": [
         {
-          "lower-frequency": 190696875000000,
-          "upper-frequency": 195496875000000,
+          "lower-frequency": "190696875000000",
+          "upper-frequency": "195496875000000",
           "frequency-constraint": {
             "grid-type": "GRID_TYPE_FLEX",
             "adjustment-granularity": "ADJUSTMENT_GRANULARITY_G_6_25GHZ"
@@ -604,7 +611,7 @@ Per-SIP spectrum is the standard surface, carried on every
 }
 ```
 
-Frequencies are **uint64 Hz**. `occupied-spectrum` lists the blocks held by
+Frequencies are **uint64 Hz**, JSON strings (RFC 7951 §6.1). `occupied-spectrum` lists the blocks held by
 services terminating on *that* SIP — it is a property of the port, not of the
 links the lightpath crosses — and `available-spectrum` is the remainder of the
 supportable band, merged into maximal contiguous runs.
@@ -777,6 +784,30 @@ own matching. With authentication on, both need a token like `GET` (RFC 8040
 §4.2 enforces access control on a `HEAD` "as if the method was GET"). A CORS
 preflight — an `OPTIONS` with `Access-Control-Request-Method` — is not an
 `OPTIONS` of the resource: the CORS middleware answers it, without a token.
+
+### Numbers (RFC 7951 §6.1)
+
+T-API v2.6.0 types every numeric leaf as `uint64`, `int64` or `decimal64`
+(with `fraction-digits 7`), and RFC 7951 §6.1 encodes those types as JSON
+strings: "A value of the "int64", "uint64", or "decimal64" type is
+represented as a JSON string whose content is the lexical representation of
+the corresponding YANG type". So every number in a T-API body is a string in
+its canonical form (RFC 7950 §9.2.2, §9.3.2): `"191278125000000"` for a
+frequency in Hz, `"1"` for a count, `"-234.5"` or `"0.0"` for a
+`channel-output-power`. The leaves the twin serves are the SIP
+`spectrum-capability-pac` band edges, the end-point's MCG `number-of-mc` and
+`spectrum` edges, and the OTSiA `number-of-otsi`, `central-frequency` and
+`channel-output-power`.
+
+| Request value of a 64-bit leaf | Answer |
+|--------------------------------|--------|
+| The lexical representation: `"191278125000000"`, `"+5"`, `"-234.5"`, `"150"` | Accepted |
+| A JSON number, as earlier releases took: `191278125000000`, `-234.5` | Accepted (a leniency; send strings) |
+| A fraction or exponent for an integer (`"1.0"`, `"1e14"`, `1.0`), an empty or padded string, hexadecimal, a boolean, a value out of range (a negative `uint64`, 2^64), more fraction digits than the leaf keeps | `400`, `invalid-value` (RFC 7950 §8.3.1) |
+
+The proprietary endpoints (`/internal`, `/admin`, `/config`, `/transparent`,
+`/metrics`), the gNMI records and the snapshots are not YANG-JSON and keep
+plain numbers.
 
 ### A note on percent-encoded colons
 

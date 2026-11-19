@@ -107,6 +107,30 @@ describe("TapiApiClient", () => {
     expect(await client.getServices()).toEqual([]);
   });
 
+  it("rejects a list whose spectrum does not parse, rather than showing none", async () => {
+    const band = { "lower-frequency": "1.9e14", "upper-frequency": "191334375000000" };
+    const service = {
+      uuid: "svc-1",
+      "end-point": [{
+        "layer-protocol-constraint": [{
+          "local-id": "otsi",
+          "tapi-photonic-media:mcg-connectivity-service-end-point-spec": {
+            "mc-spectrum-config-pac": [{ "local-id": "1", spectrum: band }],
+          },
+        }],
+      }],
+    };
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ "tapi-connectivity:connectivity-service": [service] })
+    );
+    await expect(client.getServices()).rejects.toThrow("spectrum/lower-frequency");
+    band["lower-frequency"] = "191278125000000";
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ "tapi-connectivity:connectivity-service": [service] })
+    );
+    expect(await client.getServices()).toEqual([service]);
+  });
+
   it("rejects a list body without the list rather than reporting no services", async () => {
     // The container's envelope, which the list GET answered with before.
     mockFetch.mockResolvedValueOnce(

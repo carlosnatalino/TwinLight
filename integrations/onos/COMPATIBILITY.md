@@ -111,13 +111,18 @@ one block, all with the same cause:
 | ONOS (T-API 2.1) | TwinLight (T-API 2.6.0) |
 |---|---|
 | `media-channel-service-interface-point-spec` → `mc-pool` | `photonic-media-service-interface-point-spec` → `spectrum-capability-pac` |
-| frequencies in **MHz** | **uint64 Hz** (`grouping spectrum-band`) |
+| frequencies in **MHz**, JSON numbers | **uint64 Hz** (`grouping spectrum-band`), JSON strings (`"191278125000000"`, RFC 7951 §6.1) |
 | bare `DWDM`, `G_50GHZ` | identityrefs `GRID_TYPE_DWDM`, `ADJUSTMENT_GRANULARITY_G_6_25GHZ` |
 | `supported-layer-protocol-qualifier` | `supported-cep-layer-protocol-qualifier-instances` |
 
 **Handled in the adapter.** Translating between two published versions of a
 specification is precisely the adapter's job, and no change to the twin removes
-it. `_mc_pool()` does the reshaping and the unit and token conversions.
+it. `_mc_pool()` does the reshaping and the unit and token conversions,
+reading the twin's uint64 strings into the numbers ONOS parses. The
+connectivity-services the adapter relays to ONOS (the list it polls, the
+`201` of a create) carry the twin's 2.6 augments as they come, except that
+their 64-bit leaves are turned back into the JSON numbers ONOS was always
+sent, so ONOS sees the same bytes whichever encoding the twin uses.
 
 ### A6. ONOS mis-parses `G_6_25GHZ` and divides by zero
 
