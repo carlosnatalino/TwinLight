@@ -80,11 +80,11 @@ export const test = base.extend<E2EOptions & E2EFixtures>({
     { auto: true },
   ],
 
-  page: async ({ page, twinUrl, apiToken, enterToken }, use) => {
+  page: async ({ page, context, twinUrl, apiToken, enterToken }, use) => {
     // Point the UI at this test's twin the way a deployment does: through
     // the runtime config.js (see public/config.js), served here instead of
-    // the development default.
-    await page.route(`${UI_ORIGIN}/config.js`, (route) =>
+    // the development default. On the context, so a second tab gets it too.
+    await context.route(`${UI_ORIGIN}/config.js`, (route) =>
       route.fulfill({
         contentType: "application/javascript",
         body: `window.__TWIN_CONFIG__ = { baseUrl: ${JSON.stringify(twinUrl)} };`,

@@ -134,6 +134,20 @@ export class TwinApi {
     await ok(resp, "PUT connectivity-context");
   }
 
+  /** The topology and node UUIDs of the node called `nodeName`. */
+  async nodeRef(nodeName: string): Promise<{ topology: string; node: string }> {
+    const body = await this.get<{
+      "tapi-topology:topology-context": {
+        topology: { uuid: string; node?: { uuid: string; name?: NameValue[] }[] }[];
+      };
+    }>(`${CONTEXT}/tapi-topology:topology-context`);
+    for (const topology of body["tapi-topology:topology-context"].topology) {
+      const node = topology.node?.find((n) => n.name?.some((v) => v.value === nodeName));
+      if (node) return { topology: topology.uuid, node: node.uuid };
+    }
+    throw new Error(`No node named ${nodeName}`);
+  }
+
   /** Nodes and links over every topology, as the Topology page counts them. */
   async topologyCounts(): Promise<TopologyCounts> {
     const body = await this.get<{

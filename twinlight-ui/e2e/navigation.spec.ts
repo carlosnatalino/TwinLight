@@ -25,11 +25,38 @@ test.describe("navigation", () => {
       await expect(page.getByRole("heading", { name: p.heading, level: 1 })).toBeVisible();
     }
 
-    // Pages without a level-1 heading: the URL and the active link.
+    // Pages without a level-1 heading here: the active link.
     for (const link of ["Topology", "Equipment", "Path", "Spectrum", "Spectrum grid", "Monitoring"]) {
       const navLink = nav.getByRole("link", { name: link, exact: true });
       await navLink.click();
       await expect(navLink).toHaveAttribute("aria-current", "page");
     }
   });
+
+  // A direct visit mounts the page before the topology arrives, which the
+  // sidebar walk above never does (the dashboard has loaded it by then).
+  for (const path of [
+    "/",
+    "/topology",
+    "/services",
+    "/services/new",
+    "/equipment",
+    "/path",
+    "/spectrum",
+    "/spectrum/grid",
+    "/monitoring",
+    "/settings",
+  ]) {
+    test(`${path} renders on a direct visit`, async ({ page }) => {
+      const errors: Error[] = [];
+      page.on("pageerror", (err) => errors.push(err));
+      await page.goto(path);
+      await expectConnected(page);
+      await expect(page.getByRole("navigation").getByRole("link", { name: "Dashboard" })).toBeVisible();
+      // Give a render loop time to trip React's update limit.
+      await page.waitForTimeout(1_000);
+      await expect(page.getByRole("heading", { name: "Unexpected Application Error!" })).toHaveCount(0);
+      expect(errors).toEqual([]);
+    });
+  }
 });
