@@ -427,11 +427,34 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 | `scripts/demo-up.sh` | Build and boot the stack, verify the ODTN apps, push the netcfg, wait for discovery |
 | `scripts/validate.sh` | 16 end-to-end checks across all layers; non-zero exit on any failure |
 | `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range *and all three modulation formats*, so every UI has state to show (`--reset` clears first). Pairs are discovered by probing, not hardcoded — see `scripts/find_pairs.py`. A pair the twin refuses at create is replaced by a spare of the same format, and its flow is removed from ONOS (see below) |
-| `scripts/find_pairs.py` | Probe random endpoint pairs through `/internal/path-info` and report which modulation format each can carry, plus a spare per format. Used by `seed-demo.sh`; useful on its own when a topology changes |
+| `scripts/find_pairs.py` | Read the twin's admission margin, probe random endpoint pairs through `/internal/path-info` and report which modulation format each can carry, plus a spare per format. Used by `seed-demo.sh`; useful on its own when a topology changes |
+| `scripts/lightpath.sh` | `create <A> <Z>` / `list` / `delete <flow-id>` / `clear` — provisioning driven from ONOS |
+| `scripts/correlate.sh` | Join the ONOS Flows view to the twin's service list, one row per flow (`--json` for the raw join) |
+| `scripts/resync.sh` | Force ONOS to re-discover ports (`--check` just compares the two sides) |
+| `scripts/fault.sh` | `list` / `cut <uid>` / `cut-path <svc-uuid>` / `heal <uid>` / `heal-all` |
+| `scripts/onos-cli.sh` | ONOS Karaf CLI, interactive or one-shot, through Karaf's own client in the ONOS container (no host `ssh` needed) |
+| `scripts/demo-down.sh` | Stop the stack (`--purge` also drops volumes) |
+| `scripts/test-integration.sh` | `unit` / `e2e` / `all` / `preflight` — test the integration on this machine; see [Testing the integration locally](#testing-the-integration-locally) |
 
-**Why a probed pair can still be refused.** `/internal/path-info` reports the
-GSNR an OPM read would give now: the GNPy baseline after the twin's
-time-varying transient models. Admission gates on the pristine baseline
+**How `seed-demo.sh` picks and checks its pairs.** A format's threshold is its
+required GSNR (8.5, 14.5 and 20.5 dB for DP-QPSK, DP-16QAM and DP-64QAM) plus
+the twin's `rmsa.qot_margin_db`. That margin is a runtime setting, so
+`find_pairs.py` reads it from the twin it probes at the start of each search,
+at `/transparent/data/Config/rmsa/qot_margin_db`. The transparent controller is
+the twin's documented interface for reading a setting, and it answers the
+effective value; `/config/get` lists only overrides, and `/metrics` is a
+monitoring export. The read presents `TWINLIGHT_API_TOKEN` like the scripts'
+other requests to the twin, and the line `admission margin … dB, read from the
+twin` says what was used. A twin that cannot say (one that predates the
+transparent controller, or an answer without the value) stops the search with
+the reason instead of falling back to 1.5 dB: a guessed margin is a silent
+mismatch, which shows up as refusals or a short format. The required GSNRs are
+still the script's copy of the twin's modulation table; the twin publishes it
+read-only at `/transparent/data/ModulationList/<format>/req_gsnr_db`.
+
+A probed pair can still be refused. `/internal/path-info` reports the GSNR an
+OPM read would give now: the GNPy baseline after the twin's time-varying
+transient models. Admission gates on the pristine baseline
 ([Part 2](#part-2--onos-provisions-a-lightpath-the-twin-supplies-the-physics),
 "Why the live GSNR differs from the admission figure"). The two differ by a few
 tenths of a dB, so a pair that probes just above a format's threshold can be
@@ -441,16 +464,14 @@ figure by less than 0.1 dB). Left alone, the refused flow sits in ONOS in
 `PENDING_ADD`, retried for ever. `seed-demo.sh` therefore detects the refusal
 (a new entry in the adapter's `recent-rejections`), removes the flow, says so,
 and provisions that format's spare instead. It exits non-zero if ONOS will not
-drop the flow. `SEED_RANDOM_SEED` fixes the sequence of pairs drawn. It cannot
-make the result fully repeatable: a pair that probes within the transient swing
-of a threshold can be filed differently from one run to the next.
-| `scripts/lightpath.sh` | `create <A> <Z>` / `list` / `delete <flow-id>` / `clear` — provisioning driven from ONOS |
-| `scripts/correlate.sh` | Join the ONOS Flows view to the twin's service list, one row per flow (`--json` for the raw join) |
-| `scripts/resync.sh` | Force ONOS to re-discover ports (`--check` just compares the two sides) |
-| `scripts/fault.sh` | `list` / `cut <uid>` / `cut-path <svc-uuid>` / `heal <uid>` / `heal-all` |
-| `scripts/onos-cli.sh` | ONOS Karaf CLI, interactive or one-shot, through Karaf's own client in the ONOS container (no host `ssh` needed) |
-| `scripts/demo-down.sh` | Stop the stack (`--purge` also drops volumes) |
-| `scripts/test-integration.sh` | `unit` / `e2e` / `all` / `preflight` — test the integration on this machine; see [Testing the integration locally](#testing-the-integration-locally) |
+drop the flow.
+
+`SEED_RANDOM_SEED` fixes the sequence of pairs drawn. It cannot make the result
+fully repeatable: a pair that probes within the transient swing of a threshold
+can be filed differently from one run to the next. To replay a seeding exactly,
+save a search (`TWIN_URL=… python3 integrations/onos/scripts/find_pairs.py >
+pairs.txt`) and provision it with `SEED_PAIRS_FILE=pairs.txt
+./integrations/onos/scripts/seed-demo.sh`.
 
 Overridable environment variables: `ONOS_URL`, `ONOS_AUTH`, `ADAPTER_URL`,
 `TWIN_URL`, `DEVICE_ID`, and `VALIDATE_A` / `VALIDATE_Z` for the validation A–Z
@@ -505,8 +526,8 @@ every other script and checks what it did:
 | `correlate.sh`, `--json` | every ONOS flow joins a twin service |
 | `fault.sh cut-path`, `heal-all`, `list` | OPM reports `link-failed`, then recovers |
 | `lightpath.sh delete` | the twin releases the service |
-| `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number, so no flow was left in `PENDING_ADD` without a lightpath. The pairs are drawn with `SEED_RANDOM_SEED`, `twinlight-onos-test` unless you export another, and the run prints it |
-| `seed-demo.sh --reset` with the twin's `qot_margin_db` raised by 3 dB | pairs screened against the default margin are refused; each refusal is reported and its flow removed, spares fill in, and ONOS ends with no flow in `PENDING_ADD`. The margin is put back afterwards |
+| `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number, so no flow was left in `PENDING_ADD` without a lightpath. The pairs are drawn with `SEED_RANDOM_SEED`, `twinlight-onos-test` unless you export another, and the run prints it. Export `ONOS_TEST_QOT_MARGIN_DB` to run this seeding against a twin with that admission margin (restored afterwards) |
+| `find_pairs.py`, then `seed-demo.sh --reset` of those pairs with the twin's `qot_margin_db` raised by 3 dB | the pairs are searched at the twin's margin and saved, then provisioned (`SEED_PAIRS_FILE`) after the margin is raised, so those within 3 dB of their threshold are refused; each refusal is reported and its flow removed, spares fill in, and every flow ends `ADDED`. The margin is put back afterwards |
 | delete scope, across an adapter restart | a lightpath created on the twin directly is not listed to ONOS and survives a `DELETE` through the adapter (`204`, reported under `refused-deletes`); after the adapter restarts, ONOS is shown the same services as before and `/adapter/status` reports them, and removing a flow in ONOS still releases its lightpath. The restart is skipped with `--reuse` |
 | `resync.sh --check`, `resync.sh` | ONOS-created lightpaths survive, every port enabled |
 | `onos-cli.sh devices` | the CLI answers and lists the device |

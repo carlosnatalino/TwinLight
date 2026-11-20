@@ -17,6 +17,8 @@
 #
 # Seeding draws its pairs with SEED_RANDOM_SEED, `twinlight-onos-test` unless
 # exported; the run prints the seed, so a failure can be replayed with it.
+# ONOS_TEST_QOT_MARGIN_DB, if exported, is the twin's admission margin for the
+# main seeding (restored afterwards), to test against a margin other than 1.5.
 #
 # e2e options:
 #   --keep        leave the stack up afterwards, for inspection
@@ -50,7 +52,7 @@ REPO_ROOT="$(cd "${HERE}/../../.." && pwd)"
 ADAPTER_DIR="${HERE}/../adapter"
 LABEL="org.twinlight.onos-test"
 
-usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 MODE="${1:-}"; [ -n "${MODE}" ] || usage; shift
 PINNED=""; KEEP=""; REUSE=""; BOOTS=1; RMI=""; OUT=""
@@ -402,11 +404,24 @@ for line in sys.stdin:
 flows_match_services() {
   [ "$(onos_rest_flows | wc -l | tr -d ' ')" = "$(adapter_service_count)" ]
 }
+# With ONOS_TEST_QOT_MARGIN_DB set, this seeding runs against a twin whose
+# admission margin is that value (set before, restored after, whatever
+# happens), to check that find_pairs.py follows the twin's margin.
 check_seed() {
-  local out admitted
+  local out admitted margin="" rc=0
   echo "SEED_RANDOM_SEED=${SEED_RANDOM_SEED}"
-  out="$("${HERE}/seed-demo.sh" --reset)" || { printf '%s\n' "${out}"; return 1; }
+  if [ -n "${ONOS_TEST_QOT_MARGIN_DB:-}" ]; then
+    margin="$(twin_margin)" || return 1
+    set_twin_margin "${ONOS_TEST_QOT_MARGIN_DB}" || return 1
+    echo "qot_margin_db ${margin} -> $(twin_margin) dB for this seeding (ONOS_TEST_QOT_MARGIN_DB)"
+  fi
+  out="$("${HERE}/seed-demo.sh" --reset)" || rc=1
+  if [ -n "${margin}" ]; then
+    set_twin_margin "${margin}" || rc=1
+    echo "qot_margin_db back to $(twin_margin) dB"
+  fi
   printf '%s\n' "${out}"
+  [ "${rc}" = 0 ] || return 1
   admitted="$(printf '%s' "${out}" | sed -n 's/.* \([0-9][0-9]*\) lightpath(s) admitted.*/\1/p')"
   [ "${admitted:-0}" -gt 0 ] || { echo "nothing admitted"; return 1; }
   until_true 90 flows_match_services \
@@ -531,13 +546,17 @@ check_delete_scope() {
     "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${DELETE_SCOPE_NATIVE}"
   return "${rc}"
 }
-# A pair the twin refuses at create must not leave its flow in ONOS. The
-# twin's QoT margin is raised by 3 dB for one seeding, so pairs find_pairs.py
-# screened against the default 1.5 dB are refused for certain; seed-demo.sh
-# must report each refusal, remove its flow and provision spares, and leave
-# ONOS with no flow in PENDING_ADD. The margin is put back whatever happens.
+# A pair the twin refuses at create must not leave its flow in ONOS. The pairs
+# are searched at the twin's own margin and saved; the margin is then raised
+# by 3 dB and seed-demo.sh provisions the saved pairs (SEED_PAIRS_FILE), so the
+# pairs within 3 dB of their threshold are refused for certain, through the
+# same path as any refusal. seed-demo.sh must report each refusal, remove its
+# flow and provision spares, and ONOS must end with every flow ADDED. The
+# margin is put back whatever happens.
 twin_margin() {
-  twin_curl -sS "${TWIN_URL}/metrics" | sed -n 's/^twinlight_rmsa_qot_margin_db \([0-9.]*\)$/\1/p'
+  # the margin as find_pairs.py reads it, from the transparent controller
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from find_pairs import read_margin; print(read_margin(sys.argv[2]))' \
+    "${HERE}" "${TWIN_URL}"
 }
 set_twin_margin() {
   local code
@@ -550,13 +569,18 @@ pending_add_flows() {
 }
 no_pending_add_flows() { [ "$(pending_add_flows)" = 0 ]; }
 check_seed_refusals() {
-  local margin raised out rc=0 refused removed
-  margin="$(twin_margin)"
-  [ -n "${margin}" ] || { echo "cannot read the twin's qot_margin_db from /metrics"; return 1; }
+  local margin raised out rc=0 refused removed pairs="${RUN_DIR}/refusal-step-pairs.txt"
+  margin="$(twin_margin)" || return 1
+  # Cleared first, so the search sees the line the creates will.
+  "${HERE}/lightpath.sh" clear >/dev/null 2>&1 || true
+  TWIN_URL="${TWIN_URL}" SEED_RANDOM_SEED="${SEED_RANDOM_SEED}" \
+    python3 "${HERE}/find_pairs.py" > "${pairs}" || return 1
+  echo "pairs searched at the twin's margin of ${margin} dB (SEED_RANDOM_SEED=${SEED_RANDOM_SEED}):"
+  sed 's/^/  /' "${pairs}"
   raised="$(python3 -c 'import sys; print(float(sys.argv[1]) + 3)' "${margin}")"
   set_twin_margin "${raised}" || return 1
-  echo "qot_margin_db ${margin} -> ${raised} dB; SEED_RANDOM_SEED=${SEED_RANDOM_SEED}"
-  out="$("${HERE}/seed-demo.sh" --reset)" || rc=1
+  echo "qot_margin_db ${margin} -> ${raised} dB before they are provisioned"
+  out="$(SEED_PAIRS_FILE="${pairs}" "${HERE}/seed-demo.sh" --reset)" || rc=1
   set_twin_margin "${margin}" || rc=1
   printf '%s\n' "${out}"
   echo "qot_margin_db back to $(twin_margin) dB"

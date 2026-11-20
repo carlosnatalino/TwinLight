@@ -17,8 +17,8 @@
 #
 # Each pair also carries a modulation format, so the seeded set spans all
 # three the twin supports. Reach and format are not independent: DP-QPSK
-# needs 8.5 dB GSNR, DP-16QAM 14.5 and DP-64QAM 20.5, plus rmsa.qot_margin_db
-# on top. So the high-order formats are asked for on the short hops that can
+# needs 8.5 dB GSNR, DP-16QAM 14.5 and DP-64QAM 20.5, plus the twin's
+# rmsa.qot_margin_db on top. So the high-order formats are asked for on the short hops that can
 # carry them, and the long hauls are asked for at DP-QPSK. That pairing is
 # the point — it shows the twin's admission decision depending on the format,
 # not just on the route.
@@ -44,7 +44,9 @@ require_stack
 # Act 2 does it.
 #
 # Reach and format are not independent: DP-QPSK needs 8.5 dB, DP-16QAM 14.5
-# and DP-64QAM 20.5, each plus rmsa.qot_margin_db. On the bundled CORONET
+# and DP-64QAM 20.5, each plus rmsa.qot_margin_db, which find_pairs.py reads
+# from the twin at the start of the search (the margin is a runtime setting;
+# a twin that cannot say stops the search). On the bundled CORONET
 # topology only metro-distance hops reach DP-64QAM, which is the point worth
 # showing -- the twin's answer depends on the format, not just the route.
 #
@@ -61,6 +63,9 @@ require_stack
 #   SEED_SPARES                           extra pairs per format, used on a refusal
 #   SEED_ATTEMPTS                         probe budget
 #   SEED_RANDOM_SEED                      fixes the order pairs are drawn in
+#   SEED_PAIRS_FILE                       provision these pairs instead of searching:
+#                                         lines as find_pairs.py prints them, e.g.
+#                                         a saved search, to replay a seeding
 QPSK_WANTED="${SEED_QPSK:-3}"
 Q16_WANTED="${SEED_16QAM:-3}"
 Q64_WANTED="${SEED_64QAM:-2}"
@@ -73,14 +78,20 @@ if [ "${1:-}" = "--reset" ]; then
   "$(dirname "$0")/lightpath.sh" clear >/dev/null 2>&1 || true
 fi
 
-say "Searching for admissible pairs (probing up to ${ATTEMPTS} at random${SEED_RANDOM_SEED:+, seed ${SEED_RANDOM_SEED}})"
-PAIRS="$(TWIN_URL="${TWIN_URL}" \
-  QPSK_WANTED="${QPSK_WANTED}" Q16_WANTED="${Q16_WANTED}" Q64_WANTED="${Q64_WANTED}" \
-  SPARES="${SPARES}" ATTEMPTS="${ATTEMPTS}" SEED_RANDOM_SEED="${SEED_RANDOM_SEED:-}" \
-  python3 "$(dirname "$0")/find_pairs.py")" \
-  || die "pair search failed — is the twin up at ${TWIN_URL}?"
-
-[ -n "${PAIRS}" ] || die "no admissible pairs found in ${ATTEMPTS} probes"
+if [ -n "${SEED_PAIRS_FILE:-}" ]; then
+  say "Provisioning the pairs in ${SEED_PAIRS_FILE} (no search)"
+  PAIRS="$(cat "${SEED_PAIRS_FILE}")" || die "cannot read ${SEED_PAIRS_FILE}"
+  [ -n "${PAIRS}" ] || die "${SEED_PAIRS_FILE} lists no pairs"
+else
+  say "Searching for admissible pairs (probing up to ${ATTEMPTS} at random${SEED_RANDOM_SEED:+, seed ${SEED_RANDOM_SEED}})"
+  # find_pairs.py says on stderr which margin it read, or why it could not.
+  PAIRS="$(TWIN_URL="${TWIN_URL}" \
+    QPSK_WANTED="${QPSK_WANTED}" Q16_WANTED="${Q16_WANTED}" Q64_WANTED="${Q64_WANTED}" \
+    SPARES="${SPARES}" ATTEMPTS="${ATTEMPTS}" SEED_RANDOM_SEED="${SEED_RANDOM_SEED:-}" \
+    python3 "$(dirname "$0")/find_pairs.py")" \
+    || die "pair search failed (the reason is above) — is the twin up at ${TWIN_URL}?"
+  [ -n "${PAIRS}" ] || die "no admissible pairs found in ${ATTEMPTS} probes"
+fi
 
 wanted_of() {
   case "$1" in
