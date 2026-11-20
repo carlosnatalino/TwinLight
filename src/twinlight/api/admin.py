@@ -16,6 +16,8 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request, status
 
+from twinlight.api.restconf import RestconfError
+
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 _DEFAULT_SNAPSHOT_DIR = Path("snapshots")
@@ -71,9 +73,8 @@ async def restore_snapshot(request: Request, body: dict) -> dict:
     """Restore state from a snapshot file. Body: {"path": "snapshots/..."}."""
     path_str = body.get("path")
     if not path_str:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing 'path' in body",
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "missing-element", "Missing 'path' in body",
         )
     path = Path(path_str)
     if not path.is_file():
@@ -85,14 +86,11 @@ async def restore_snapshot(request: Request, body: dict) -> dict:
     try:
         warnings = ctx.restore_from(path)
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        ) from e
+        raise RestconfError(status.HTTP_400_BAD_REQUEST, "invalid-value", str(e)) from e
     except OSError as e:  # raised reading the file, before any state changed
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot read snapshot {path}: {e.strerror or e}",
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value",
+            f"Cannot read snapshot {path}: {e.strerror or e}",
         ) from e
     # A deprecated snapshot was rewritten in place; services outside their
     # amplifier band were restored DISABLED. Both are reported, not hidden.
@@ -137,9 +135,8 @@ async def list_snapshots(request: Request) -> dict:
 async def get_snapshot_content(request: Request, path: str = "") -> dict:
     """Return the JSON content of a snapshot file. Query: path=<filename or path>."""
     if not path.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing query parameter: path",
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "missing-element", "Missing query parameter: path",
         )
     directory = _snapshot_dir(request)
     file_path = (
@@ -149,9 +146,9 @@ async def get_snapshot_content(request: Request, path: str = "") -> dict:
     )
     dir_resolved = directory.resolve()
     if not str(file_path).startswith(str(dir_resolved)):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Path must be under the snapshot directory",
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value",
+            "Path must be under the snapshot directory",
         )
     if not file_path.is_file():
         raise HTTPException(
@@ -161,8 +158,7 @@ async def get_snapshot_content(request: Request, path: str = "") -> dict:
     try:
         data = json.loads(file_path.read_text())
     except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid JSON in snapshot: {e}",
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value", f"Invalid JSON in snapshot: {e}",
         ) from e
     return data

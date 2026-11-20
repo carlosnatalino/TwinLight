@@ -27,7 +27,10 @@ router = APIRouter(prefix=PREFIX, tags=["tapi-equipment"])
 
 
 def _dump(model) -> dict:
-    return model.model_dump(by_alias=True)
+    """A fresh JSON-ready dict of ``model``: the tree it comes from is shared
+    by every request (``TapiContext.physical_context``) and immutable, its
+    lists held as tuples, which JSON mode turns back into lists."""
+    return model.model_dump(by_alias=True, mode="json")
 
 
 def physical_context_payload(ctx) -> dict:

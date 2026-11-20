@@ -59,6 +59,9 @@ in the rows after the paths:
 | `404` with `error-tag: data-missing`, on any T-API resource | `404` with `invalid-value` (RFC 8040 §4.3; `data-missing` is a `409` tag) |
 | `422` (`invalid-value`) for a T-API request that does not validate | `400`, with the tag that names the problem: `malformed-message`, `missing-element`, `bad-element` or `invalid-value` (see [Error format](#error-format)) |
 | `422` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required` (RFC 7950 §15.5) |
+| `404` with `error-tag: data-missing` on a proprietary endpoint (`/internal`, `/admin`, `/config`, `/transparent`), an unknown path under one included | `404` with `invalid-value`, as on the T-API resources |
+| `422` (`invalid-value`) for a request to a proprietary endpoint that does not validate (a query parameter left out or out of range, a body of the wrong shape) | `400`, with the tag that names the problem, classified as on the T-API resources; every message is unchanged |
+| `422` from `POST /internal/compute-path` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required`, as the path-comp-service answers; an unsupported constraint is `400` `invalid-value` |
 | `GET …/service-interface-point` answering `{"tapi-common:context": {"service-interface-point": […]}}` | `{"tapi-common:service-interface-point": […]}` (RFC 8040 §4.3); the old body is the full context's SIP section |
 | `GET …/service-interface-point={uuid}` answering `{"tapi-common:context": {"service-interface-point": [{…}]}}` | `{"tapi-common:service-interface-point": [{…}]}` |
 | `GET` of one `connectivity-service=`, `path-comp-service=`, `path=`, `device=`, `device=/equipment=` or `physical-span=` answering `{"<module>:<list>": {…}}` | An array of one, `{"<module>:<list>": [{…}]}` (RFC 7951 §5.4), as `topology=`, `node=`, `link=` and `oam-job=` already answered |
@@ -71,6 +74,7 @@ in the rows after the paths:
 | A non-JSON `Accept` (`application/yang-data+xml`) answered with JSON | `406` |
 | A request body in any media type parsed as JSON when it parsed | `415` unless it is `application/yang-data+json` or `application/json` |
 | `GET /restconf/data`, the YANG library, `restconf-state` and `/restconf/operations` answering `404` | Served (RFC 8040 §3.3, §9, §10) |
+| With `server.restconf_root: ""`, `GET /.well-known/host-meta`, the API resource, `/operations` and `/yang-library-version` answering `404` | host-meta names the root as the request's own absolute URI (`href='http://host:port'`, an empty path); the API resource is `GET /`, beside `/data`, `/operations` and `/yang-library-version` (RFC 8040 §3.1, §3.3). The bundled clients still read a `404` from an older twin as the empty root |
 | `HEAD` and `OPTIONS` answering `405` on every resource | `HEAD` answers as `GET` without the body, `OPTIONS` answers `200` with `Allow` (and `Accept-Patch` where `PATCH` is allowed); a `405` lists both in `Allow` (see [HEAD and OPTIONS](#head-and-options)) |
 
 The standard paths are given for the default root, `/restconf`; on a twin
@@ -96,11 +100,32 @@ GET /.well-known/host-meta
 </XRD>
 ```
 
-T-API is then at `{href}/data/…`. host-meta needs a token when authentication
-is on, like every path except `/health`. A twin with an empty root serves no
-host-meta (`404`); a twin from before the RESTCONF root did not either, and
-both serve T-API at `/data/…`, so a `404` means the root is empty. Any other
-error, a `401` included, is an error, not a missing root.
+T-API is then at `{href}/data/…`, the API resource at `{href}` and its other
+children at `{href}/operations` and `{href}/yang-library-version` (RFC 8040
+§3.3). host-meta needs a token when authentication is on, like every path
+except `/health`.
+
+A twin with an empty root (`server.restconf_root: ""`) names it with the
+absolute URI the request reached, whose path is empty:
+
+```
+GET /.well-known/host-meta
+Host: localhost:8080
+
+<XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>
+    <Link rel='restconf' href='http://localhost:8080'/>
+</XRD>
+```
+
+Resolved against host-meta's URL (RFC 3986 §5.2) that is itself, so T-API
+is at `http://localhost:8080/data/…` and the API resource at `/`. A client
+that keeps only the path of an absolute `href`, as the bundled ones do, gets
+the empty root. Neither of the two shorter spellings works: XRD 1.0 §1.5.2
+forbids an empty `href`, and `href='/'` would make `{+restconf}/data` the
+network-path reference `//data` (RFC 3986 §4.2). A twin from before the
+RESTCONF root serves no host-meta (`404`) and T-API at `/data/…`, so a `404`
+means the root is empty too. Any other error, a `401` included, is an error,
+not a missing root.
 
 The bundled clients follow this rule and discover the root once per twin,
 before their first T-API request: the web UI (once per base URL), the
@@ -720,7 +745,9 @@ Errors under `/restconf/data/` use the RESTCONF format of
 
 Each status is paired with the tag RFC 8040 §7 gives the condition (the tags
 themselves are NETCONF's, RFC 6241 Appendix A). RFC 8040 does not use `422`,
-so no T-API resource answers it:
+so no endpoint of the twin answers it. The proprietary endpoints (`/internal`,
+`/admin`, `/config`, `/transparent`) follow the same table as the T-API
+resources, so a client handles every error of the twin one way:
 
 | HTTP status | `error-tag` | Used for |
 |-------------|-------------|----------|
@@ -735,9 +762,13 @@ so no T-API resource answers it:
 | 501 | `operation-not-supported` | A standard leaf the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
 
 The first problem a body has decides the tag; the message lists every one.
-The proprietary endpoints (`/internal`, `/admin`, `/config`, `/transparent`)
-use the same error body but keep FastAPI's `422` (`invalid-value`) for a
-request that does not validate, and `data-missing` on a `404`.
+A query parameter a proprietary endpoint requires and did not get is a `400`
+`missing-element`; one outside its range a `400` `invalid-value`. Statuses
+that mean something else keep it there too: `401`, `409` for a conflict,
+`501` for an operation the backend does not support, `503` when no
+physical-layer backend is loaded, and the transparent controller's `403`
+(a read-only leaf) and `412` (a stale `If-Match`, see
+[TRANSPARENT_CONTROLLER.md](TRANSPARENT_CONTROLLER.md)).
 
 A 405 also carries an `Allow` header (RFC 9110 §15.5.6) naming every method
 the resource serves at that path, on every path of the twin: T-API resources

@@ -162,8 +162,10 @@ Details that are easy to get wrong and cost a debugging cycle:
 
 ## Caches and invalidation
 
-`TapiContext` holds `_gnpy_uid_map` (built once), `_route_cache`
-(`(src, dst) → uid list`) and `_baseline_cache` (`service_uuid → OpmBaseline`).
+`TapiContext` holds `_gnpy_uid_map` (rebuilt only by a redesign), `_route_cache`
+(`(src, dst) → uid list`), `_baseline_cache` (`service_uuid → OpmBaseline`)
+and `_physical_context_cache` (the T-API equipment tree, keyed by the running
+revision, so any write that bumps the revision rebuilds it on the next read).
 `_propagation_lock` serialises propagation. A change that affects physics must
 invalidate the right cache — `invalidate_baseline(uuid)` on service deletion,
 and the broader sweep on `/config/` parameter changes and link failure.

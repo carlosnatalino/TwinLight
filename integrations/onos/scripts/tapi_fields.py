@@ -96,8 +96,9 @@ def twin_data_root(base: str) -> str:
 
     The root comes from ``/.well-known/host-meta`` (RFC 8040 §3.1): it is
     ``/restconf`` by default but configurable, so the scripts do not assume
-    it. A twin without host-meta (404) runs with an empty root, or predates
-    it, and serves T-API at ``/data``. A twin that refuses the token exits
+    it. A twin with an empty root advertises ``http://host:port``, whose path
+    is empty: T-API at ``/data``. An older twin without host-meta (404)
+    serves T-API at ``/data`` too. A twin that refuses the token exits
     with the reason (see :func:`twin_urlopen`).
     """
     import xml.etree.ElementTree as ET

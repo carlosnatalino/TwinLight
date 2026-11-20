@@ -14,10 +14,12 @@ import math
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from twinlight.algorithms.path_constraints import ConstraintError, parse_constraints
+from twinlight.api.connectivity import constraint_error
+from twinlight.api.restconf import RestconfError, validation_error_tag
 from twinlight.config import FecConfig
 from twinlight.state.context import NoPathError
 
@@ -271,9 +273,9 @@ async def get_path_info(
     Query params: sip_a, sip_z (required), modulation (optional).
     """
     if not sip_a or not sip_z:
-        raise HTTPException(
-            status_code=422,
-            detail="Query parameters sip_a and sip_z are required",
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "missing-element",
+            "Query parameters sip_a and sip_z are required",
         )
     ctx = request.app.state.context
     if ctx.get_sip(sip_a) is None:
@@ -296,9 +298,9 @@ async def get_path_info(
     try:
         ModulationFormat(modulation)
     except ValueError:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown modulation {modulation!r}; "
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value",
+            f"Unknown modulation {modulation!r}; "
             f"expected one of {[f.value for f in ModulationFormat]}",
         ) from None
 
@@ -385,17 +387,29 @@ async def compute_path(body: dict, request: Request) -> dict:
     order and its fiber length. Not T-API: v2.6.0 has no candidate-count leaf
     and no node list on a path; the standard view is the path-comp-service.
     """
+    # Errors as the T-API path-comp-service classifies them: a body that
+    # does not validate is a 400 with the tag naming the problem, a
+    # reference to a SIP, node or link that does not exist a 409
+    # data-missing/instance-required (RFC 7950 §15.5).
     try:
         req = ComputePathRequest.model_validate(body)
+    except ValidationError as exc:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, validation_error_tag(exc.errors()), str(exc),
+        ) from exc
+    try:
         constraints = parse_constraints(req.routing_constraint, req.topology_constraint)
-    except (ValidationError, ConstraintError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ConstraintError as exc:
+        raise constraint_error(exc) from exc
 
     ctx = request.app.state.context
     sips = [ep.service_interface_point.service_interface_point_uuid for ep in req.end_point]
     for sip in sips:
         if ctx.get_sip(sip) is None:
-            raise HTTPException(status_code=422, detail=f"SIP {sip!r} not found")
+            raise RestconfError(
+                status.HTTP_409_CONFLICT, "data-missing", f"SIP {sip!r} not found",
+                error_app_tag="instance-required",
+            )
     src, dst = (ctx.get_gnpy_uid(sip) for sip in sips)
     try:
         routes = (
@@ -403,7 +417,7 @@ async def compute_path(body: dict, request: Request) -> dict:
             if src and dst else []
         )
     except ConstraintError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise constraint_error(exc) from exc
     except NoPathError as exc:  # the include search ran out of budget
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not routes:

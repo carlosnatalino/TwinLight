@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from twinlight.app import create_app
 from twinlight.auth import CLIENT_TOKEN_ENV_VAR, TOKENS_ENV_VAR
-from twinlight.config import GnpyConfig, TwinConfig
+from twinlight.config import CORS_ORIGINS_ENV_VAR, GnpyConfig, TwinConfig
 from twinlight.example_data import find_example_file
 from twinlight.models.connectivity import OTSIA_CSEP_SPEC
 from twinlight.physics.modulation import MODULATION_TO_MT, ModulationFormat
@@ -83,6 +83,8 @@ def _no_ambient_api_tokens(
     """
     monkeypatch.delenv(TOKENS_ENV_VAR, raising=False)
     monkeypatch.delenv(CLIENT_TOKEN_ENV_VAR, raising=False)
+    # The same for the CORS origins, which load_config() reads alike.
+    monkeypatch.delenv(CORS_ORIGINS_ENV_VAR, raising=False)
     monkeypatch.setattr("twinlight.auth.DEFAULT_ENV_FILE", tmp_path / "absent.env")
 
 

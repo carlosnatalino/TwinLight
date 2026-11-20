@@ -79,6 +79,10 @@ server:
     - "http://localhost:5173"
 ```
 
+`TWINLIGHT_CORS_ORIGINS` (comma-separated) replaces that list without editing
+the file; the Compose stack sets it to the UI's published origin,
+`http://localhost:${TWINLIGHT_UI_PORT:-5173}`.
+
 ## Docker
 
 The UI ships as a static nginx image. The Digital Twin URL is **not** baked in
@@ -97,8 +101,8 @@ docker compose up --build      # UI on http://localhost:5173
 `TWIN_URL` is the address the **browser** uses, so it must be reachable from
 the host (the twin's published port, e.g. `http://localhost:8080`) — not the
 compose service name. A value saved in the UI's Settings page (localStorage)
-overrides the injected default. Make sure that origin is listed in the twin's
-`cors_origins`; `http://localhost:5173` already is in the example configs.
+overrides the injected default. Make sure the UI's origin is allowed by the
+twin (`cors_origins`, or `TWINLIGHT_CORS_ORIGINS`, which Compose sets).
 
 ## Features
 
