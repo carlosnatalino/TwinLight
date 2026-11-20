@@ -105,7 +105,9 @@ way a deployed coherent receiver's telemetry moves.
 - **Observability out of the box** — Prometheus `/metrics` plus a provisioned
   Grafana dashboard in the Compose stack.
 - **Web UI** — a React SPA for topology, services, spectrum occupancy, path
-  computation and live OPM charts.
+  computation and live OPM charts. The Topology page draws the network at its
+  nodes' geographic positions, which the twin serves in the standard T-API
+  equipment `geolocation` from the GNPy topology's coordinates.
 - **A fully transparent optical domain controller** — besides the abstracted
   T-API view, every element and every modelled parameter (span loss, connector
   loss, dispersion, PMD; amplifier gain, tilt, VOAs, NF, saturation power; ROADM

@@ -107,10 +107,20 @@ twin (`cors_origins`, or `TWINLIGHT_CORS_ORIGINS`, which Compose sets).
 ## Features
 
 - **Dashboard** — network health at a glance: node/link/SIP counts, operational state, topology breakdown
-- **Topology** — interactive Cytoscape.js graph with force-directed / hierarchical / grid / breadth-first / circle layouts, pan and zoom, click-through to details
+- **Topology** — interactive Cytoscape.js graph, pan and zoom, click-through to details. When the twin
+  serves node positions, the default **Geographic** layout draws each node where it is: the page follows
+  each topology node's standard `tapi-equipment:device-supports-node` reference to its device and reads that
+  equipment's `geolocation` (decimal64 strings, parsed strictly by `src/lib/yangNumbers.ts`; a malformed one
+  is shown as an error above the graph, never drawn at a made-up place). The projection is equirectangular,
+  scaled by the cosine of the map's central latitude (north up, east right; `src/lib/geo.ts` says why), with
+  no map tiles and no requests. Nodes at one position — a transceiver at its ROADM — are set apart on a small
+  ring around the first, clockwise from north, and nodes without a position are lined up below the map; both
+  rules are deterministic. The force-directed, hierarchical, grid, breadth-first and circle layouts stay
+  selectable; without positions (none served, or an older twin) the page starts force-directed as before
 - **Device detail** — full node view: NEP table, SIP badges, state indicators, connected links, OPM metrics
 - **Link detail** — endpoints with node resolution, span element table, state indicators
-- **Services** — service list, logical topology graph, spectrum allocation, delete with confirmation
+- **Services** — service list, logical topology graph (drawn at the end-points' geographic positions by
+  default when the twin serves them, as on the Topology page), spectrum allocation, delete with confirmation
 - **Add service** — A-end (SOURCE) and Z-end (SINK) SIPs, modulation format or automatic
   selection, optional central frequency and launch power, ROADMs to pass through (in order)
   or avoid, admin and lifecycle state. The request is built in `src/lib/serviceRequest.ts`;
@@ -130,7 +140,7 @@ synthesises the data (`/internal/services/{uuid}/constellation` and
 
 - **React 18 + TypeScript** on Vite 6
 - **Zustand** stores: connection, topology, monitoring, services, selection
-- **localStorage** caching: topology (5-minute TTL) plus time-series ring buffers (1000 points per metric per service)
+- **localStorage** caching: topology and node positions (5-minute TTL) plus time-series ring buffers (1000 points per metric per service)
 - **Cytoscape.js** for graph rendering, through `src/components/graph/CytoscapeGraph.tsx`
 - **Recharts** for time-series charts
 - **Tailwind CSS v3** for styling

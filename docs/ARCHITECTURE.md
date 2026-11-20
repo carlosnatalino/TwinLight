@@ -188,6 +188,10 @@ src/twinlight_client/    Companion client library and CLI
 2. `TapiContext.__init__` loads the GNPy topology JSON into `GnpyElement`
    objects, hands them to `TapiBuilder` to produce the T-API `Topology`, `Node`,
    `Link` and `ServiceInterfacePoint` objects, and builds the `TopologyGraph`.
+   Each `Node` names its element's `physical-context` device in the standard
+   `tapi-equipment:device-supports-node` augment; the device's equipment carries
+   the element's position as `geolocation`, which is how the web UI places the
+   node on its map.
 3. The selected `PhysicalBackend` is constructed. GNPy additionally runs
    `designed_network(equipment, network)` here, which is where amplifier
    placement and power design happen.
@@ -385,7 +389,7 @@ observe the tentative values; nothing is cached.
 | `_gnpy_uid_map` | element UID | built at startup; rebuilt by a redesign |
 | `_route_cache` | `(src_uid, dst_uid)` | topology mutation (e.g. link failure) |
 | `_baseline_cache` | service UUID | service deletion, `/config` parameter change (including `/config/parameters` batches), link failure |
-| `_physical_context_cache` | running revision | any configuration change (every write that bumps the revision: element parameters, redesign, link failure, twin config, restore). Holds the T-API `physical-context` tree, built from each element's UID, kind and `type_variety`; frozen models and tuples, so no request can change the shared object |
+| `_physical_context_cache` | running revision | any configuration change (every write that bumps the revision: element parameters, redesign, link failure, twin config, restore). Holds the T-API `physical-context` tree, built from each element's UID, kind, `type_variety` and position (`metadata.location`, served as `geolocation`); frozen models and tuples, so no request can change the shared object |
 
 ## Middleware
 

@@ -1,8 +1,15 @@
 import type cytoscape from "cytoscape";
+import type { Point } from "@/lib/geo";
 
-export type LayoutName = "cose" | "dagre" | "grid" | "breadthfirst" | "circle";
+/** A layout that needs nothing but the graph. */
+export type GraphLayoutName = "cose" | "dagre" | "grid" | "breadthfirst" | "circle";
+/** "geographic" draws each node at its position (lib/geo.ts), when the twin gives them. */
+export type LayoutName = "geographic" | GraphLayoutName;
 
-export const LAYOUT_CONFIGS: Record<LayoutName, cytoscape.LayoutOptions> = {
+/** The layout a page starts with when the twin gives no positions. */
+export const DEFAULT_GRAPH_LAYOUT: GraphLayoutName = "cose";
+
+export const LAYOUT_CONFIGS: Record<GraphLayoutName, cytoscape.LayoutOptions> = {
   cose: {
     name: "cose",
     animate: true,
@@ -47,12 +54,48 @@ export const LAYOUT_CONFIGS: Record<LayoutName, cytoscape.LayoutOptions> = {
 };
 
 export const LAYOUT_LABELS: Record<LayoutName, string> = {
+  geographic: "Geographic",
   cose: "Force-directed",
   dagre: "Hierarchical",
   grid: "Grid",
   breadthfirst: "Breadth-first",
   circle: "Circle",
 };
+
+/**
+ * The layout to draw with: the one the user chose, or by default
+ * "geographic" when the graph has positions and force-directed otherwise.
+ * A choice of "geographic" that the graph cannot honour (the positions went
+ * away on a refresh from an older twin) falls back to the default.
+ */
+export function chooseLayout(chosen: LayoutName | null, hasPositions: boolean): LayoutName {
+  if (chosen === "geographic" && !hasPositions) return DEFAULT_GRAPH_LAYOUT;
+  return chosen ?? (hasPositions ? "geographic" : DEFAULT_GRAPH_LAYOUT);
+}
+
+/** The layouts a page offers: "geographic" only when there are positions. */
+export function availableLayouts(hasPositions: boolean): LayoutName[] {
+  return (Object.keys(LAYOUT_LABELS) as LayoutName[]).filter(
+    (name) => name !== "geographic" || hasPositions,
+  );
+}
+
+/**
+ * Cytoscape options for a layout. "geographic" is a `preset` layout on the
+ * projected positions, fitted to the viewport like the others and not
+ * animated: it is placed in one step, so there is no frame left to run after
+ * the page is gone. Without positions it is the default layout.
+ */
+export function layoutOptions(
+  name: LayoutName,
+  positions: Record<string, Point> | undefined,
+): cytoscape.LayoutOptions {
+  if (name === "geographic") {
+    if (!positions) return LAYOUT_CONFIGS[DEFAULT_GRAPH_LAYOUT];
+    return { name: "preset", positions, fit: true, padding: 40, animate: false };
+  }
+  return LAYOUT_CONFIGS[name] ?? LAYOUT_CONFIGS[DEFAULT_GRAPH_LAYOUT];
+}
 
 export const CYTOSCAPE_STYLESHEET: Array<cytoscape.StylesheetStyle | cytoscape.StylesheetCSS> = [
   {

@@ -98,3 +98,59 @@ describe("fetchTopology", () => {
     expect(cacheRead(CACHE_KEYS.TOPOLOGY)?.data).not.toHaveProperty("context");
   });
 });
+
+describe("fetchTopology: node positions", () => {
+  const located = {
+    ...topology,
+    node: [
+      {
+        uuid: "node-1",
+        "tapi-equipment:device-supports-node": { "supporting-device": [{ "device-uuid": "device-1" }] },
+      },
+    ],
+  };
+  function contextWith(geolocation: unknown) {
+    const ctx = fullContext["tapi-common:context"];
+    return {
+      "tapi-common:context": {
+        ...ctx,
+        "tapi-topology:topology-context": { topology: [located] },
+        "tapi-equipment:physical-context": {
+          device: [{ uuid: "device-1", equipment: [{ uuid: "eq-1", geolocation }] }],
+          "physical-span": [],
+        },
+      },
+    };
+  }
+
+  it("keeps the position of each node, and only that, of the physical context", async () => {
+    mockFetch.mockResolvedValue(respond(contextWith({ latitude: "47.60621", longitude: "-122.332071" })));
+    await useTopologyStore.getState().fetchTopology("http://twin");
+
+    const data = useTopologyStore.getState().data;
+    expect(data?.positions).toEqual({ "node-1": { latitude: 47.60621, longitude: -122.332071 } });
+    expect(data?.positionsError).toBeUndefined();
+    expect(cacheRead(CACHE_KEYS.TOPOLOGY)?.data).toEqual(data);
+    expect(localStorage.getItem(CACHE_KEYS.TOPOLOGY)).not.toContain("tapi-equipment:physical-context");
+  });
+
+  it("loads the topology and reports a position that does not parse", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockFetch.mockResolvedValue(respond(contextWith({ latitude: "47.6", longitude: "far west" })));
+    await useTopologyStore.getState().fetchTopology("http://twin");
+
+    const state = useTopologyStore.getState();
+    expect(state.error).toBeNull();
+    expect(state.data?.topologies).toEqual([located]);
+    expect(state.data?.positions).toBeUndefined();
+    expect(state.data?.positionsError).toContain('geolocation/longitude: expected a decimal64 string, got "far west"');
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("has no positions for a twin that serves none", async () => {
+    await useTopologyStore.getState().fetchTopology("http://twin");
+    expect(useTopologyStore.getState().data).not.toHaveProperty("positions");
+    expect(useTopologyStore.getState().data).not.toHaveProperty("positionsError");
+  });
+});

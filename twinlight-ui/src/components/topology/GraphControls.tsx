@@ -5,6 +5,8 @@ import RefreshButton from "@/components/common/RefreshButton";
 
 interface GraphControlsProps {
   layoutName: LayoutName;
+  /** The layouts to offer, in order; every layout when absent. */
+  layouts?: LayoutName[];
   onLayoutChange: (layout: LayoutName) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -20,10 +22,11 @@ interface GraphControlsProps {
   nodeCount?: number;
 }
 
-const LAYOUTS = Object.entries(LAYOUT_LABELS) as [LayoutName, string][];
+const ALL_LAYOUTS = Object.keys(LAYOUT_LABELS) as LayoutName[];
 
 export default function GraphControls({
   layoutName,
+  layouts = ALL_LAYOUTS,
   onLayoutChange,
   onZoomIn,
   onZoomOut,
@@ -55,9 +58,9 @@ export default function GraphControls({
           onChange={(e) => onLayoutChange(e.target.value as LayoutName)}
           className="text-xs border border-gray-200 rounded px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
-          {LAYOUTS.map(([key, label]) => (
+          {layouts.map((key) => (
             <option key={key} value={key}>
-              {label}
+              {LAYOUT_LABELS[key]}
             </option>
           ))}
         </select>
