@@ -127,7 +127,7 @@ synthesises the data (`/internal/services/{uuid}/constellation` and
 - **React 18 + TypeScript** on Vite 6
 - **Zustand** stores: connection, topology, monitoring, services, selection
 - **localStorage** caching: topology (5-minute TTL) plus time-series ring buffers (1000 points per metric per service)
-- **Cytoscape.js** for graph rendering, via react-cytoscapejs
+- **Cytoscape.js** for graph rendering, through `src/components/graph/CytoscapeGraph.tsx`
 - **Recharts** for time-series charts
 - **Tailwind CSS v3** for styling
 
@@ -143,6 +143,12 @@ synthesises the data (`/internal/services/{uuid}/constellation` and
   `Array<cytoscape.StylesheetStyle | cytoscape.StylesheetCSS>`, not
   `cytoscape.Stylesheet[]`.
 - Local type declarations for untyped packages live in `src/types/`.
+- Mount a Cytoscape graph with `CytoscapeGraph`, never with `cytoscape()` in a
+  page: it owns the core, runs the layouts and stops one before the next, and
+  on unmount destroys the core one animation frame after stopping the last
+  layout. An animated `cose` layout runs a final frame after `stop()`, and on
+  a core already destroyed that frame throws
+  `TypeError: Cannot read properties of null (reading 'notify')`.
 
 ## Tech stack
 
@@ -152,7 +158,7 @@ synthesises the data (`/internal/services/{uuid}/constellation` and
 | Build | Vite 6 |
 | Routing | React Router v7 |
 | State | Zustand v5 |
-| Graph | Cytoscape.js + react-cytoscapejs |
+| Graph | Cytoscape.js |
 | Charts | Recharts |
 | Styling | Tailwind CSS v3 |
 | Testing | Vitest + React Testing Library |
