@@ -87,8 +87,14 @@ listing its own lightpaths; ONOS is claiming ownership of a domain it does not
 exclusively own.
 
 **Handled in the adapter.** The adapter shows ONOS only the services ONOS
-created (`ADAPTER_EXPOSE_TWIN_SERVICES=false`). Suppressing this in the twin
-would mean the twin misreporting its own state to all clients.
+created (`ADAPTER_EXPOSE_TWIN_SERVICES=false`), and forwards ONOS's `DELETE`
+only for those, answering `204` without forwarding for any other. Which
+services are ONOS's is a standard `name` entry the adapter puts on each one it
+creates (`provisioned-by` = `onos-odtn`), held by the twin, so it survives an
+adapter restart ([README § Why twin-native lightpaths are hidden from
+ONOS](README.md#why-twin-native-lightpaths-are-hidden-from-onos)).
+Suppressing this in the twin would mean the twin misreporting its own state to
+all clients.
 
 ### A4. ONOS cannot express a modulation format
 
