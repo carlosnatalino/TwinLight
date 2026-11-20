@@ -124,20 +124,20 @@ class TestChanges:
         assert {(p["previous"], p["value"]) for p in change["parameters"]} == {(0.2, 0.3)}
         assert _attr(gnpy_app, FWD_FIBER, "loss_coef") == pytest.approx(0.2)
 
-    @pytest.mark.parametrize(("body", "code"), [
-        ([{"path": "/Fiber/*/loss_coef"}], 422),
-        ([{"path": "/Fiber/*/loss_coef", "by": 1, "duration_s": 1}], 422),
-        ({"path": "/Fiber/*/loss_coef", "by": 1}, 422),
-        ([], 400),
-        ([{"path": "/Fiber/*/loss_coef", "to": 9.0}], 400),
-        ([{"path": "/Edfa/*/loss_coef", "by": 1}], 400),
+    @pytest.mark.parametrize(("body", "tag"), [
+        ([{"path": "/Fiber/*/loss_coef"}], "invalid-value"),
+        ([{"path": "/Fiber/*/loss_coef", "by": 1, "duration_s": 1}], "unknown-element"),
+        ({"path": "/Fiber/*/loss_coef", "by": 1}, "bad-element"),
+        ([], "invalid-value"),
+        ([{"path": "/Fiber/*/loss_coef", "to": 9.0}], "invalid-value"),
+        ([{"path": "/Edfa/*/loss_coef", "by": 1}], "invalid-value"),
         ([{"path": "/Fiber/*/loss_coef", "by": 0.1},
-          {"path": f'/Fiber/"{FWD_FIBER}"/loss_coef', "by": 0.1}], 400),
+          {"path": f'/Fiber/"{FWD_FIBER}"/loss_coef', "by": 0.1}], "invalid-value"),
     ])
-    def test_validation_errors(self, gnpy_app: TestClient, body: object, code: int) -> None:
+    def test_validation_errors(self, gnpy_app: TestClient, body: object, tag: str) -> None:
         r = gnpy_app.post(CHANGES, json=body)
-        assert r.status_code == code, r.text
-        assert "ietf-restconf:errors" in r.json()
+        assert r.status_code == 400, r.text
+        assert r.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == tag
         assert _attr(gnpy_app, FWD_FIBER, "loss_coef") == pytest.approx(0.2)
 
 

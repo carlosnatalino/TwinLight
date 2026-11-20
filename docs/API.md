@@ -59,6 +59,9 @@ in the rows after the paths:
 | `404` with `error-tag: data-missing`, on any T-API resource | `404` with `invalid-value` (RFC 8040 §4.3; `data-missing` is a `409` tag) |
 | `422` (`invalid-value`) for a T-API request that does not validate | `400`, with the tag that names the problem: `malformed-message`, `missing-element`, `bad-element` or `invalid-value` (see [Error format](#error-format)) |
 | `422` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required` (RFC 7950 §15.5) |
+| `404` with `error-tag: data-missing` on a proprietary endpoint (`/internal`, `/admin`, `/config`, `/transparent`), an unknown path under one included | `404` with `invalid-value`, as on the T-API resources |
+| `422` (`invalid-value`) for a request to a proprietary endpoint that does not validate (a query parameter left out or out of range, a body of the wrong shape) | `400`, with the tag that names the problem, classified as on the T-API resources; every message is unchanged |
+| `422` from `POST /internal/compute-path` for an end-point SIP, or a constraint node or link, that does not exist | `409`, `data-missing` with `error-app-tag: instance-required`, as the path-comp-service answers; an unsupported constraint is `400` `invalid-value` |
 | `GET …/service-interface-point` answering `{"tapi-common:context": {"service-interface-point": […]}}` | `{"tapi-common:service-interface-point": […]}` (RFC 8040 §4.3); the old body is the full context's SIP section |
 | `GET …/service-interface-point={uuid}` answering `{"tapi-common:context": {"service-interface-point": [{…}]}}` | `{"tapi-common:service-interface-point": [{…}]}` |
 | `GET` of one `connectivity-service=`, `path-comp-service=`, `path=`, `device=`, `device=/equipment=` or `physical-span=` answering `{"<module>:<list>": {…}}` | An array of one, `{"<module>:<list>": [{…}]}` (RFC 7951 §5.4), as `topology=`, `node=`, `link=` and `oam-job=` already answered |
@@ -67,10 +70,12 @@ in the rows after the paths:
 | `PUT …/connectivity-service={uuid}` answering `200` with the entry | `204` with no body when it replaced a service; `201` with `Location` and the entry when it created one (RFC 8040 §4.5) |
 | `PATCH …/connectivity-service={uuid}` with `{"tapi-connectivity:connectivity-service": {…}}` answering `200` and changing nothing (only a bare body was read), with the entry as an object | The envelope (array of one or object) is read and merged; any leaf `PATCH` cannot merge is a `400` naming it; the `200` carries the entry's `GET` body |
 | `GET /restconf` and `/restconf/yang-library-version` served as `application/json` | `application/yang-data+json`, like every RESTCONF response, with `Cache-Control: no-cache` |
-| Any query parameter on a T-API resource ignored (`?depth=1` answered the full resource) | `400` (`invalid-value`) for anything but `content=all`; `content=config`/`nonconfig` is `501` |
+| Any query parameter on a T-API resource ignored (`?depth=1` answered the full resource) | `400` (`invalid-value`) for anything but `content`, which takes `config`, `nonconfig` or `all` on a `GET` or `HEAD` of the datastore and the data resources, and is a `400` anywhere else (the API resource, `operations`, a write) (see [The content parameter](#the-content-parameter)) |
+| No `ETag` or `Last-Modified` on any T-API resource; `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since` ignored | Every `GET`/`HEAD` of the datastore and the data resources carries both; a matching `If-None-Match` or an `If-Modified-Since` not older than the data is a `304`, and a failed `If-Match` or `If-Unmodified-Since` a `412` (`operation-failed`) that leaves the twin unchanged (see [Entity-tags and conditional requests](#entity-tags-and-conditional-requests)). A client sending none of these sees no other change |
 | A non-JSON `Accept` (`application/yang-data+xml`) answered with JSON | `406` |
 | A request body in any media type parsed as JSON when it parsed | `415` unless it is `application/yang-data+json` or `application/json` |
 | `GET /restconf/data`, the YANG library, `restconf-state` and `/restconf/operations` answering `404` | Served (RFC 8040 §3.3, §9, §10) |
+| With `server.restconf_root: ""`, `GET /.well-known/host-meta`, the API resource, `/operations` and `/yang-library-version` answering `404` | host-meta names the root as the request's own absolute URI (`href='http://host:port'`, an empty path); the API resource is `GET /`, beside `/data`, `/operations` and `/yang-library-version` (RFC 8040 §3.1, §3.3). The bundled clients still read a `404` from an older twin as the empty root |
 | `HEAD` and `OPTIONS` answering `405` on every resource | `HEAD` answers as `GET` without the body, `OPTIONS` answers `200` with `Allow` (and `Accept-Patch` where `PATCH` is allowed); a `405` lists both in `Allow` (see [HEAD and OPTIONS](#head-and-options)) |
 | A connectivity-service request member T-API v2.6.0 does not define (`"foo"`, T-API 2.1's `service-layer`, an augment left unqualified) ignored | `400`, `unknown-element` (or `unknown-namespace`, `malformed-message`) naming it, on `POST`, `PUT` and `PATCH` (see [Connectivity services](#connectivity-services)); the pre-2.6 `modulation-format` is `unknown-element` instead of `invalid-value` |
 | A v2.6.0 member the twin does not act on and earlier releases ignored (the `tapi-oam` service augments, `modulation/proprietary-modulation-technique`) or refused with `400` (`mc-bandwidth-config-pac`, `mc-flexi-grid-config-pac`; a path-comp-service's `capacity`, `role`, `path-set-constraint`) | `501`, `operation-not-supported`, naming it |
@@ -100,11 +105,32 @@ GET /.well-known/host-meta
 </XRD>
 ```
 
-T-API is then at `{href}/data/…`. host-meta needs a token when authentication
-is on, like every path except `/health`. A twin with an empty root serves no
-host-meta (`404`); a twin from before the RESTCONF root did not either, and
-both serve T-API at `/data/…`, so a `404` means the root is empty. Any other
-error, a `401` included, is an error, not a missing root.
+T-API is then at `{href}/data/…`, the API resource at `{href}` and its other
+children at `{href}/operations` and `{href}/yang-library-version` (RFC 8040
+§3.3). host-meta needs a token when authentication is on, like every path
+except `/health`.
+
+A twin with an empty root (`server.restconf_root: ""`) names it with the
+absolute URI the request reached, whose path is empty:
+
+```
+GET /.well-known/host-meta
+Host: localhost:8080
+
+<XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>
+    <Link rel='restconf' href='http://localhost:8080'/>
+</XRD>
+```
+
+Resolved against host-meta's URL (RFC 3986 §5.2) that is itself, so T-API
+is at `http://localhost:8080/data/…` and the API resource at `/`. A client
+that keeps only the path of an absolute `href`, as the bundled ones do, gets
+the empty root. Neither of the two shorter spellings works: XRD 1.0 §1.5.2
+forbids an empty `href`, and `href='/'` would make `{+restconf}/data` the
+network-path reference `//data` (RFC 3986 §4.2). A twin from before the
+RESTCONF root serves no host-meta (`404`) and T-API at `/data/…`, so a `404`
+means the root is empty too. Any other error, a `401` included, is an error,
+not a missing root.
 
 The bundled clients follow this rule and discover the root once per twin,
 before their first T-API request: the web UI (once per base URL), the
@@ -866,7 +892,9 @@ Errors under `/restconf/data/` use the RESTCONF format of
 
 Each status is paired with the tag RFC 8040 §7 gives the condition (the tags
 themselves are NETCONF's, RFC 6241 Appendix A). RFC 8040 does not use `422`,
-so no T-API resource answers it:
+so no endpoint of the twin answers it. The proprietary endpoints (`/internal`,
+`/admin`, `/config`, `/transparent`) follow the same table as the T-API
+resources, so a client handles every error of the twin one way:
 
 | HTTP status | `error-tag` | Used for |
 |-------------|-------------|----------|
@@ -884,9 +912,13 @@ so no T-API resource answers it:
 | 501 | `operation-not-supported` | A standard member the twin does not implement, or a value of one it supports at a single value (see [Connectivity services](#connectivity-services)) |
 
 The first problem a body has decides the tag; the message lists every one.
-The proprietary endpoints (`/internal`, `/admin`, `/config`, `/transparent`)
-use the same error body but keep FastAPI's `422` (`invalid-value`) for a
-request that does not validate, and `data-missing` on a `404`.
+A query parameter a proprietary endpoint requires and did not get is a `400`
+`missing-element`; one outside its range a `400` `invalid-value`. Statuses
+that mean something else keep it there too: `401`, `409` for a conflict,
+`501` for an operation the backend does not support, `503` when no
+physical-layer backend is loaded, and the transparent controller's `403`
+(a read-only leaf) and `412` (a stale `If-Match`, see
+[TRANSPARENT_CONTROLLER.md](TRANSPARENT_CONTROLLER.md)).
 
 A 405 also carries an `Allow` header (RFC 9110 §15.5.6) naming every method
 the resource serves at that path, on every path of the twin: T-API resources
@@ -972,12 +1004,96 @@ included — is `application/yang-data+json` when it has a body and carries
 | A body whose `Content-Type` is not `application/yang-data+json` or `application/json`, or that has none (XML, `text/plain`, a form, `application/yang-patch+json`) | `415`, `invalid-value` (§5.2) |
 | A query parameter other than `content`, or one given twice (`depth`, `fields`, `filter`, `with-defaults`, `insert`, `point`, …) | `400`, `invalid-value` (§4.8: "A server MUST return an error with a '400 Bad Request' status-line if a query parameter is unexpected") |
 | `content=all` on `GET`/`HEAD` | The full resource, as without it |
-| `content=config` or `content=nonconfig` | `501`, `operation-not-supported`: the twin cannot split configuration from state yet |
-| `content` on any other method | `400` (§4.8.1) |
+| `content=config` or `content=nonconfig` on `GET`/`HEAD` | The configuration or the state of the resource (see [The content parameter](#the-content-parameter)) |
+| `content` on any other method, or on the API resource, `yang-library-version` or `operations` | `400` (§4.8.1: "only allowed for GET methods on datastore and data resources") |
 
 `application/json` is accepted as a request body beside the RESTCONF media
 type, since it names the same JSON and is what generic HTTP clients send.
 The proprietary endpoints do none of these checks.
+
+### The content parameter
+
+`content` selects which data nodes of the target a `GET` or `HEAD` returns
+(RFC 8040 §4.8.1, which a server "MUST" support). What is configuration is
+what the T-API v2.6.0 YANG marks `config true` (`rw` in its trees): a
+connectivity-service as the client asked for it, its end-points and
+constraints, the spectrum admission assigned it, a path-comp-service, an OAM
+job, the names and administrative states of topologies and links. Everything
+the twin derives is `config false`: operational and lifecycle states, the SIPs
+and their spectrum, nodes, paths, the physical inventory, the streams, the
+YANG library.
+
+| `content=` | Body |
+|------------|------|
+| `all` (the default) | The whole resource |
+| `config` | The target with its configuration descendants only. A target that is itself `config false` (a SIP, the stream-context's lists, the YANG library) has no configuration, so the answer is `404` `invalid-value` |
+| `nonconfig` | The target with its non-configuration descendants, the configuration containers and list entries that hold them, and each entry's keys (RFC 8040 Appendix B.3.1). An entry or container with no state below it is left out; the target itself never is, so an empty answer is the target with only its keys, e.g. `{"tapi-connectivity:connectivity-context": {}}` |
+
+```
+$ curl -s 'http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=<uuid>?content=nonconfig'
+{"tapi-connectivity:connectivity-service": [{"uuid": "<uuid>", "operational-state": "ENABLED", "lifecycle-state": "PLANNED"}]}
+```
+
+The two filtered views of a resource, merged, are its `content=all` body.
+The table behind them (`src/twinlight/api/yang_config.py`) is derived from
+the YANG, and a test fails if the twin serves a member it does not classify.
+
+### Entity-tags and conditional requests
+
+Every `GET` and `HEAD` of the datastore (`{root}/data`) and of a data
+resource below it that answers `2xx` carries an `ETag` and a `Last-Modified`
+(RFC 8040 §3.4.1, §3.5.1, §3.5.2). The tags are the datastore's, shared by
+every resource (§3.5.2: without a tag of its own, "the resource entity-tag
+for the datastore MUST be used instead"), strong, opaque, and unique per
+process: a tag from before a restart never matches one after it. Which tag a
+response carries depends on what its body shows:
+
+| Representation | Tag and `Last-Modified` | Changed by |
+|----------------|-------------------------|-----------|
+| `content=config` | The configuration's: RFC 8040's datastore entity-tag, "only affected by configuration data resources" (§3.4.1.2) | Creating, replacing, patching (`name`, `administrative-state`) or deleting a connectivity-service; creating or deleting a path-comp-service; a restore |
+| The default (`content=all`) and `content=nonconfig` | The full state's, a different tag | All of the above, and every change of what the twin derives: a `PATCH` of `lifecycle-state`, a link failure, an element parameter, a twin setting (through `/config`, `/config/parameters` or `/transparent`), a redesign, and the measurement stream turning `ACTIVE` |
+
+The default view carries operational states, spectrum occupancy and stream
+state that follow those changes, so it cannot carry the configuration's tag:
+a client would keep a stale `operational-state` through a `304`. A
+validator here never confirms a body that differs.
+
+| Header | On `GET`/`HEAD` | On `POST`, `PUT`, `PATCH`, `DELETE` |
+|--------|-----------------|-------------------------------------|
+| `If-None-Match` | Matches the current tag (weak comparison, or `*`): `304` with the `ETag` and no body | Matches either current tag, or `*` on an existing target: `412` |
+| `If-Modified-Since` | Not modified since: `304`. Ignored with `If-None-Match` | Ignored (RFC 9110 §13.1.3) |
+| `If-Match` | Does not match the current tag (strong comparison): `412` | Passes when it names the current configuration tag or the current full tag, or is `*` on an existing target; `412` otherwise, and on a `PUT` that would create |
+| `If-Unmodified-Since` | Modified since: `412` | Compared with the configuration's time: `412` when modified since |
+
+They are evaluated in RFC 9110 §13.2.2's order, after authentication (a `401`
+comes first), after the `400`/`406`/`415` checks, and only where the request
+without them would succeed: a `405`, and a `404` for a target that does not
+exist (unless a `PUT` would create it), win over a precondition. A `412` has
+`error-tag: operation-failed` (RFC 8040 §7) and the current configuration
+`ETag`, and changes nothing; it is decided before the body is read, so a
+stale tag on a malformed body is a `412`, not a `400`. A write's response
+carries no validator (RFC 9110 §9.3.4: admission transforms what was sent);
+read the resource again for the new tag.
+
+To guard a read-modify-write, read the tag of the configuration and send it
+back, so that a link failure in between does not refuse the write:
+
+```
+$ curl -sI 'http://localhost:8080/restconf/data?content=config' | grep -i etag
+etag: "5f1c0e9a2b7d-c3"
+$ curl -i -X DELETE -H 'If-Match: "5f1c0e9a2b7d-c3"' \
+    'http://localhost:8080/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=<uuid>'
+HTTP/1.1 412 Precondition Failed      (if another client changed the configuration first)
+```
+
+A conditional write holds the twin's write gate from the check until its
+response is sent: no write through any interface (T-API, `/config`,
+`/transparent`, `/admin`) lands in between, so of two clients writing with
+the same tag exactly one succeeds. Writes without a precondition still run
+concurrently, as before. `Last-Modified` has whole-second resolution: when a
+second saw two states (or is the second the twin started in), a date equal to
+it is treated as modified, never as a `304`. The transparent controller keeps
+its own tags (below), which a service change does not move.
 
 ## Non-standard endpoints
 

@@ -60,6 +60,7 @@ from twinlight.models.topology import (
 from twinlight.physics.backend import LitChannel, PropagationError
 from twinlight.physics.backend import element_kind_name as _kind_name
 from twinlight.physics.modulation import ModulationFormat
+from twinlight.state.revision import DatastoreRevision, WriteGate
 from twinlight.state.spectrum_state import SpectrumState
 from twinlight.state.topology_state import TopologyGraph
 
@@ -301,6 +302,9 @@ class TapiContext:
         # -- Per-service caches and serialization lock ---------------------
         self._route_cache: dict[tuple[str, str], list[str]] = {}
         self._baseline_cache: dict[str, OpmBaseline] = {}
+        # The T-API equipment tree and the revision it was built at (see
+        # physical_context); None until the first equipment request.
+        self._physical_context_cache: tuple[int, PhysicalContext] | None = None
         self._propagation_lock: asyncio.Lock = asyncio.Lock()
         # Serialises changes to the set of admitted services. Admission yields
         # while it propagates; without this, two admissions could pick the
@@ -390,6 +394,16 @@ class TapiContext:
         # the first write to that attribute: the value the element had at
         # startup, exactly as the engine stored it (an unset value included).
         self._element_startup: dict[tuple[str, str], tuple[Any, Any]] = {}
+
+        # -- T-API datastore validators and the write gate -------------------
+        # The entity-tags and Last-Modified of every T-API resource (RFC 8040
+        # §3.4.1, state/revision.py). Moved by the mutators below, never by a
+        # route handler: ``config`` when a config-true T-API node changes,
+        # ``full`` on any change a T-API body can show. The gate keeps a
+        # conditional write and its precondition check together
+        # (api/conditional.py).
+        self.datastore_revision = DatastoreRevision()
+        self.write_gate = WriteGate()
 
         # -- T-API path computation (path-comp-service and path lists) -------
         # Results of what-if path computations. They commit no resources and
@@ -552,6 +566,8 @@ class TapiContext:
         self._oam_jobs.pop(oam_job_uuid(uuid), None)
         for uid in detached.indexed_uids:
             self._element_to_services[uid].discard(uuid)
+        # Visible to readers while the replacement is admitted.
+        self._tapi_changed(config=True)
         return detached
 
     def _reattach_service(self, detached: _DetachedService) -> None:
@@ -575,6 +591,7 @@ class TapiContext:
         self._services[uuid] = detached.service
         if detached.oam_job is not None:
             self._oam_jobs[detached.oam_job.uuid] = detached.oam_job
+        self._tapi_changed(config=True)
         # Its neighbours lost and regained it: their baselines were dropped
         # on detach and are recomputed on the next read.
         for other in self._sharing_services(uuid):
@@ -623,6 +640,7 @@ class TapiContext:
         svc.assign_channel(fmt, (lower + upper) // 2, power_dbm)
         self._services[svc.uuid] = svc
         self._add_oam_job(svc)
+        self._tapi_changed(config=True)
         if baseline is not None:
             # The admission propagation is the service's baseline: same path,
             # channel and launch power. Seeding the cache saves a propagation.
@@ -1198,6 +1216,35 @@ class TapiContext:
             ),
         }
 
+    def update_service(
+        self,
+        uuid: str,
+        *,
+        name: Any = None,
+        administrative_state: Any = None,
+        lifecycle_state: Any = None,
+    ) -> ConnectivityService:
+        """Merge the leaves a plain patch may change into a service.
+
+        ``None`` leaves a leaf as it is. ``name`` and ``administrative-state``
+        are config true in tapi-connectivity, ``lifecycle-state`` config
+        false, so only the first two move the configuration validator.
+
+        Raises:
+            KeyError: No service with that UUID.
+        """
+        svc = self._services[uuid]
+        config = state = False
+        if name is not None and name != svc.name:
+            svc.name, config = name, True
+        if administrative_state is not None and administrative_state != svc.administrative_state:
+            svc.administrative_state, config = administrative_state, True
+        if lifecycle_state is not None and lifecycle_state != svc.lifecycle_state:
+            svc.lifecycle_state, state = lifecycle_state, True
+        if config or state:
+            self._tapi_changed(config=config)
+        return svc
+
     def delete_service(self, uuid: str) -> bool:
         """Remove service and release its spectrum allocation.
 
@@ -1226,7 +1273,10 @@ class TapiContext:
         # Strip this service from the /config reverse index.
         for svc_set in self._element_to_services.values():
             svc_set.discard(uuid)
-        return self._services.pop(uuid, None) is not None
+        removed = self._services.pop(uuid, None) is not None
+        if removed:
+            self._tapi_changed(config=True)
+        return removed
 
     @property
     def topo_graph(self) -> TopologyGraph:
@@ -1553,6 +1603,7 @@ class TapiContext:
             refs.append({"path-uuid": path["uuid"]})
         service.path = refs
         self._path_comp_services[service.uuid] = service
+        self._tapi_changed(config=True)
         return service
 
     def _tapi_path(self, route: list[str], rank: int) -> dict[str, Any]:
@@ -1597,6 +1648,7 @@ class TapiContext:
             return False
         for ref in service.path:
             self._paths.pop(ref["path-uuid"], None)
+        self._tapi_changed(config=True)
         return True
 
     def get_paths(self) -> list[dict[str, Any]]:
@@ -2126,6 +2178,20 @@ class TapiContext:
     def _bump_revision(self) -> None:
         self._revision += 1
         self._last_modified = datetime.now(UTC)
+        # Element parameters, failed links and twin settings are no T-API
+        # configuration, but the operational states, spectrum and stream
+        # entries T-API bodies show follow them.
+        self._tapi_changed(config=False)
+
+    def _tapi_changed(self, *, config: bool) -> None:
+        """Move the T-API validators: ``config`` when a config-true node of
+        the T-API YANG changed, else only the full representation's."""
+        self.datastore_revision.changed(config=config)
+
+    def note_state_change(self) -> None:
+        """Record a change of T-API state made outside a mutator here (the
+        measurement stream turning ACTIVE)."""
+        self._tapi_changed(config=False)
 
     def _remember_startup(self, uid: str, attr: str) -> None:
         """Record (uid, attr)'s value before the twin first changes it."""
@@ -2834,12 +2900,38 @@ class TapiContext:
         Elements come from the backend when it holds a network — GNPy's
         designed network includes the boosters and preamplifiers the design
         inserted — and from the parsed topology otherwise.
+
+        Memoised: building it is most of what an equipment request costs
+        (14 ms of 16 on CORONET, 2088 elements), and several of those
+        requests pick one device or span out of it. The tree is a function
+        of each element's UID, kind and ``type_variety`` and nothing else.
+        The one runtime write that can change any of them is a redesign
+        (``apply_element_overrides(redesign=True)``): the backend re-runs
+        GNPy's design and rebuilds its ``uid_map``. The memo is nonetheless
+        tied to the running revision, which every configuration change
+        through any interface bumps (element parameters, redesign, link
+        failures, twin config, restore), so that a write that comes to
+        reach the tree later is covered without anyone having to remember
+        this cache: the price is one rebuild after a parameter write.
+        ``tests/test_api/test_equipment_cache.py`` drives every
+        write the API offers and compares the memo with a fresh build.
+
+        The object returned is shared by every caller and immutable (frozen
+        models, tuples); ``model_dump`` gives a caller its own copy.
         """
-        from twinlight.models.common import NameAndValue
+        cached = self._physical_context_cache
+        if cached is None or cached[0] != self._revision:
+            cached = (self._revision, self._build_physical_context())
+            self._physical_context_cache = cached
+        return cached[1]
+
+    def _build_physical_context(self) -> PhysicalContext:
+        """Build the equipment tree from the elements as they are now."""
         from twinlight.models.equipment import (
             ActualEquipment,
             CommonEquipmentProperties,
             Device,
+            ElementName,
             Equipment,
             PhysicalSpan,
             element_uuid,
@@ -2856,13 +2948,12 @@ class TapiContext:
                 for el in self._topo_graph._gnpy_topo.elements
             ]
 
-        context = PhysicalContext()
+        devices: list[Device] = []
+        spans: list[PhysicalSpan] = []
         for uid, kind, variety in elements:
-            name = [NameAndValue(value_name="element-uid", value=uid)]
+            name = (ElementName(value_name="element-uid", value=uid),)
             if kind == "Fiber":
-                context.physical_span.append(
-                    PhysicalSpan(uuid=element_uuid(uid, "span"), name=name)
-                )
+                spans.append(PhysicalSpan(uuid=element_uuid(uid, "span"), name=name))
                 continue
             equipment = Equipment(
                 uuid=element_uuid(uid, "equipment"),
@@ -2874,10 +2965,10 @@ class TapiContext:
                     ),
                 ),
             )
-            context.device.append(
-                Device(uuid=element_uuid(uid, "device"), name=name, equipment=[equipment])
+            devices.append(
+                Device(uuid=element_uuid(uid, "device"), name=name, equipment=(equipment,))
             )
-        return context
+        return PhysicalContext(device=tuple(devices), physical_span=tuple(spans))
 
     # -- Snapshot / restore (checkpoints) ------------------------------------
 
@@ -3037,6 +3128,8 @@ class TapiContext:
         if twin_overrides:
             self.apply_twin_overrides(twin_overrides)
         self._bump_revision()
+        # The services and their OAM jobs were replaced.
+        self._tapi_changed(config=True)
 
         warnings: list[str] = []
         thz = 1e-12

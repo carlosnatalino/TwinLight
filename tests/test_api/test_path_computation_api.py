@@ -217,7 +217,7 @@ class TestInternalComputePath:
 
         bad = {"end-point": eps, "routing-constraint": {"max-allowed-delay": {"value": 5}}}
         resp = mesh_app.post("/internal/compute-path", json=bad)
-        assert resp.status_code == 422 and "max-allowed-delay" in resp.text
+        assert resp.status_code == 400 and "max-allowed-delay" in resp.text
         unknown = {"end-point": [eps[0], {"service-interface-point": {
             "service-interface-point-uuid": "nope"}}]}
-        assert mesh_app.post("/internal/compute-path", json=unknown).status_code == 422
+        assert mesh_app.post("/internal/compute-path", json=unknown).status_code == 409

@@ -598,9 +598,10 @@ def _parse_host_meta(xrd: str) -> str:
 async def _twin_data(request: Request) -> str:
     """The twin's data resource, ``{root}/data``, discovered once.
 
-    A twin without host-meta (404) runs with an empty root, or predates it,
-    and serves T-API at /data. Any other failure is the twin being
-    unavailable, and is not cached, so the next call retries.
+    A twin with an empty root advertises ``http://host:port``, whose path is
+    empty, so T-API is at /data; an older twin without host-meta (404)
+    serves it there too. Any other failure is the twin being unavailable,
+    and is not cached, so the next call retries.
     """
     global _data_root
     if _data_root is None:

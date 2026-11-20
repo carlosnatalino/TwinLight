@@ -5,7 +5,7 @@
 - §5.2: an unsupported ``Accept`` is a 406, an unsupported request body
   media type a 415.
 - §4.8: an unexpected or repeated query parameter is a 400; §4.8.1's
-  mandatory ``content`` is accepted (``all``), refused on writes.
+  mandatory ``content`` is accepted, refused on writes.
 - §3.3.1, §3.4: the datastore resource ``{root}/data``; §10 the YANG
   library; §9 ``ietf-restconf-monitoring``; §3.3.2 ``operations``.
 
@@ -43,7 +43,9 @@ def _restconf_urls(root: str) -> list[str]:
         f"{data}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=x",
         f"{data}/ietf-yang-library:yang-library",
     ]
-    return urls + ([root, f"{root}/yang-library-version", f"{root}/operations"] if root else [])
+    # The API resource and its other children, under an empty root too: "/"
+    # is the API resource then (RFC 8040 §3.3, RFC 9110 §4.2.3).
+    return urls + [root or "/", f"{root}/yang-library-version", f"{root}/operations"]
 
 
 class TestHeaderFields:
@@ -143,11 +145,16 @@ class TestQueryParameters:
         url = "/restconf/data/tapi-common:context/service-interface-point"
         assert app.get(f"{url}?content=all").json() == app.get(url).json()
 
+    @pytest.mark.parametrize("root", ROOTS)
     @pytest.mark.parametrize("value", ["config", "nonconfig"])
-    def test_a_content_filter_is_not_implemented(self, app: TestClient, value: str) -> None:
-        resp = app.get(f"/restconf/data/tapi-common:context?content={value}")
-        assert resp.status_code == 501
-        assert _tag(resp) == "operation-not-supported"
+    def test_a_content_filter_is_served(
+        self, twin_config: TwinConfig, root: str, value: str,
+    ) -> None:
+        # The filter itself: tests/test_api/test_content_parameter.py.
+        client = _client(twin_config, root)
+        resp = client.get(f"{root}/data/tapi-common:context?content={value}")
+        assert resp.status_code == 200
+        assert list(resp.json()) == ["tapi-common:context"]
 
     def test_content_is_only_for_retrieval(self, app: TestClient) -> None:
         cs = "/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context"

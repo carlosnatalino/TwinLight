@@ -29,12 +29,30 @@ def is_restconf_path(path: str, root: str) -> bool:
     """Whether ``path`` is a RESTCONF resource of a twin rooted at ``root``.
 
     With a root, everything at or below it: the API resource, its
-    ``yang-library-version`` leaf and the datastore. With an empty root the
-    datastore is ``/data`` (RFC 8040 §3.3.1), so that subtree is RESTCONF.
-    The proprietary endpoints (``/internal``, ``/admin``, ``/config``,
-    ``/transparent``, ``/metrics``, ``/health``) are never under it.
+    ``yang-library-version`` leaf, ``operations`` and the datastore. With an
+    empty root the same resources (RFC 8040 §3.3): the API resource is
+    ``/``, and its children ``/data``, ``/operations`` and
+    ``/yang-library-version``. The proprietary endpoints (``/internal``,
+    ``/admin``, ``/config``, ``/transparent``, ``/metrics``, ``/health``)
+    are never under it.
     """
-    base = root if root else "/data"
+    if root:
+        return path == root or path.startswith(root + "/")
+    return path == "/" or any(
+        path == base or path.startswith(base + "/") for base in _EMPTY_ROOT_CHILDREN
+    )
+
+
+#: The API resource's children under an empty root (RFC 8040 §3.3).
+_EMPTY_ROOT_CHILDREN = ("/data", "/operations", "/yang-library-version")
+
+
+def is_data_path(path: str, root: str) -> bool:
+    """Whether ``path`` is the datastore resource ``{root}/data`` or a data
+    resource below it (RFC 8040 §3.3.1, §3.5): the resources that carry
+    entity-tags and take the ``content`` query parameter, as opposed to the
+    API resource, ``yang-library-version`` and ``operations``."""
+    base = f"{root}/data"
     return path == base or path.startswith(base + "/")
 
 

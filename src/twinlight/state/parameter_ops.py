@@ -89,7 +89,7 @@ class ParameterChange(BaseModel):
     def _no_bools(cls, v: Any) -> Any:
         # bool is an int subclass; ``true`` must not silently become 1.0.
         # ValueError, not TypeError: pydantic turns only ValueError into a
-        # validation error (and so a 422) rather than a 500.
+        # validation error (and so a 400) rather than a 500.
         if isinstance(v, bool):
             raise ValueError("expected a number, got bool")  # noqa: TRY004
         return v

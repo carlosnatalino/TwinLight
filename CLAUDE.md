@@ -162,8 +162,10 @@ Details that are easy to get wrong and cost a debugging cycle:
 
 ## Caches and invalidation
 
-`TapiContext` holds `_gnpy_uid_map` (built once), `_route_cache`
-(`(src, dst) → uid list`) and `_baseline_cache` (`service_uuid → OpmBaseline`).
+`TapiContext` holds `_gnpy_uid_map` (rebuilt only by a redesign), `_route_cache`
+(`(src, dst) → uid list`), `_baseline_cache` (`service_uuid → OpmBaseline`)
+and `_physical_context_cache` (the T-API equipment tree, keyed by the running
+revision, so any write that bumps the revision rebuilds it on the next read).
 `_propagation_lock` serialises propagation. A change that affects physics must
 invalidate the right cache — `invalidate_baseline(uuid)` on service deletion,
 and the broader sweep on `/config/` parameter changes and link failure.
@@ -174,6 +176,14 @@ must write through `apply_element_overrides` so it inherits that invalidation.
 The same method bumps the running revision (the transparent controller's ETag)
 and captures the startup value its reverts restore; twin-config changes go
 through `apply_twin_overrides` for the same reasons.
+
+The T-API datastore's entity-tags (`state/revision.py`, served by
+`api/conditional.py`) follow the same discipline: every `TapiContext` method
+that changes something a T-API body shows calls `_tapi_changed` —
+`config=True` when a `config true` node of the YANG changed (services,
+path-comp-services, restores) — and `_bump_revision` does it for element,
+failure and twin-config changes. A mutation that skips it, or a route that
+mutates a model directly, makes a `304` confirm a body that has changed.
 
 Under a backend with `uses_line_load` (EGN), a baseline also depends on the
 lightpaths sharing its fibers: `add_service` re-evaluates them and

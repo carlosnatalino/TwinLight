@@ -215,7 +215,8 @@ async def get_capabilities() -> dict:
     return {"ietf-restconf-monitoring:capabilities": restconf_state()["capabilities"]}
 
 
-#: Served only under a non-empty root, beside the API resource it belongs to.
+#: Served beside the API resource it belongs to: ``{+restconf}/operations``,
+#: ``/operations`` under an empty root.
 operations_router = APIRouter(tags=["restconf"])
 
 

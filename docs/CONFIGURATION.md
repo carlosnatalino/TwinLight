@@ -2,7 +2,10 @@
 
 TwinLight is configured with a YAML file, optionally overridden by CLI flags.
 
-**Precedence:** CLI arguments > YAML file > model defaults.
+**Precedence:** CLI arguments > YAML file > model defaults. The two settings
+read from the environment (or `./.env`) instead, `TWINLIGHT_API_TOKENS` and
+`TWINLIGHT_CORS_ORIGINS`, replace what the YAML says: environment > dotenv
+file > YAML file > model defaults.
 
 **Path resolution:** every relative path inside a YAML file resolves against
 *that file's own directory*, not the working directory. A scenario directory can
@@ -71,9 +74,30 @@ server:
     - "http://localhost:5173"
 ```
 
-`cors_origins` must contain the origin the web UI is served from. In the Compose
-stack the UI is published on `http://localhost:5173`, which the shipped examples
-already allow.
+`cors_origins` must contain the origin the web UI is served from, written as
+the browser sends it in `Origin` (RFC 6454 §6.2): `scheme://host[:port]`,
+lowercase, no path or trailing slash, the port left out when it is the
+scheme's default. An entry in any other form would never match, so the twin
+refuses to start with it and says why; `*` allows every origin.
+
+`TWINLIGHT_CORS_ORIGINS` replaces the list without editing the file: a
+comma-separated list, each entry trimmed, empty entries skipped, validated
+the same way. It is read like the API tokens, from the environment and then
+from `./.env` (or `--env-file`), and an empty value counts as unset. It
+replaces rather than extends the file's list, as every override does (a CLI
+flag replaces its YAML value too): the allowed origins are then exactly the
+ones written in one place, and one can be taken away without touching the
+scenario file. There is no command-line flag for it.
+
+```bash
+TWINLIGHT_CORS_ORIGINS="http://localhost:5174, http://ui.example:8443" \
+    twinlight --config examples/twin_config.yaml
+```
+
+The Compose stack sets it to the web UI's origin,
+`http://localhost:${TWINLIGHT_UI_PORT:-5173}`, so publishing the UI on
+another port (`TWINLIGHT_UI_PORT`) keeps it allowed; set
+`TWINLIGHT_CORS_ORIGINS` in `.env` to allow other origins instead.
 
 `restconf_root` is the RFC 8040 §3.1 root resource the T-API modules are served
 under — at `{restconf_root}/data/…` and nowhere else — and the value advertised
@@ -81,10 +105,11 @@ by `GET /.well-known/host-meta`. It must be absolute; a trailing slash is
 trimmed. Changing it moves T-API: the bundled clients (web UI, client library,
 CLIs, examples, ONOS adapter) read it from host-meta, but a client that
 hard-codes `/restconf` will not find the new location. Set it to `""` to put the
-data resource at `/data/…`; the twin then serves no root resource and no
-`host-meta`, and the bundled clients read that `404` as "T-API is at `/data/…`"
-(see [API.md](API.md#finding-the-restconf-root)). RFC 8040 §3.1 requires
-host-meta, so that mode does not conform; see
+data resource at `/data/…` and the API resource at `/`; host-meta then names
+the root as the absolute URI the request reached (`http://host:port`, an
+empty path), which the bundled clients read as the empty root (see
+[API.md](API.md#finding-the-restconf-root)). That mode is as discoverable as
+any other root (RFC 8040 §3.1, §3.3); see
 [TAPI_COMPLIANCE.md § 2.7](TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix).
 
 ## Authentication — API tokens
@@ -394,7 +419,7 @@ corresponding YAML field.
 | `--physics-backend {gnpy,egn}` | `physics.backend` |
 | `--num-slots`, `--slot-width-ghz`, `--center-frequency-thz` | `spectrum.*` |
 | `-v` / `-vv`, `--log-level`, `--log-format` | `logging.*` |
-| `--env-file FILE` | — (dotenv file to read `TWINLIGHT_API_TOKENS` from, instead of `./.env`; see [Authentication](#authentication--api-tokens)) |
+| `--env-file FILE` | — (dotenv file to read `TWINLIGHT_API_TOKENS` and `TWINLIGHT_CORS_ORIGINS` from, instead of `./.env`; see [Authentication](#authentication--api-tokens) and [`server`](#server--listening-sockets)) |
 | `--restore` | restore the shutdown checkpoint |
 | `--restore SNAPSHOT.json` | restore this snapshot file |
 | `--reset` | ignore the checkpoint and start from scratch |

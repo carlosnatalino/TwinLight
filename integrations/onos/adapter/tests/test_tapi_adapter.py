@@ -117,8 +117,9 @@ class TwinStub:
         self.services: list[dict] = []
         # Mutable so a test can change what spectrum the twin reports.
         self.sips: list[dict] = list(SIPS)
-        # The twin's RESTCONF root as host-meta advertises it; None: no
-        # host-meta (an empty root, or a twin that predates it).
+        # The twin's RESTCONF root; None: no host-meta (a twin that predates
+        # it). An empty root is advertised as the twin's own absolute URL,
+        # whose path is empty, as the twin does.
         self.restconf_root: str | None = "/restconf"
         self.paths: list[str] = []
         # Tokens the twin accepts, as TWINLIGHT_API_TOKENS would set them;
@@ -144,12 +145,13 @@ class TwinStub:
         if path == "/.well-known/host-meta":
             if self.restconf_root is None:
                 return httpx.Response(404)
+            href = self.restconf_root or f"{request.url.scheme}://{request.url.netloc.decode()}"
             return httpx.Response(200, text=(
                 "<?xml version='1.0' encoding='UTF-8'?>\n"
                 "<XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>\n"
-                f"    <Link rel='restconf' href='{self.restconf_root}'/>\n</XRD>\n"
+                f"    <Link rel='restconf' href='{href}'/>\n</XRD>\n"
             ))
-        data = "/data" if self.restconf_root is None else f"{self.restconf_root}/data"
+        data = f"{self.restconf_root or ''}/data"
         if not path.startswith(f"{data}/tapi-common:context/"):
             return httpx.Response(404)  # the twin serves T-API only there
         if path.endswith("/service-interface-point"):
@@ -845,6 +847,18 @@ def test_a_twin_without_host_meta_is_served_at_data(twin):
     twin.restconf_root = None
     with _client_for(twin) as c:
         assert c.get("/restconf/data/tapi-common:context").status_code == 200
+    assert all(p.startswith("/data/tapi-common:context/") for p in _twin_paths(twin))
+
+
+@pytest.mark.parametrize("token", [None, "adapter-token"])
+def test_an_empty_root_is_discovered_from_host_meta(twin, token):
+    twin.restconf_root = ""
+    if token:
+        twin.tokens = {token}
+    with _client_for(twin, token=token) as c:
+        assert c.get("/restconf/data/tapi-common:context").status_code == 200
+    assert twin.paths.count("/.well-known/host-meta") == 1
+    assert _twin_paths(twin)
     assert all(p.startswith("/data/tapi-common:context/") for p in _twin_paths(twin))
 
 

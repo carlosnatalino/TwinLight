@@ -21,6 +21,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, status
 
+from twinlight.api.restconf import RestconfError
 from twinlight.physics.element_params import ParamValidationError
 from twinlight.state.parameter_ops import (
     ParameterChange,
@@ -49,8 +50,9 @@ def _context(request: Request) -> Any:
     return ctx
 
 
-def _bad_request(exc: Exception) -> HTTPException:
-    return HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+def _bad_request(exc: Exception) -> RestconfError:
+    """A path or value the twin does not accept (RFC 8040 §7 ``invalid-value``)."""
+    return RestconfError(status.HTTP_400_BAD_REQUEST, "invalid-value", str(exc))
 
 
 @router.get("/parameters")

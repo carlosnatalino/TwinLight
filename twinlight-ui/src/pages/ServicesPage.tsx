@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
-import CytoscapeComponent from "react-cytoscapejs";
-import cytoscape, { type Core } from "cytoscape";
-import dagre from "cytoscape-dagre";
+import type { Core } from "cytoscape";
 import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
 import { useServicesStore } from "@/store/services";
@@ -12,6 +10,7 @@ import type { ConnectivityService, ServiceInfoResponse } from "@/api/types";
 import { extractName, getNodeDisplayName } from "@/lib/tapi-helpers";
 import { createClient } from "@/api/client";
 import { cn } from "@/lib/cn";
+import CytoscapeGraph, { type CytoscapeStylesheet } from "@/components/graph/CytoscapeGraph";
 import { LAYOUT_CONFIGS, LAYOUT_LABELS, type LayoutName } from "@/lib/cytoscape-layout";
 import {
   Loader2,
@@ -26,15 +25,9 @@ import {
   Activity,
 } from "lucide-react";
 
-try {
-  cytoscape.use(dagre);
-} catch {
-  // already registered
-}
-
 // Stylesheet for the service logical topology.
 // Nodes reuse physical topology styles; edges are colored by lifecycle-state class.
-const SERVICE_STYLESHEET: Array<cytoscape.StylesheetStyle | cytoscape.StylesheetCSS> = [
+const SERVICE_STYLESHEET: CytoscapeStylesheet = [
   {
     selector: "node",
     style: {
@@ -532,13 +525,6 @@ export default function ServicesPage() {
     }
   }, [selectedUuid]);
 
-  // Re-run layout when layout name changes or when elements first become available
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy || elements.length === 0) return;
-    cy.layout(LAYOUT_CONFIGS[layoutName] || LAYOUT_CONFIGS.cose).run();
-  }, [layoutName, elements]);
-
   // Toggle labels
   useEffect(() => {
     const cy = cyRef.current;
@@ -551,8 +537,9 @@ export default function ServicesPage() {
   }, [showLabels]);
 
   const handleCy = useCallback(
-    (cy: Core) => {
+    (cy: Core | null) => {
       cyRef.current = cy;
+      if (!cy) return;
 
       cy.on("tap", "edge", (evt) => {
         const edge = evt.target;
@@ -761,12 +748,14 @@ export default function ServicesPage() {
           )}
 
           {elements.length > 0 && (
-            <CytoscapeComponent
+            // The layout re-runs whenever the services change.
+            <CytoscapeGraph
               elements={elements}
               stylesheet={SERVICE_STYLESHEET}
               layout={LAYOUT_CONFIGS[layoutName] || LAYOUT_CONFIGS.cose}
+              layoutKey={elements}
               style={{ width: "100%", height: "100%" }}
-              cy={handleCy}
+              onCy={handleCy}
             />
           )}
         </div>

@@ -3,8 +3,8 @@
 RFC 8040 §3.1: the root is read from ``/.well-known/host-meta``. The twin's
 root is configurable (``server.restconf_root``), so a client that hard-coded
 ``/restconf`` would break on any other; these tests run the client library
-against twins with the default root, a custom one, an empty one (no
-host-meta), and authentication on.
+against twins with the default root, a custom one, an empty one, an older
+twin that serves no host-meta, and authentication on.
 """
 
 from __future__ import annotations
@@ -45,6 +45,11 @@ class TestParseHostMeta:
 
     def test_reduces_an_absolute_href_to_its_path(self) -> None:
         assert parse_host_meta(_xrd("http://twin:8080/top/restconf")) == "/top/restconf"
+
+    def test_an_absolute_href_with_an_empty_path_is_the_empty_root(self) -> None:
+        """What a twin with ``restconf_root: ""`` advertises (RFC 3986 §3.3)."""
+        assert parse_host_meta(_xrd("http://twin:8080")) == ""
+        assert parse_host_meta(_xrd("https://twin.example")) == ""
 
     def test_no_restconf_link_is_the_server_root(self) -> None:
         xrd = _xrd("/x").replace("rel='restconf'", "rel='lrdd'")
@@ -100,10 +105,18 @@ class TestTapiClient:
         await rest.get_connectivity_services()
         assert seen.count(HOST_META) == 1
 
-    async def test_empty_root_falls_back_to_data(self, twin_config: TwinConfig) -> None:
-        # An empty root serves no host-meta: the 404 means T-API is at /data.
+    async def test_empty_root_is_discovered(self, twin_config: TwinConfig) -> None:
+        # host-meta names the empty root as http://twin, whose path is empty.
         twin_config.server.restconf_root = ""
         rest, seen = _client(twin_config)
+        assert len(await _sips(rest)) == 2
+        assert await rest.restconf_root() == ""
+        assert seen == [HOST_META, "/data/tapi-common:context/service-interface-point"]
+
+    async def test_empty_root_with_a_token(self, twin_config: TwinConfig) -> None:
+        twin_config.server.restconf_root = ""
+        secured = twin_config.model_copy(update={"api_tokens": parse_tokens(f"ui:{TOKEN}")})
+        rest, seen = _client(secured, token=TOKEN)
         assert len(await _sips(rest)) == 2
         assert seen == [HOST_META, "/data/tapi-common:context/service-interface-point"]
 
@@ -147,9 +160,21 @@ class TestDiscoverFunctions:
         with TestClient(create_app(twin_config)) as http:
             assert discover_root_sync(http) == "/restconf"
 
-    def test_sync_without_host_meta(self, twin_config: TwinConfig) -> None:
+    def test_sync_with_an_empty_root(self, twin_config: TwinConfig) -> None:
         from fastapi.testclient import TestClient
 
         twin_config.server.restconf_root = ""
         with TestClient(create_app(twin_config)) as http:
+            assert http.get(HOST_META).status_code == 200
             assert discover_root_sync(http) == ""
+
+    def test_an_older_twin_without_host_meta(self) -> None:
+        """A twin from before host-meta answers 404 and serves T-API at /data."""
+        transport = httpx.MockTransport(lambda request: httpx.Response(404))
+        with httpx.Client(transport=transport, base_url="http://old") as http:
+            assert discover_root_sync(http) == ""
+
+    async def test_an_older_twin_without_host_meta_async(self) -> None:
+        transport = httpx.MockTransport(lambda request: httpx.Response(404))
+        async with httpx.AsyncClient(transport=transport, base_url="http://old") as http:
+            assert await discover_root(http) == ""
