@@ -145,8 +145,6 @@ class TestRefusals:
         ({"spectrum": _block(-20)}, "outside the grid"),
         ({"spectrum": _block(200), "centre": sum(_block(201)) // 2}, "not the centre"),
         ({"centre": sum(_block(200)) // 2 + SLOT // 2}, "not the centre of any"),
-        ({"spectrum": _block(200), "mcg_extra": {"mc-bandwidth-config-pac": []}},
-         "mc-bandwidth-config-pac"),
         ({"spectrum": _block(200), "mcg_extra": {"number-of-mc": 2}}, "one media channel"),
     ])
     def test_malformed_request_is_refused_naming_it(self, mesh_app, refs, kwargs, named) -> None:
@@ -154,6 +152,18 @@ class TestRefusals:
         assert resp.status_code == 400, resp.text
         assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert named in _error(resp)
+
+    def test_an_mcg_pac_the_twin_does_not_implement_is_501(self, mesh_app, refs) -> None:
+        """mc-bandwidth-config-pac is a v2.6.0 member the twin does not act
+        on: not implemented, like every such member, rather than invalid."""
+        resp = mesh_app.post(_CONTAINER, json=_body(
+            refs.sip("trx A"), refs.sip("trx C"), spectrum=_block(200),
+            mcg_extra={"mc-bandwidth-config-pac": []},
+        ))
+        assert resp.status_code == 501, resp.text
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == (
+            "operation-not-supported")
+        assert "mc-bandwidth-config-pac" in _error(resp)
 
     def test_end_points_must_agree(self, mesh_app, refs) -> None:
         body = _body(refs.sip("trx A"), refs.sip("trx C"), spectrum=_block(200))

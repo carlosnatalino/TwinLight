@@ -74,8 +74,12 @@ class TestModulationIsATapiAugment:
         ] = "DP-16QAM"
         resp = app.post(_BASE, json=payload)
         assert resp.status_code == 400
-        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
-        assert "modulation-format" in resp.text
+        (error,) = resp.json()["ietf-restconf:errors"]["error"]
+        # A member v2.6.0 does not define (RFC 6241 Appendix A), named with
+        # the place the modulation goes instead.
+        assert error["error-tag"] == "unknown-element"
+        assert error["error-info"] == {"bad-element": "modulation-format"}
+        assert "standard-modulation-technique" in error["error-message"]
 
     def test_prefixed_identity_accepted(self, app: TestClient) -> None:
         """RFC 7951 §6.8 permits the module-qualified identityref spelling."""

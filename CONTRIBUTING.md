@@ -119,6 +119,17 @@ re-runnable, and a flaky physics test is nearly impossible to diagnose.
 committed (the package imports it directly; there is no codegen build step) but
 excluded from ruff, mypy and coverage. Do not hand-edit it.
 
+## Regenerating the T-API schema tree
+
+`src/twinlight/models/tapi_schema_tree.py` is the data-node tree of the
+T-API v2.6.0 modules the twin implements, against which every request body
+is checked. It is generated from the `pyang -f tree` output of those modules
+(the YANG itself is not part of this repository); `tools/gen_tapi_schema.py`
+says how. Regenerate it, never edit it, when the twin implements another
+module or feature: the module list there must match
+`api/restconf_resources.IMPLEMENTED`, which `tests/test_api/test_tapi_schema.py`
+checks.
+
 ## Regenerating the gRPC/protobuf code
 
 Only needed after updating one of the vendored `.proto` files. They are copied

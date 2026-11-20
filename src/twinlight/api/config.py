@@ -9,8 +9,9 @@ Lets a client mutate the live digital twin without restarting it:
   (transient-model enable flags, RMSA admission margin), allow-listed in
   ``state.twin_overrides``.
 
-Validation errors come back as RESTCONF-style 400/422 via the FastAPI
-exception handler in ``app.py``. Successful mutations return the diff
+Errors come back as RFC 8040 errors via the exception handlers in
+``app.py``, as on the T-API resources: a request refused as sent is a 400
+with the tag naming the problem, a missing element a 404 ``invalid-value``. Successful mutations return the diff
 plus the set of service UUIDs whose baselines were invalidated so the
 caller knows which OPM streams will move next.
 
@@ -25,6 +26,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 
+from twinlight.api.restconf import RestconfError
 from twinlight.physics.backend import element_kind_name as _kind_name
 from twinlight.physics.element_params import (
     ParamValidationError,
@@ -188,9 +190,8 @@ async def set_config(request: Request, body: dict[str, Any]) -> dict[str, Any]:
                 devices, redesign=redesign,
             )
         except (ParamValidationError, ValueError) as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e),
+            raise RestconfError(
+                status.HTTP_400_BAD_REQUEST, "invalid-value", str(e),
             ) from e
         except KeyError as e:
             raise HTTPException(
@@ -212,9 +213,8 @@ async def set_config(request: Request, body: dict[str, Any]) -> dict[str, Any]:
         try:
             twin_applied = ctx.apply_twin_overrides(flat)
         except TwinOverrideError as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e),
+            raise RestconfError(
+                status.HTTP_400_BAD_REQUEST, "invalid-value", str(e),
             ) from e
 
     return {

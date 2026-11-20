@@ -8,14 +8,17 @@ fail loudly rather than read as a service without spectrum.
 
 from __future__ import annotations
 
+import io
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
-from tapi_fields import created_service, spectrum_of
+import tapi_fields
+from tapi_fields import created_service, spectrum_of, twin_data_root
 
 _ENTRY = {
     "uuid": "svc-1",
@@ -45,6 +48,40 @@ def test_reads_the_entry_of_an_array_of_one() -> None:
 def test_anything_else_is_an_error(payload: dict) -> None:
     with pytest.raises(ValueError, match="array of one"):
         created_service(payload)
+
+
+def _host_meta(href: str):
+    return io.BytesIO((
+        "<?xml version='1.0' encoding='UTF-8'?>\n"
+        "<XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>\n"
+        f"    <Link rel='restconf' href='{href}'/>\n</XRD>\n"
+    ).encode())
+
+
+@pytest.mark.parametrize(("href", "data"), [
+    ("/restconf", "http://twin:8080/restconf/data"),
+    ("/api", "http://twin:8080/api/data"),
+    # An empty root: the twin's own URL, whose path is empty (RFC 3986 §3.3).
+    ("http://twin:8080", "http://twin:8080/data"),
+])
+def test_twin_data_root_reads_host_meta(monkeypatch, href: str, data: str) -> None:
+    urls = []
+
+    def urlopen(url, timeout=120):
+        urls.append(url)
+        return _host_meta(href)
+
+    monkeypatch.setattr(tapi_fields, "twin_urlopen", urlopen)
+    assert twin_data_root("http://twin:8080/") == data
+    assert urls == ["http://twin:8080/.well-known/host-meta"]
+
+
+def test_twin_data_root_of_an_older_twin_without_host_meta(monkeypatch) -> None:
+    def urlopen(url, timeout=120):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(tapi_fields, "twin_urlopen", urlopen)
+    assert twin_data_root("http://twin:8080") == "http://twin:8080/data"
 
 
 def test_reads_an_earlier_twins_numbers() -> None:

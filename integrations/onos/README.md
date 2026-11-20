@@ -37,15 +37,15 @@ any specification:
 | 1 | Derives the ONOS **port number** from the last dash-segment of the SIP UUID, via `PortNumber.portNumber(String)` → `UnsignedLongs.decode()` | TwinLight's SIP UUIDs are RFC 4122 `uuid5` values, so that segment is hex (`40965af0c942`) and `decode()` throws `NumberFormatException` — port discovery fails silently and the device shows **zero ports**. The adapter republishes each SIP as `<real-uuid>-<index>` and strips the suffix on the way back. |
 | 2 | Dereferences the T-API **2.1** `tapi-photonic-media:media-channel-service-interface-point-spec` → `mc-pool` → `available-spectrum`, with no null check | T-API 2.6 has no `mc-pool`; the twin publishes the same information as `photonic-media-service-interface-point-spec` → `spectrum-capability-pac`. The adapter translates it, including Hz → MHz (read from the uint64 strings the twin sends, RFC 7951 §6.1) and identityrefs → the bare tokens ONOS matches. The connectivity-services it relays reach ONOS with their 64-bit leaves as the JSON numbers ONOS was always sent. |
 | 3 | `TapiDeviceLambdaQuery` reads `mc-pool` from the **top level** of the per-SIP response | The twin answers that resource as RFC 8040 §4.3 and RFC 7951 §5.4 specify, `{"tapi-common:service-interface-point": [ {…} ]}`. The adapter serves ONOS the bare object. |
-| 4 | POSTs a connectivity-service with `service-layer`/`service-type` and no modulation format, which T-API 2.1 has nowhere to carry | The adapter adds a modulation as policy, in the T-API 2.6 location (a `tapi-photonic-media` augment on the end-point), and reuses ONOS's UUID as the twin's service UUID so the later DELETE lines up. |
+| 4 | POSTs a connectivity-service with `service-layer`/`service-type` and no modulation format, which T-API 2.1 has nowhere to carry | The twin refuses members T-API v2.6.0 does not define (`400 unknown-element`), so the adapter forwards an entry it builds from what it translates and drops ONOS's 2.1 members by name, logging which ([COMPATIBILITY.md § A7](COMPATIBILITY.md#a7-onoss-create-body-carries-t-api-21-members)). It adds a modulation as policy, in the T-API 2.6 location (a `tapi-photonic-media` augment on the end-point), and reuses ONOS's UUID as the twin's service UUID so the later DELETE lines up. |
 
 Those four, plus showing ONOS only the services it created
 ([COMPATIBILITY.md § A3](COMPATIBILITY.md#a3-onos-deletes-pre-existing-connectivity-services))
 and the 50 GHz granularity it can parse (§ A6), are all that is left: each is
 an ONOS T-API 2.1 behaviour, not a twin deviation. Everything else — paths,
 hyphenated keys, the create on the connectivity-context, the array-of-one
-create body (forwarded as ONOS sent it), RESTCONF error bodies — passes
-through unchanged. Earlier releases also reshaped the create body into a bare
+encoding of the create body, RESTCONF error bodies — passes through
+unchanged. Earlier releases also reshaped the create body into a bare
 object and re-targeted the create to the list path; the twin's now standard
 behaviour made both unnecessary, and they are gone.
 
@@ -426,8 +426,8 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 |--------|---------|
 | `scripts/demo-up.sh` | Build and boot the stack, verify the ODTN apps, push the netcfg, wait for discovery |
 | `scripts/validate.sh` | 16 end-to-end checks across all layers; non-zero exit on any failure |
-| `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range *and all three modulation formats*, so every UI has state to show (`--reset` clears first). Pairs are discovered by probing, not hardcoded — see `scripts/find_pairs.py` |
-| `scripts/find_pairs.py` | Probe random endpoint pairs through `/internal/path-info` and report which modulation format each can carry. Used by `seed-demo.sh`; useful on its own when a topology changes |
+| `scripts/seed-demo.sh` | Provision 8 lightpaths through ONOS spanning the QoT range *and all three modulation formats*, so every UI has state to show (`--reset` clears first). Pairs are discovered by probing, not hardcoded — see `scripts/find_pairs.py`. A pair the twin refuses at create is replaced by a spare of the same format, and its flow is removed from ONOS (see below) |
+| `scripts/find_pairs.py` | Read the twin's admission margin, probe random endpoint pairs through `/internal/path-info` and report which modulation format each can carry, plus a spare per format. Used by `seed-demo.sh`; useful on its own when a topology changes |
 | `scripts/lightpath.sh` | `create <A> <Z>` / `list` / `delete <flow-id>` / `clear` — provisioning driven from ONOS |
 | `scripts/correlate.sh` | Join the ONOS Flows view to the twin's service list, one row per flow (`--json` for the raw join) |
 | `scripts/resync.sh` | Force ONOS to re-discover ports (`--check` just compares the two sides) |
@@ -435,6 +435,43 @@ Restore with `./integrations/onos/scripts/fault.sh heal-all`.
 | `scripts/onos-cli.sh` | ONOS Karaf CLI, interactive or one-shot, through Karaf's own client in the ONOS container (no host `ssh` needed) |
 | `scripts/demo-down.sh` | Stop the stack (`--purge` also drops volumes) |
 | `scripts/test-integration.sh` | `unit` / `e2e` / `all` / `preflight` — test the integration on this machine; see [Testing the integration locally](#testing-the-integration-locally) |
+
+**How `seed-demo.sh` picks and checks its pairs.** A format's threshold is its
+required GSNR (8.5, 14.5 and 20.5 dB for DP-QPSK, DP-16QAM and DP-64QAM) plus
+the twin's `rmsa.qot_margin_db`. That margin is a runtime setting, so
+`find_pairs.py` reads it from the twin it probes at the start of each search,
+at `/transparent/data/Config/rmsa/qot_margin_db`. The transparent controller is
+the twin's documented interface for reading a setting, and it answers the
+effective value; `/config/get` lists only overrides, and `/metrics` is a
+monitoring export. The read presents `TWINLIGHT_API_TOKEN` like the scripts'
+other requests to the twin, and the line `admission margin … dB, read from the
+twin` says what was used. A twin that cannot say (one that predates the
+transparent controller, or an answer without the value) stops the search with
+the reason instead of falling back to 1.5 dB: a guessed margin is a silent
+mismatch, which shows up as refusals or a short format. The required GSNRs are
+still the script's copy of the twin's modulation table; the twin publishes it
+read-only at `/transparent/data/ModulationList/<format>/req_gsnr_db`.
+
+A probed pair can still be refused. `/internal/path-info` reports the GSNR an
+OPM read would give now: the GNPy baseline after the twin's time-varying
+transient models. Admission gates on the pristine baseline
+([Part 2](#part-2--onos-provisions-a-lightpath-the-twin-supplies-the-physics),
+"Why the live GSNR differs from the admission figure"). The two differ by a few
+tenths of a dB, so a pair that probes just above a format's threshold can be
+refused. San_Jose → Louisville probed at 10.3 dB against DP-QPSK's 10.0 dB, and
+admission found 9.9 dB (the load of the other seeded lightpaths moved that
+figure by less than 0.1 dB). Left alone, the refused flow sits in ONOS in
+`PENDING_ADD`, retried for ever. `seed-demo.sh` therefore detects the refusal
+(a new entry in the adapter's `recent-rejections`), removes the flow, says so,
+and provisions that format's spare instead. It exits non-zero if ONOS will not
+drop the flow.
+
+`SEED_RANDOM_SEED` fixes the sequence of pairs drawn. It cannot make the result
+fully repeatable: a pair that probes within the transient swing of a threshold
+can be filed differently from one run to the next. To replay a seeding exactly,
+save a search (`TWIN_URL=… python3 integrations/onos/scripts/find_pairs.py >
+pairs.txt`) and provision it with `SEED_PAIRS_FILE=pairs.txt
+./integrations/onos/scripts/seed-demo.sh`.
 
 Overridable environment variables: `ONOS_URL`, `ONOS_AUTH`, `ADAPTER_URL`,
 `TWIN_URL`, `DEVICE_ID`, and `VALIDATE_A` / `VALIDATE_Z` for the validation A–Z
@@ -489,7 +526,9 @@ every other script and checks what it did:
 | `correlate.sh`, `--json` | every ONOS flow joins a twin service |
 | `fault.sh cut-path`, `heal-all`, `list` | OPM reports `link-failed`, then recovers |
 | `lightpath.sh delete` | the twin releases the service |
-| `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number |
+| `seed-demo.sh --reset`, `correlate.sh` | ONOS flows and twin services agree in number, so no flow was left in `PENDING_ADD` without a lightpath. The pairs are drawn with `SEED_RANDOM_SEED`, `twinlight-onos-test` unless you export another, and the run prints it. Export `ONOS_TEST_QOT_MARGIN_DB` to run this seeding against a twin with that admission margin (restored afterwards) |
+| `find_pairs.py`, then `seed-demo.sh --reset` of those pairs with the twin's `qot_margin_db` raised by 3 dB | the pairs are searched at the twin's margin and saved, then provisioned (`SEED_PAIRS_FILE`) after the margin is raised, so those within 3 dB of their threshold are refused; each refusal is reported and its flow removed, spares fill in, and every flow ends `ADDED`. The margin is put back afterwards |
+| delete scope, across an adapter restart | a lightpath created on the twin directly is not listed to ONOS and survives a `DELETE` through the adapter (`204`, reported under `refused-deletes`); after the adapter restarts, ONOS is shown the same services as before and `/adapter/status` reports them, and removing a flow in ONOS still releases its lightpath. The restart is skipped with `--reuse` |
 | `resync.sh --check`, `resync.sh` | ONOS-created lightpaths survive, every port enabled |
 | `onos-cli.sh devices` | the CLI answers and lists the device |
 | `lightpath.sh clear`, `validate.sh` again | the twin is emptied; still 16/16 |
@@ -498,7 +537,8 @@ every other script and checks what it did:
 Options: `--keep` leaves the stack up for inspection, `--reuse` tests a stack
 that is already running instead of booting one (and never tears it down),
 `--boots N` cold-boots N times in a row before the checks, `--rmi` also
-removes the images it built, `--out DIR` chooses where the logs go.
+removes the images it built (not the pinned ONOS image, which it pulls rather
+than builds), `--out DIR` chooses where the logs go.
 
 It never touches a stack it did not start. The test stack has its own project,
 container prefix and image tag (`twinlight-onos-test`), ports (28080 REST,
@@ -539,7 +579,7 @@ connected, as ONOS's port cache depends on them being consistent:
 Introspection, safe to call any time:
 
 - `GET /health` — liveness, twin reachability (its T-API resources, not only its `/health`), and whether the twin accepts the adapter's token
-- `GET /adapter/status` — modulation policy, ONOS-created services, recent refusals, the twin's verdict on the adapter's token. Always `200`: a twin that is down sets `"twin-reachable": false` with the reason in `twin-error`, as a refused token sets `twin-authorized` and `twin-auth-error`
+- `GET /adapter/status` — modulation policy, ONOS-created services (read from the twin on each call, see [below](#why-twin-native-lightpaths-are-hidden-from-onos)), recent refusals, `DELETE`s it did not forward (`refused-deletes`), the twin's verdict on the adapter's token. Always `200`: a twin that is down sets `"twin-reachable": false` with the reason in `twin-error`, as a refused token sets `twin-authorized` and `twin-auth-error`
 - `GET /adapter/ports` — the SIP ↔ ONOS-port map
 - `POST /adapter/modulation` — switch modulation format at runtime
 
@@ -550,12 +590,35 @@ Introspection, safe to call any time:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `TWIN_BASE_URL` | `http://twin:8080` | |
-| `TWIN_DATA_ROOT` | *(discovered)* | The twin's T-API data resource, e.g. `/restconf/data`. Unset, the adapter reads the twin's RESTCONF root from `/.well-known/host-meta` on its first call (a `404` there means `/data`); set it to pin the root and skip discovery |
+| `TWIN_DATA_ROOT` | *(discovered)* | The twin's T-API data resource, e.g. `/restconf/data`. Unset, the adapter reads the twin's RESTCONF root from `/.well-known/host-meta` on its first call (an empty root, advertised as the twin's own URL, and a `404` from an older twin both mean `/data`); set it to pin the root and skip discovery |
 | `ADAPTER_MODULATION` | `DP-QPSK` | Requested format; runtime-switchable |
 | `ADAPTER_GRID_GRANULARITY` | `G_50GHZ` | **Only `G_50GHZ` and `G_25GHZ` are safe** — ONOS's `getChannelSpacing()` has trailing spaces in its other case labels (`"G_100GHZ "`, `"G_12_5GHZ "`), so those fall through to `CHL_0GHZ` and then divide by zero in `getOchSignal()` |
 | `ADAPTER_EXPOSE_TWIN_SERVICES` | `false` | See below |
 | `ADAPTER_SIP_REFRESH_SECONDS` | `30` | SIP catalogue cache lifetime |
 | `TWINLIGHT_API_TOKEN` | *(empty)* | The bearer token the adapter presents to a twin with `TWINLIGHT_API_TOKENS` set. Compose passes it from `.env`. Empty, the adapter sends no credentials. See [Authentication](#authentication) |
+
+### The ONOS image
+
+The overlay pins ONOS by digest,
+`onosproject/onos:2.7-latest@sha256:ee324bcf…54813`, so every run uses the
+image the integration test last passed with: `2.7-latest` is a moving tag.
+Docker resolves the digest and ignores the tag, which stays for readers. The
+digest is that of the `linux/amd64` image manifest; ONOS publishes no manifest
+list for the tag (no other platform), so the same digest runs natively on
+amd64 Linux and under emulation on Apple Silicon.
+
+To move the pin forward, read the tag's current digest from the registry
+(public metadata, nothing is pulled), put it in
+`integrations/onos/docker-compose.onos.yml`, and run the integration test, with
+and without tokens, before committing:
+
+```bash
+docker buildx imagetools inspect onosproject/onos:2.7-latest   # Digest: sha256:…
+./integrations/onos/scripts/test-integration.sh all
+```
+
+If the tag ever becomes a manifest list, pin the list's digest (the `Digest`
+line of that command), not one platform's.
 
 ### Running a second stack side by side
 
@@ -616,11 +679,9 @@ docker network inspect $(docker network ls -q) \
 If you pick a taken one, `up` fails with `Pool overlaps with other one on this
 address space`.
 
-**What does not follow.** The second stack's **web UI** loads, but its API
-calls are refused by the browser: the twin's `server.cors_origins` (in the
-scenario YAML, not an environment variable) allows `http://localhost:5173`
-and not the moved port. Nothing in the ONOS integration uses the UI, and the
-twin's REST API, Grafana and Prometheus are unaffected.
+The second stack's **web UI** follows too: the Compose file sets the twin's
+`TWINLIGHT_CORS_ORIGINS` to `http://localhost:${TWINLIGHT_UI_PORT}`, so the
+browser may call the twin from the moved port.
 
 ### Why twin-native lightpaths are hidden from ONOS
 
@@ -629,8 +690,44 @@ connectivity service it can see whenever ONOS's flow cache for the device is
 empty — which includes the moment it first connects, and again after any ONOS
 restart. Left exposed, that silently tears down anything the TwinLight UI or
 `examples/demo_services.py` created. The adapter therefore shows ONOS only the
-services ONOS itself created. Set `ADAPTER_EXPOSE_TWIN_SERVICES=true` if you
-specifically want to demonstrate that behaviour.
+services ONOS itself created, and forwards ONOS's `DELETE` only for those:
+ONOS can delete exactly what it is shown. Set
+`ADAPTER_EXPOSE_TWIN_SERVICES=true` if you specifically want to demonstrate
+that behaviour; ONOS is then shown every service and may delete any of them.
+
+**What makes a service ONOS's.** The adapter puts one name-and-value pair,
+`provisioned-by` = `onos-odtn`, in the `name` list of every service it creates
+for ONOS (next to the `service-name` the UI renders and the `onos-port-pair`
+of the [join key](#part-2--onos-provisions-a-lightpath-the-twin-supplies-the-physics)).
+The `name` list is standard T-API (`tapi-common` v2.6.0, grouping
+`global-class`), so the twin stores and returns it unchanged and keeps it in
+its checkpoint; the UI and the CLIs read only `service-name` and ignore the
+other entries. One rule reads the mark for both the list ONOS is served and
+the `DELETE`s that are forwarded, so the two cannot drift apart. Ownership
+therefore lives on the twin, the system of record, not in the adapter's
+memory: after an adapter restart ONOS is still shown, and can still delete,
+the services it created, and `/adapter/status` reports them again (with their
+port pairs read back off the names), so `correlate.sh` and the other scripts
+keep working. Services created by earlier releases of the adapter carry the
+same pair.
+
+**A `DELETE` for anything else** is answered `204` and not forwarded: to ONOS
+that service does not exist, which is how the adapter already reports a
+service the twin no longer holds. Any other status would leave the flow rule
+that sent it in `PENDING_REMOVE` forever. The refusal is logged once per UUID
+at `WARNING`, and `/adapter/status` lists it under `refused-deletes` with a
+count of the attempts. To decide, the adapter reads the service from the twin
+before forwarding the `DELETE`; a twin that does not answer is still a `502`,
+as before.
+
+**Keep the mark.** A service whose `name` list loses the pair is no longer
+ONOS's: hidden from ONOS, and its `DELETE` refused, which would leave the
+lightpath on the twin after ONOS removes the flow. The twin's `PATCH` on a
+connectivity-service replaces the whole `name` list, so a client renaming an
+ONOS-created service must send the `provisioned-by` entry back with the new
+`service-name`. Nothing in this repository renames services. Anyone who can
+reach the twin can also put the pair on a service of their own, which ONOS
+would then be shown and could delete: the mark is a label, not access control.
 
 ## Authentication
 
@@ -672,8 +769,9 @@ override file, as an option outside the default setup.
 With a token, the adapter is a way into the twin that needs no credentials.
 Anyone who can reach its port can do what the adapter forwards, with the
 token's rights: read the T-API context and its SIPs, list connectivity
-services, create a connectivity service, and delete any connectivity service
-whose UUID they know (including one created in the UI). The adapter forwards
+services, create a connectivity service, and delete a connectivity service
+created through the adapter (or any service, with
+`ADAPTER_EXPOSE_TWIN_SERVICES=true`). The adapter forwards
 nothing else (no `/config/`, `/transparent/`, `/admin/` or `/internal/`), but
 it does accept `POST /adapter/modulation` from anyone.
 
@@ -794,8 +892,8 @@ What this integration does not do:
 - **ONOS and the adapter do not authenticate their clients.** ONOS talks to
   the adapter without credentials, and the adapter accepts every request.
   Against a twin with tokens, the adapter presents `TWINLIGHT_API_TOKEN` on
-  ONOS's behalf, so anyone who can reach port 8282 can read the twin's SIPs and
-  create and delete connectivity services (see
+  ONOS's behalf, so anyone who can reach port 8282 can read the twin's SIPs,
+  create connectivity services and delete those created through the adapter (see
   [Authentication](#authentication)). No link uses TLS. Run the demo on a
   local or lab network only.
 - **Modulation format is adapter policy**, because T-API 2.1 connectivity

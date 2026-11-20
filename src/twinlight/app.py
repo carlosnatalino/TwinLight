@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from xml.sax.saxutils import escape
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -37,6 +38,7 @@ from twinlight.api import (
 from twinlight.api import (
     metrics as metrics_api,
 )
+from twinlight.api.conditional import ConditionalRequestMiddleware
 from twinlight.api.middleware import (
     RESTCONF_MEDIA_TYPE,
     AllowHeaderMiddleware,
@@ -50,7 +52,6 @@ from twinlight.api.middleware import (
 from twinlight.api.restconf import (
     RestconfError,
     error_type,
-    is_restconf_path,
     validation_error_tag,
 )
 from twinlight.api.restconf_resources import YANG_LIBRARY_REVISION
@@ -67,6 +68,7 @@ def _restconf_error_response(
     error_path: str | None = None,
     headers: Mapping[str, str] | None = None,
     error_app_tag: str | None = None,
+    error_info: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     """Build a JSONResponse with ietf-restconf:errors format (RFC 8040)."""
     err: dict = {
@@ -78,6 +80,8 @@ def _restconf_error_response(
         err["error-app-tag"] = error_app_tag
     if error_path:
         err["error-path"] = error_path
+    if error_info:
+        err["error-info"] = dict(error_info)
     body = {"ietf-restconf:errors": {"error": [err]}}
     return JSONResponse(
         status_code=status_code,
@@ -87,35 +91,32 @@ def _restconf_error_response(
     )
 
 
-def _http_status_to_error_tag(status_code: int, restconf: bool = True) -> str:
+def _http_status_to_error_tag(status_code: int) -> str:
     """Map an HTTP status to the RFC 8040 §7 error-tag of an error that names none.
 
-    A 404 on a RESTCONF resource is ``invalid-value``: RFC 8040 §4.3, "If a
-    retrieval request for a data resource represents an instance that does
-    not exist, then an error response containing a '404 Not Found'
-    status-line MUST be returned by the server. The error-tag value
-    'invalid-value' is used in this case"; §4.5, §4.6 and §4.7 let PUT,
-    PATCH and DELETE answer the same 404 ("A server MAY return a '404 Not
-    Found' status-line ... The error-tag value 'invalid-value' is used in
-    this case"), which keeps one answer for a missing resource whatever the
-    method. ``data-missing``
-    is paired with 409 only by the §7 table, and the IETF rejected
-    re-pairing it with 404 (erratum 5565). The proprietary endpoints
-    (``restconf=False``) keep ``data-missing`` on a 404: they are outside
-    the T-API rule, and nothing in this change is meant to alter them.
+    A 404 is ``invalid-value``: RFC 8040 §4.3, "If a retrieval request for
+    a data resource represents an instance that does not exist, then an
+    error response containing a '404 Not Found' status-line MUST be
+    returned by the server. The error-tag value 'invalid-value' is used in
+    this case"; §4.5, §4.6 and §4.7 let PUT, PATCH and DELETE answer the
+    same 404 ("A server MAY return a '404 Not Found' status-line ... The
+    error-tag value 'invalid-value' is used in this case"), which keeps one
+    answer for a missing resource whatever the method. ``data-missing`` is
+    paired with 409 only by the §7 table, and the IETF rejected re-pairing
+    it with 404 (erratum 5565). The proprietary endpoints (``/internal``,
+    ``/admin``, ``/config``, ``/transparent``) follow the same convention,
+    so a client handles every error of the twin one way.
     """
     if status_code in (401, 403):
         return "access-denied"
     if status_code == 404:
-        return "invalid-value" if restconf else "data-missing"
+        return "invalid-value"
     if status_code == 405:
         return "operation-not-supported"
     if status_code == 409:
         return "resource-denied"
     if status_code == 400:
         return "bad-element"
-    if status_code == 422:
-        return "invalid-value"
     if status_code == 501:
         return "operation-not-supported"
     return "operation-failed"
@@ -127,6 +128,24 @@ def _http_status_to_error_tag(status_code: int, restconf: bool = True) -> str:
 _YANG_LIBRARY_VERSION = YANG_LIBRARY_REVISION
 
 
+def restconf_href(root: str, request: Request) -> str:
+    """The ``href`` of host-meta's ``restconf`` link for ``root``.
+
+    A root is a path-absolute reference, ``/restconf`` (RFC 8040 §3.1's own
+    example). An empty root cannot be written that way: XRD 1.0 §1.5.2 says
+    every URI in an XRD "MUST consist of at least one non-whitespace
+    character", and the candidates that would satisfy it as a path go
+    wrong for a client that follows §3.1 ("use this value as the initial
+    part of the path in the request URI"): ``/`` makes ``{+restconf}/data``
+    the network-path reference ``//data`` (RFC 3986 §4.2), an authority
+    called ``data``. So an empty root is advertised as the absolute URI the
+    request reached, ``http://host:port``, whose path is empty (RFC 3986
+    §3.3): resolved against host-meta (RFC 3986 §5.2) it is itself, and
+    ``{+restconf}/data`` expands to ``http://host:port/data``.
+    """
+    return root or str(request.base_url).rstrip("/")
+
+
 def _add_restconf_root_resources(app: FastAPI, root: str) -> None:
     """Serve the RFC 8040 root resource and its discovery document.
 
@@ -134,22 +153,26 @@ def _add_restconf_root_resources(app: FastAPI, root: str) -> None:
     ``/.well-known/host-meta`` rather than assuming a path, so a client
     that knows only the host can find the twin. The conventional root is
     ``/restconf``, which is what ONOS and most RESTCONF clients hard-code.
+    An empty root is as discoverable: host-meta names it (see
+    :func:`restconf_href`), and the API resource ``{+restconf}`` is ``/``,
+    since an empty path is ``/`` (RFC 9110 §4.2.3).
     """
 
     @app.get("/.well-known/host-meta", include_in_schema=False)
-    async def host_meta() -> Response:
+    async def host_meta(request: Request) -> Response:
         # XRD, per RFC 6415 — deliberately XML: RFC 8040 §3.1 specifies
         # this document's format, and a JSON variant would not be found
         # by a conforming client.
+        href = escape(restconf_href(root, request), {"'": "&apos;"})
         xrd = (
             "<?xml version='1.0' encoding='UTF-8'?>\n"
             "<XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>\n"
-            f"    <Link rel='restconf' href='{root}'/>\n"
+            f"    <Link rel='restconf' href='{href}'/>\n"
             "</XRD>\n"
         )
         return Response(content=xrd, media_type="application/xrd+xml")
 
-    @app.get(root, tags=["restconf"])
+    @app.get(root or "/", tags=["restconf"])
     async def restconf_root() -> dict:
         return {
             "ietf-restconf:restconf": {
@@ -241,13 +264,19 @@ def create_app(config: TwinConfig) -> FastAPI:
     # refuses the query parameters, Accept and body media types RFC 8040
     # refuses (400, 406, 415); RestconfHeadersMiddleware, just inside CORS,
     # stamps Content-Type and Cache-Control on every RESTCONF response, a
-    # 401 included.
+    # 401 included. ConditionalRequestMiddleware, just inside
+    # RestconfRequestMiddleware, sends the validators, evaluates the
+    # conditional headers, applies content= and holds the write gate (RFC
+    # 8040 §3.4.1, §4.8.1; RFC 9110 §13).
     refusals = (transparent.refused_methods,)
     app.add_middleware(AllowHeaderMiddleware, refusals=refusals)
     app.add_middleware(
         OptionsMiddleware,
         restconf_root=config.server.restconf_root,
         refusals=refusals,
+    )
+    app.add_middleware(
+        ConditionalRequestMiddleware, restconf_root=config.server.restconf_root
     )
     app.add_middleware(
         RestconfRequestMiddleware, restconf_root=config.server.restconf_root
@@ -316,9 +345,8 @@ def create_app(config: TwinConfig) -> FastAPI:
     app.include_router(metrics_api.router)
     app.include_router(auth.router)
 
-    if root:
-        _add_restconf_root_resources(app, root)
-        app.include_router(restconf_resources.operations_router, prefix=root)
+    _add_restconf_root_resources(app, root)
+    app.include_router(restconf_resources.operations_router, prefix=root)
 
     if authenticator.enabled:
         _document_bearer_auth(app, PUBLIC_PATHS)
@@ -338,11 +366,18 @@ def create_app(config: TwinConfig) -> FastAPI:
             return _restconf_error_response(
                 exc.status_code, exc.error_tag, msg, error_path=exc.error_path,
                 headers=exc.headers, error_app_tag=exc.error_app_tag,
+                error_info=exc.error_info,
             )
-        restconf = is_restconf_path(request.url.path, root)
-        tag = _http_status_to_error_tag(exc.status_code, restconf)
+        status_code = exc.status_code
+        if status_code == 422:
+            # RFC 8040 does not use 422 (see below); a handler that still
+            # raises it means a value the twin does not accept.
+            status_code = 400
+            tag = "invalid-value"
+        else:
+            tag = _http_status_to_error_tag(status_code)
         return _restconf_error_response(
-            exc.status_code, tag, msg, headers=exc.headers
+            status_code, tag, msg, headers=exc.headers
         )
 
     @app.exception_handler(RequestValidationError)
@@ -352,13 +387,9 @@ def create_app(config: TwinConfig) -> FastAPI:
         msg = "; ".join(
             f"{e['loc']}: {e['msg']}" for e in exc.errors()
         ) if exc.errors() else str(exc)
-        if is_restconf_path(request.url.path, root):
-            # RFC 8040 does not use 422: §7 pairs every tag that describes a
-            # request the server cannot accept as sent with 400.
-            return _restconf_error_response(400, validation_error_tag(exc.errors()), msg)
-        # The proprietary endpoints keep FastAPI's 422: they are outside the
-        # T-API rule, and their clients (the UI's diagrams and compute-path,
-        # the soft-failure client, scripts) are written against it.
-        return _restconf_error_response(422, "invalid-value", msg)
+        # RFC 8040 does not use 422: §7 pairs every tag that describes a
+        # request the server cannot accept as sent with 400. One convention
+        # for the whole twin, the proprietary endpoints included.
+        return _restconf_error_response(400, validation_error_tag(exc.errors()), msg)
 
     return app

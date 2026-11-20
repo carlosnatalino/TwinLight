@@ -85,4 +85,5 @@ def test_path_info_reports_the_evaluated_channel(mesh_app) -> None:
     bad = mesh_app.get("/internal/path-info", params={
         "sip_a": refs.sip("trx A"), "sip_z": refs.sip("trx C"), "modulation": "DP-8PSK",
     })
-    assert bad.status_code == 422
+    assert bad.status_code == 400
+    assert bad.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"

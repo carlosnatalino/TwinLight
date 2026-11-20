@@ -17,6 +17,11 @@ UUIDs are derived from the element UID (uuid5), and the UID itself is kept in
 each object's ``name`` list as ``element-uid``. Element attributes the
 standard has no leaf for — a fiber's length, for one — are served by the
 transparent controller (``/transparent/data/ElementList``), not here.
+
+Every model here is frozen and holds its lists as tuples:
+``TapiContext.physical_context()`` builds the tree once and hands the same
+object to every request, so no caller may be able to change it. A caller
+that needs to change something works on its own ``model_dump``.
 """
 
 from __future__ import annotations
@@ -33,10 +38,16 @@ def element_uuid(uid: str, role: str) -> str:
     return str(uuid_lib.uuid5(uuid_lib.NAMESPACE_DNS, f"{uid}:{role}"))
 
 
+class ElementName(NameAndValue):
+    """A ``name`` entry of the tree: ``NameAndValue``, frozen."""
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
+
+
 class _OmitNone(BaseModel):
     """Absent optional leaves are left out rather than sent as JSON null."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
     @model_serializer(mode="wrap")
     def _omit_none(self, handler: SerializerFunctionWrapHandler) -> dict:
@@ -56,7 +67,7 @@ class CommonEquipmentProperties(_OmitNone):
 class ActualEquipment(BaseModel):
     """``actual-equipment``."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
     common_equipment_properties: CommonEquipmentProperties = Field(
         ..., alias="common-equipment-properties"
@@ -66,36 +77,36 @@ class ActualEquipment(BaseModel):
 class Equipment(BaseModel):
     """``tapi-equipment:equipment``."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
     uuid: str
-    name: list[NameAndValue] = Field(default_factory=list)
+    name: tuple[ElementName, ...] = ()
     actual_equipment: ActualEquipment = Field(..., alias="actual-equipment")
 
 
 class Device(BaseModel):
     """``tapi-equipment:device``."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
     uuid: str
-    name: list[NameAndValue] = Field(default_factory=list)
-    equipment: list[Equipment] = Field(default_factory=list)
+    name: tuple[ElementName, ...] = ()
+    equipment: tuple[Equipment, ...] = ()
 
 
 class PhysicalSpan(BaseModel):
     """``tapi-equipment:physical-span``."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
     uuid: str
-    name: list[NameAndValue] = Field(default_factory=list)
+    name: tuple[ElementName, ...] = ()
 
 
 class PhysicalContext(BaseModel):
     """``tapi-equipment:physical-context``."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
-    device: list[Device] = Field(default_factory=list)
-    physical_span: list[PhysicalSpan] = Field(default_factory=list, alias="physical-span")
+    device: tuple[Device, ...] = ()
+    physical_span: tuple[PhysicalSpan, ...] = Field(default=(), alias="physical-span")

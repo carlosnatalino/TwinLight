@@ -124,7 +124,7 @@ class TestOptions:
         assert _allow(entry) == {"GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"}
         assert entry.headers["accept-patch"] == "application/yang-data+json"
         container = client.options(f"{root}{_CONNECTIVITY}")
-        assert _allow(container) == {"GET", "HEAD", "POST", "OPTIONS"}
+        assert _allow(container) == {"GET", "HEAD", "POST", "PUT", "OPTIONS"}
         assert "accept-patch" not in container.headers
 
     def test_an_unknown_path_is_404(self, app: TestClient) -> None:

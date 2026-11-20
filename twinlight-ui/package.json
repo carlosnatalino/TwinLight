@@ -25,7 +25,6 @@
     "dagre": "^0.8.5",
     "lucide-react": "^0.469.0",
     "react": "^18.3.1",
-    "react-cytoscapejs": "^2.0.0",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.0.2",
     "recharts": "^2.14.1",

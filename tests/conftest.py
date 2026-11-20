@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import socket
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -9,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from twinlight.app import create_app
 from twinlight.auth import CLIENT_TOKEN_ENV_VAR, TOKENS_ENV_VAR
-from twinlight.config import GnpyConfig, TwinConfig
+from twinlight.config import CORS_ORIGINS_ENV_VAR, GnpyConfig, TwinConfig
 from twinlight.example_data import find_example_file
 from twinlight.models.connectivity import OTSIA_CSEP_SPEC
 from twinlight.physics.modulation import MODULATION_TO_MT, ModulationFormat
@@ -45,6 +47,28 @@ def _no_snapshots_in_the_working_tree():
     )
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _no_host_name_lookup() -> Iterator[None]:
+    """Keep the host's name resolver out of the test run.
+
+    Every app a test builds creates a ``MeasurementStream``, which calls
+    ``socket.getfqdn()`` once to advertise the gNMI address (TR-548 §6.3.1,
+    ``streaming/measurement_stream.py``). That is a blocking resolver call.
+    On a host that is slow to resolve its own name (5 s per call, waiting in
+    mDNS, on the machine where this was found) the suite pays it once per
+    app and takes over an hour instead of three minutes, at 0 % CPU, with
+    nothing in the output to say why.
+
+    The answer is fixed for the session instead, to a name that resolves on
+    every host, so an advertised address stays reachable. The tests of the
+    lookup itself (``test_streaming/test_connection_address.py``) patch it
+    again for their own duration.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(socket, "getfqdn", lambda name="": "localhost")
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _no_ambient_api_tokens(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -59,6 +83,8 @@ def _no_ambient_api_tokens(
     """
     monkeypatch.delenv(TOKENS_ENV_VAR, raising=False)
     monkeypatch.delenv(CLIENT_TOKEN_ENV_VAR, raising=False)
+    # The same for the CORS origins, which load_config() reads alike.
+    monkeypatch.delenv(CORS_ORIGINS_ENV_VAR, raising=False)
     monkeypatch.setattr("twinlight.auth.DEFAULT_ENV_FILE", tmp_path / "absent.env")
 
 

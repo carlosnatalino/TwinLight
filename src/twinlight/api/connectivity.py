@@ -2,6 +2,7 @@
 
 GET    {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
 POST   {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
+PUT    {root}/data/tapi-common:context/tapi-connectivity:connectivity-context
 GET    …/connectivity-service
 GET    …/connectivity-service={uuid}
 PUT    …/connectivity-service={uuid}
@@ -19,6 +20,7 @@ A service is created by POST on the container, its parent, as RFC 8040
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -28,8 +30,11 @@ from twinlight.algorithms.path_constraints import ConstraintError, UnresolvedRef
 from twinlight.api.restconf import (
     RestconfError,
     created_location,
+    refuse_unknown_members,
+    target_member,
     validation_error_tag,
 )
+from twinlight.models import tapi_schema
 from twinlight.models.common import Direction, ForwardingDirection, LayerProtocolName
 from twinlight.models.connectivity import (
     MCG_CSEP_SPEC,
@@ -43,6 +48,7 @@ from twinlight.models.yang_numbers import (
     parse_uint64,
 )
 from twinlight.state.context import (
+    EntryRefusedError,
     InsufficientQoTError,
     InsufficientSpectrumError,
     NoPathError,
@@ -66,6 +72,16 @@ def _single_service(body: dict) -> dict:
     wild. Both are accepted; more than one entry is not, because the caller
     below admits exactly one service.
     """
+    if "tapi-connectivity:connectivity-service" in body:
+        extra = sorted(set(body) - {"tapi-connectivity:connectivity-service"})
+        if extra:
+            # §4.4.1 again, and RFC 6241's "An unexpected element is present".
+            raise RestconfError(
+                status.HTTP_400_BAD_REQUEST, "unknown-element",
+                "the body carries one connectivity-service and nothing beside "
+                f"it; unexpected: {', '.join(extra)}",
+                error_path="/", error_info={"bad-element": extra[0]},
+            )
     raw = body.get("tapi-connectivity:connectivity-service", body)
     if isinstance(raw, list):
         if len(raw) != 1:
@@ -84,44 +100,79 @@ def _single_service(body: dict) -> dict:
     return raw
 
 
+#: Advice for members clients are known to send that v2.6.0 does not
+#: define: this project's pre-2.6 modulation leaf, and the T-API 2.1 leaves
+#: ONOS sends (the ONOS adapter drops them; see integrations/onos).
+_HINTS = {
+    "modulation-format": (
+        "not a T-API v2.6.0 member: send the modulation as end-point/"
+        f"layer-protocol-constraint/{OTSIA_CSEP_SPEC}/otsi-config/modulation/"
+        "standard-modulation-technique, e.g. 'MT_DP-QPSK'"
+    ),
+    "service-layer": "a T-API 2.1 member; v2.6.0 has layer-protocol-name",
+    "service-type": "a T-API 2.1 member that v2.6.0 does not define",
+}
+
+#: The connectivity-service list in the v2.6.0 data-node tree, and the
+#: instance path of its entries (RFC 7950 §9.13), for error-path.
+SERVICE_PATH = "/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
+SERVICE_SCHEMA = tapi_schema.node(SERVICE_PATH)
+
 # What the twin implements of a connectivity-service request, level by level
-# (tapi-connectivity and tapi-photonic-media v2.6.0). A standard leaf the twin
-# does not act on is refused rather than ignored: admitting the service
-# without it would hand the client a lightpath that does not honour what it
-# asked for.
-#
-# _UNIMPLEMENTED: standard leaves refused whenever present.
-# _FIXED: standard leaves the twin supports at one value only (two for the
-#   end-point direction); any other value is refused. Each is reported at its
-#   value, so a GET body sent back as a PUT passes.
-# Leaves listed in neither are acted on (uuid, name, end-point, the routing
-# and topology constraints, administrative-state, the channel leaves, …) or
-# are config false (operational-state, lifecycle-state, connection, csep-role,
-# connection-end-point): state the server reports and ignores on input.
-_UNIMPLEMENTED: dict[str, tuple[str, ...]] = {
-    "connectivity-service": (
-        "layer-protocol-qualifier", "connectivity-constraint", "resilience-constraint",
-        "connectivity-service", "internal-point", "connectivity-protection-service",
-    ),
-    "end-point": (
-        "layer-protocol-qualifier", "role", "protection-role", "capacity",
-        "administrative-state", "peer-fwd-connectivity-service-end-point",
-        "server-connectivity-service-end-point",
-        "protecting-connectivity-service-end-point",
-        "assembled-connectivity-service-end-point",
-        "profile", "sink-profile", "source-profile",
-    ),
-    "layer-protocol-constraint": (
-        "layer-protocol-qualifier", "name",
-        "tapi-photonic-media:otsi-mcg-connectivity-service-end-point-spec",
-    ),
-    OTSIA_CSEP_SPEC: (
-        "total-power-warn-threshold-upper", "total-power-warn-threshold-lower",
-    ),
-    "otsi-config": (
-        "name", "application-identifier", "laser-control",
-        "otsi-threshold-power-config", "power-management-config-pac",
-    ),
+# (tapi-connectivity and tapi-photonic-media v2.6.0): each member it acts on,
+# with what it acts on below it (None: the whole subtree, checked by its own
+# parser — the name lists, the constraints in algorithms/path_constraints.py,
+# the spectrum in models/connectivity.py). Every other configuration member
+# the YANG defines is refused (501) rather than ignored: admitting the
+# service without it would hand the client a lightpath that does not honour
+# what it asked for. That covers connectivity-constraint,
+# resilience-constraint, the layer-protocol qualifiers, the end-point role,
+# capacity and protection-role, the OTSi power and laser controls, the MCG
+# bandwidth and flexi-grid pacs and the tapi-oam service augments. A member
+# the YANG does not define is a 400 (unknown-element) before any of this.
+# Config-false members (operational-state, connection, csep-role,
+# connection-end-point) are state the server reports: an edit ignores them.
+# _FIXED below names the leaves the twin supports at one value only (two for
+# the end-point direction); any other value is refused. Each is reported at
+# its value, so a GET body sent back as a PUT passes.
+_NAMES: tapi_schema.Supported = {"value-name": None, "value": None}
+_SUPPORTED: tapi_schema.Supported = {
+    "uuid": None,
+    "name": _NAMES,
+    "layer-protocol-name": None,
+    "direction": None,
+    "administrative-state": None,
+    "routing-constraint": None,
+    "topology-constraint": None,
+    "end-point": {
+        "local-id": None,
+        "name": _NAMES,
+        "service-interface-point": None,
+        "layer-protocol-name": None,
+        "direction": None,
+        "layer-protocol-constraint": {
+            "local-id": None,
+            "layer-protocol-name": None,
+            OTSIA_CSEP_SPEC: {
+                "number-of-otsi": None,
+                "otsi-config": {
+                    "local-id": None,
+                    "central-frequency": None,
+                    "channel-output-power": None,
+                    "modulation": {"standard-modulation-technique": None},
+                },
+            },
+            MCG_CSEP_SPEC: {
+                "number-of-mc": None,
+                "mc-spectrum-config-pac": {
+                    "local-id": None,
+                    "name": _NAMES,
+                    "spectrum": None,
+                    "edge-frequency-constraint": None,
+                },
+            },
+        },
+    },
 }
 # A lightpath runs from its SOURCE end-point to its SINK over one-way fibres,
 # so the service is UNIDIRECTIONAL (TapiContext.add_service). Each entry is
@@ -170,11 +221,10 @@ def _unimplemented(raw: dict) -> tuple[list[str], list[str]]:
     values the twin does not support (with the values it does). Invalid:
     values the leaf's YANG type does not admit.
     """
-    found: list[str] = []
+    found = tapi_schema.unsupported_members(raw, SERVICE_SCHEMA, _SUPPORTED)
     invalid: list[str] = []
 
     def check(level: str, node: dict, at: str) -> None:
-        found.extend(f"{at}{key}" for key in _UNIMPLEMENTED[level] if key in node)
         for key, (allowed, valid) in _FIXED.get(level, {}).items():
             if key not in node:
                 continue
@@ -197,10 +247,7 @@ def _unimplemented(raw: dict) -> tuple[list[str], list[str]]:
             lpc_at = f"{ep_at}layer-protocol-constraint[{lpc.get('local-id')}]/"
             check("layer-protocol-constraint", lpc, lpc_at)
             for spec in _entries(lpc.get(OTSIA_CSEP_SPEC) or []):
-                spec_at = f"{lpc_at}{OTSIA_CSEP_SPEC}/"
-                check(OTSIA_CSEP_SPEC, spec, spec_at)
-                for cfg in _entries(spec.get("otsi-config") or []):
-                    check("otsi-config", cfg, f"{spec_at}otsi-config[{cfg.get('local-id')}]/")
+                check(OTSIA_CSEP_SPEC, spec, f"{lpc_at}{OTSIA_CSEP_SPEC}/")
     return found, invalid
 
 
@@ -213,13 +260,16 @@ def _parse_service(body: dict) -> ConnectivityService:
     here — otherwise a malformed payload surfaces as a 500.
 
     Raises:
-        HTTPException: 501 (``operation-not-supported``) when the body
-            carries a standard leaf the twin does not implement, naming
-            each (see ``_UNIMPLEMENTED`` and ``_FIXED``); 400 with the
+        HTTPException: 400 when the body carries a member T-API v2.6.0
+            does not define there (``unknown-element``, see
+            ``refuse_unknown_members``); 501 (``operation-not-supported``)
+            when it carries a standard member the twin does not implement,
+            naming each (see ``_SUPPORTED`` and ``_FIXED``); 400 with the
             RFC 8040 §7 tag of the first problem when it does not validate
             (``validation_error_tag``).
     """
     raw = _single_service(body)
+    refuse_unknown_members(raw, SERVICE_SCHEMA, SERVICE_PATH, _HINTS)
     refused, invalid = _unimplemented(raw)
     if invalid:
         raise RestconfError(
@@ -507,6 +557,148 @@ async def replace_service(uuid: str, body: dict, request: Request) -> Response:
     )
 
 
+#: The container in the data-node tree, and its instance path.
+CONTAINER_PATH = "/tapi-common:context/tapi-connectivity:connectivity-context"
+CONTAINER_SCHEMA = tapi_schema.node(CONTAINER_PATH)
+
+
+def entry_key(entry: Any, list_name: str, path: str) -> str:
+    """The key of a list entry in a body that replaces the whole list.
+
+    RFC 7950 §7.8.2: a list's key leaves are what tell its entries apart,
+    so an entry without its key cannot say whether it replaces, keeps or
+    creates one (``missing-element``, 400 by RFC 8040 erratum 7311).
+
+    Raises:
+        RestconfError: 400, the entry is not an object or has no ``uuid``.
+    """
+    if not isinstance(entry, dict):
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "bad-element",
+            f"each {list_name} entry must be an object", error_path=path,
+        )
+    key = entry.get("uuid")
+    if not isinstance(key, str) or not key:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "missing-element",
+            f"each {list_name} entry must carry its key, uuid, in a PUT that "
+            "replaces the list", error_path=path, error_info={"bad-element": "uuid"},
+        )
+    return key
+
+
+def list_entries(container: Any, member: str, path: str) -> list[Any]:
+    """The entries of list ``member`` in a container's body: an array, a
+    lone object as one entry, or none when the member is absent."""
+    if not isinstance(container, dict):
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "bad-element",
+            "the container must be a JSON object", error_path=path,
+        )
+    entries = container.get(member, [])
+    entries = entries if isinstance(entries, list) else [entries]
+    keys = [entry_key(e, member, f"{path}/{member}") for e in entries]
+    duplicate = next((k for k in keys if keys.count(k) > 1), None)
+    if duplicate is not None:
+        raise RestconfError(
+            status.HTTP_400_BAD_REQUEST, "invalid-value",
+            f"{member} {duplicate!r} appears more than once; a list's keys are unique",
+            error_path=f"{path}/{member}[uuid='{duplicate}']",
+        )
+    return entries
+
+
+def plan_connectivity_context(
+    ctx, container: Any,
+) -> tuple[list[ConnectivityService], set[str]]:
+    """What a connectivity-context PUT makes of the service list.
+
+    Returns the services to admit (new, or changed, each parsed and checked
+    as a POST's would be) and the UUIDs of the current services the body
+    repeats unchanged, which stay exactly as they are: re-admitting them
+    could move their spectrum for nothing. "Unchanged" compares the
+    configuration only (``tapi_schema.config_view``), so an entry sent back
+    as its GET returned it, operational-state and all, is unchanged.
+    Every other current service is deleted by the replacement.
+
+    Raises:
+        RestconfError: A member v2.6.0 does not define (400), a standard one
+            the twin does not implement (501: ``connection``), an entry
+            without its key, or an entry its POST would refuse.
+    """
+    refuse_unknown_members(container, CONTAINER_SCHEMA, CONTAINER_PATH, _HINTS)
+    refused = tapi_schema.unsupported_members(
+        container, CONTAINER_SCHEMA, {"connectivity-service": None},
+    )
+    if refused:
+        raise RestconfError(
+            status.HTTP_501_NOT_IMPLEMENTED, "operation-not-supported",
+            f"not implemented by this twin: {'; '.join(refused)}",
+        )
+    services: list[ConnectivityService] = []
+    keep: set[str] = set()
+    for entry in list_entries(container, "connectivity-service", CONTAINER_PATH):
+        current = ctx.get_service(entry["uuid"])
+        if current is not None and (
+            tapi_schema.config_view(entry, SERVICE_SCHEMA)
+            == tapi_schema.config_view(_connectivity_service_payload(ctx, current), SERVICE_SCHEMA)
+        ):
+            keep.add(current.uuid)
+            continue
+        svc = _parse_service({_SERVICE_KEY: [entry]})
+        _check_sips(ctx, svc)
+        services.append(svc)
+    return services, keep
+
+
+async def replace_lists(ctx, **lists: Any) -> None:
+    """``TapiContext.replace_lists``, with a refused entry turned into the
+    error its own POST would have got, ``error-path`` naming the entry."""
+    try:
+        await ctx.replace_lists(**lists)
+    except EntryRefusedError as exc:
+        cause = exc.cause
+        path = (
+            f"{SERVICE_PATH}[uuid='{exc.uuid}']" if exc.list_name == "connectivity-service"
+            else "/tapi-common:context/tapi-path-computation:path-computation-context"
+            f"/path-comp-service[uuid='{exc.uuid}']"
+        )
+        if isinstance(cause, (ConstraintError, SpectrumRequestError)):
+            error = constraint_error(cause)
+        elif isinstance(cause, KeyError):  # a path-comp-service's SIP
+            error = RestconfError(
+                status.HTTP_409_CONFLICT, "data-missing", str(cause.args[0]),
+                error_app_tag="instance-required",
+            )
+        else:  # no path, spectrum or QoT: admission refused it
+            error = RestconfError(status.HTTP_409_CONFLICT, "resource-denied", str(cause))
+        raise RestconfError(
+            error.status_code, error.error_tag,
+            f"{exc.list_name} {exc.uuid} was refused, so nothing was changed: {error.detail}",
+            error_app_tag=error.error_app_tag, error_path=error.error_path or path,
+        ) from exc
+
+
+@router.put("", status_code=status.HTTP_204_NO_CONTENT)
+async def replace_connectivity_context(body: dict, request: Request) -> Response:
+    """Replace the whole connectivity-service list (RFC 8040 §4.5).
+
+    The body is the container as its GET returns it,
+    ``{"tapi-connectivity:connectivity-context": {"connectivity-service":
+    [...]}}``, and it is the complete new list: a service absent from it is
+    deleted, a new one admitted as a POST would admit it, a changed one
+    replaced, one repeated unchanged kept as it is. All or nothing: if any
+    entry is refused, no service is created, replaced or deleted
+    (``TapiContext.replace_lists``). The container always exists, so the
+    answer is 204, never 201.
+    """
+    ctx = request.app.state.context
+    container = target_member(body, "tapi-connectivity:connectivity-context")
+    services, keep = plan_connectivity_context(ctx, container)
+    await replace_lists(ctx, services=services, keep_services=keep)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 #: What a plain patch may change on a connectivity-service. Every other
 #: config leaf decides the admission (end-points, constraints, format,
 #: spectrum), so it is changed by replacing the service with PUT.
@@ -539,6 +731,7 @@ async def update_service(uuid: str, body: dict, request: Request) -> dict:
         raise RestconfError(
             status.HTTP_400_BAD_REQUEST, "invalid-value", "Body UUID must match path UUID",
         )
+    refuse_unknown_members(raw, SERVICE_SCHEMA, SERVICE_PATH, _HINTS)
     fixed = sorted(set(raw) - _PATCHABLE - _STATE - {"uuid"})
     if fixed:
         raise RestconfError(
@@ -559,12 +752,11 @@ async def update_service(uuid: str, body: dict, request: Request) -> dict:
                 for e in exc.errors()
             ),
         ) from exc
-    if patch.name is not None:
-        svc.name = patch.name
-    if patch.administrative_state is not None:
-        svc.administrative_state = patch.administrative_state
-    if patch.lifecycle_state is not None:
-        svc.lifecycle_state = patch.lifecycle_state
+    # Through the state layer, which moves the datastore's validators.
+    svc = ctx.update_service(
+        uuid, name=patch.name, administrative_state=patch.administrative_state,
+        lifecycle_state=patch.lifecycle_state,
+    )
     await ctx.get_or_compute_baseline(svc)  # current operational-state
     return _entry_body(ctx, svc)
 

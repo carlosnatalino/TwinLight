@@ -1,17 +1,10 @@
-import { useRef, useEffect, useState, useCallback } from "react";
-import CytoscapeComponent from "react-cytoscapejs";
-import cytoscape, { type ElementDefinition, type Core } from "cytoscape";
-import dagre from "cytoscape-dagre";
+import { useEffect, useState, useCallback } from "react";
+import type cytoscape from "cytoscape";
+import type { ElementDefinition, Core } from "cytoscape";
 import { CYTOSCAPE_STYLESHEET, LAYOUT_CONFIGS, type LayoutName } from "@/lib/cytoscape-layout";
+import CytoscapeGraph from "@/components/graph/CytoscapeGraph";
 import NodeTooltip from "./NodeTooltip";
 import LinkTooltip from "./LinkTooltip";
-
-// Register dagre layout (safe to call multiple times)
-try {
-  cytoscape.use(dagre);
-} catch {
-  // Already registered
-}
 
 interface TooltipState {
   type: "node" | "edge";
@@ -49,20 +42,11 @@ export default function TopologyGraph({
 }: TopologyGraphProps) {
   const [cyInstance, setCyInstance] = useState<Core | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
-  const layoutRef = useRef(layoutName);
 
-  const handleCy = useCallback((cy: Core) => {
+  const handleCy = useCallback((cy: Core | null) => {
     cyRef.current = cy;
     setCyInstance(cy);
   }, [cyRef]);
-
-  // Re-run layout when layoutName changes
-  useEffect(() => {
-    if (!cyInstance || layoutName === layoutRef.current) return;
-    layoutRef.current = layoutName;
-    const layout = cyInstance.layout(LAYOUT_CONFIGS[layoutName] || LAYOUT_CONFIGS.cose);
-    layout.run();
-  }, [cyInstance, layoutName]);
 
   // Update label/arrow classes when toggles change
   useEffect(() => {
@@ -133,12 +117,12 @@ export default function TopologyGraph({
 
   return (
     <div className="relative h-full w-full">
-      <CytoscapeComponent
+      <CytoscapeGraph
         elements={elements}
         stylesheet={CYTOSCAPE_STYLESHEET}
         layout={currentLayout}
         style={{ width: "100%", height: "100%" }}
-        cy={handleCy}
+        onCy={handleCy}
       />
 
       {tooltip && tooltip.type === "node" && (

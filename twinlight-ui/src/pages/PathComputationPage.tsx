@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
-import { createClient, ApiError } from "@/api/client";
+import { createClient, errorText } from "@/api/client";
 import { extractName } from "@/lib/tapi-helpers";
 import type {
   ModulationFormat,
@@ -90,7 +90,7 @@ export default function PathComputationPage() {
         }
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
+      setError(errorText(err));
     } finally {
       setLoading(false);
     }

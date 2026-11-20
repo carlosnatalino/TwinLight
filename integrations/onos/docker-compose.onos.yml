@@ -78,7 +78,12 @@ services:
     # ONOS publishes linux/amd64 images only — there is no arm64 tag for any
     # release. On Apple Silicon this runs under Rosetta, which roughly triples
     # the Karaf boot time (expect 2–4 min to a usable CLI, not 40 s).
-    image: onosproject/onos:2.7-latest
+    # Pinned by digest: 2.7-latest moves, and the digest is the image the
+    # integration test passed with. It is the linux/amd64 image manifest (the
+    # tag has no manifest list), so the same image runs natively on amd64 and
+    # emulated on arm64. The tag is only for readers; Docker resolves the
+    # digest. To move the pin, see README § Configuration, "The ONOS image".
+    image: onosproject/onos:2.7-latest@sha256:ee324bcf56ed01497069143f83f1315fcf634b36f1ac3c589a8c54ccaf354813
     platform: linux/amd64
     container_name: ${TWINLIGHT_CONTAINER_PREFIX:-twinlight}-onos
     hostname: onos

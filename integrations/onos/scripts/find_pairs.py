@@ -27,27 +27,131 @@ half from anywhere. Both halves are still random; the adjacency pool only
 makes the short end of the reach distribution reachable in a sane number of
 probes.
 
+**A probe is not the admission decision.** ``/internal/path-info`` reports
+the GSNR an OPM read would give now: the GNPy baseline *after* the twin's
+time-varying transient models (PDL and SOP drift, phase noise, EDFA
+dynamics). Admission gates on the pristine baseline, with no transient term
+(integrations/onos/README.md, "Why the live GSNR differs from the admission
+figure"). The two differ by a few tenths of a dB, more on paths with many
+ROADMs, in either direction and with the time of the probe. So a pair whose
+pristine GSNR lies just below a threshold can probe above it and be refused
+at create: San_Jose -> Louisville on CORONET probed at 10.3 dB against
+DP-QPSK's 10.0 dB, and admission found 9.9 dB. The line load of the pairs
+seeded before it moved that figure by less than 0.1 dB. No twin endpoint
+gives the pristine figure without provisioning, so the search finds up to
+``SPARES`` extra pairs per format (default 1), printed after that format's
+winners. ``seed-demo.sh`` provisions a spare only when a winner is refused,
+and removes the refused flow.
+
+``SEED_RANDOM_SEED`` fixes the sequence of pairs drawn. The search is then
+repeatable up to that same transient term: a pair probing within a few
+tenths of a dB of a threshold can land on either side of it on another run,
+and since a winner takes its A-end, what is probed after it can differ too.
+Against the same twin state at the same moment, it is the same search.
+
+**The admission margin is the twin's.** A format's threshold is its required
+GSNR plus ``rmsa.qot_margin_db``, which is a runtime setting (``/config/set``
+and the transparent controller change it). So each search starts by reading
+it from the twin it probes, at ``/transparent/data/Config/rmsa/qot_margin_db``:
+the transparent controller is the interface the twin documents for reading
+its settings (docs/CONFIGURATION.md, docs/TRANSPARENT_CONTROLLER.md), and it
+answers the effective value, which ``/config/get`` does not (it lists only
+overrides) and ``/metrics`` exports only for monitoring. The request carries
+``TWINLIGHT_API_TOKEN`` as the other scripts' requests to the twin do. A
+twin that cannot answer (one that predates ``/transparent``, or an answer
+without the value) stops the search with the reason rather than falling
+back to a default: a guessed margin is the silent mismatch this replaced,
+seeding refusals or a short format with nothing to say why.
+
+The required GSNR per format is still this file's copy of the twin's
+modulation table (``REQUIRED_GSNR_DB``). The twin publishes it read-only at
+``/transparent/data/ModulationList/<format>/req_gsnr_db``; it changes only
+with the twin's code, not at run time.
+
 Only the standard library, matching the rest of the demo scripts.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import sys
 import urllib.error
+from collections.abc import Callable
 
 from tapi_fields import twin_data_root, twin_urlopen  # same directory: on sys.path when run
 
-# Required GSNR per format, plus the default rmsa.qot_margin_db of 1.5 dB.
-# Ordered high to low: a probe is filed under the best format it supports.
-# Kept in step with physics/modulation.py MODULATION_TABLE.
-THRESHOLDS: list[tuple[str, float]] = [
-    ("DP-64QAM", 20.5 + 1.5),
-    ("DP-16QAM", 14.5 + 1.5),
-    ("DP-QPSK", 8.5 + 1.5),
+# Required GSNR per format, before the margin. Ordered high to low: a probe is
+# filed under the best format it supports. Kept in step with
+# physics/modulation.py MODULATION_TABLE (the twin's ModulationList).
+REQUIRED_GSNR_DB: list[tuple[str, float]] = [
+    ("DP-64QAM", 20.5),
+    ("DP-16QAM", 14.5),
+    ("DP-QPSK", 8.5),
 ]
+
+# Where the twin answers its admission margin (see the module docstring).
+MARGIN_PATH = "/transparent/data/Config/rmsa/qot_margin_db"
+
+
+class MarginUnavailableError(RuntimeError):
+    """The twin did not say what its admission margin is."""
+
+
+def thresholds(margin_db: float) -> list[tuple[str, float]]:
+    """(format, GSNR the twin admits it at), high to low, for a margin."""
+    return [(fmt, required + margin_db) for fmt, required in REQUIRED_GSNR_DB]
+
+
+def _as_margin(value: object) -> float | None:
+    """A margin in dB from the leaf's JSON value, or None.
+
+    A number, or a numeric string: RFC 7951 §6.1 encodes a YANG decimal64 as
+    a string, should the leaf ever be typed so.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        margin = float(value)
+    elif isinstance(value, str):
+        try:
+            margin = float(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return margin if math.isfinite(margin) and margin >= 0 else None
+
+
+def read_margin(base: str) -> float:
+    """The twin's ``rmsa.qot_margin_db`` now, in dB.
+
+    Raises :class:`MarginUnavailableError` with the reason when the twin
+    cannot be asked or does not say; a refused token exits through
+    :func:`twin_urlopen` with its own explanation.
+    """
+    url = f"{base.rstrip('/')}{MARGIN_PATH}"
+    try:
+        body = _get(url)
+    except urllib.error.HTTPError as exc:
+        raise MarginUnavailableError(
+            f"GET {url}: HTTP {exc.code}; a twin without the transparent "
+            "controller predates this script"
+        ) from None
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise MarginUnavailableError(f"GET {url}: {exc}") from None
+    rmsa = (
+        ((body.get("twinlight-transparent:data") or {}).get("Config") or {}).get("rmsa")
+        if isinstance(body, dict) else None
+    )
+    margin = _as_margin(rmsa.get("qot_margin_db")) if isinstance(rmsa, dict) else None
+    if margin is None:
+        raise MarginUnavailableError(
+            f"GET {url}: the answer carries no usable qot_margin_db: {json.dumps(body)[:200]}"
+        )
+    return margin
 
 
 def _get(url: str) -> dict:
@@ -109,27 +213,32 @@ def _probe(base: str, sip_a: str, sip_z: str) -> tuple[float, float] | None:
     return float(gsnr), float(info.get("total-fiber-km") or 0.0)
 
 
-def main() -> int:
-    base = os.environ.get("TWIN_URL", "http://localhost:8080").rstrip("/")
-    wanted = {
-        "DP-64QAM": int(os.environ.get("Q64_WANTED", "2")),
-        "DP-16QAM": int(os.environ.get("Q16_WANTED", "3")),
-        "DP-QPSK": int(os.environ.get("QPSK_WANTED", "3")),
-    }
-    attempts = int(os.environ.get("ATTEMPTS", "40"))
-    seed = os.environ.get("SEED_RANDOM_SEED") or None
-    rng = random.Random(seed) if seed else random.Random()
+Found = dict[str, list[tuple[str, str, float, float]]]
 
-    cities = _cities(base)
-    if len(cities) < 2:
-        print("twin reported fewer than two SIPs", file=sys.stderr)
-        return 1
 
-    names = sorted(cities)
-    adjacent = _adjacent(base, cities)
-    found: dict[str, list[tuple[str, str, float, float]]] = {
-        fmt: [] for fmt in wanted
-    }
+def search(
+    rng: random.Random,
+    names: list[str],
+    adjacent: list[tuple[str, str]],
+    probe: Callable[[str, str], tuple[float, float] | None],
+    wanted: dict[str, int],
+    spares: int,
+    attempts: int,
+    margin_db: float,
+) -> tuple[Found, int]:
+    """Draw and probe pairs; per format, up to ``wanted`` + ``spares`` winners.
+
+    A format's threshold is its required GSNR plus ``margin_db``, the
+    twin's admission margin (:func:`read_margin`); the search itself asks
+    the twin nothing but the probes.
+    ``probe(a, z)`` returns (GSNR dB, path km) or None. Winners are kept in
+    the order found, so the first ``wanted`` of a format are its pairs and
+    the rest its spares. ``names`` and ``adjacent`` must be in a fixed order
+    for a seeded ``rng`` to repeat the draw. Returns the winners and how many
+    distinct pairs were drawn.
+    """
+    limit = {fmt: wanted[fmt] + spares for fmt in wanted}
+    found: Found = {fmt: [] for fmt in wanted}
     tried: set[tuple[str, str]] = set()
     # ONOS keys an OLS flow rule on its selector, the in-port, and not on the
     # out-port: a second lightpath from the same A-end gets the first one's
@@ -139,7 +248,7 @@ def main() -> int:
     sources: set[str] = set()
 
     for attempt in range(attempts):
-        if all(len(found[f]) >= wanted[f] for f in wanted):
+        if all(len(found[f]) >= limit[f] for f in wanted):
             break
         # Alternate the two pools so both the short and the long end of the
         # reach distribution get probed within the budget.
@@ -156,19 +265,60 @@ def main() -> int:
                 continue
             a, z = z, a
 
-        result = _probe(base, cities[a], cities[z])
+        result = probe(a, z)
         if result is None:
             continue
         gsnr, km = result
 
         # File under the best format this pair supports and still needs.
-        for fmt, threshold in THRESHOLDS:
-            if gsnr >= threshold and len(found[fmt]) < wanted[fmt]:
+        for fmt, threshold in thresholds(margin_db):
+            if fmt in found and gsnr >= threshold and len(found[fmt]) < limit[fmt]:
                 found[fmt].append((a, z, gsnr, km))
                 sources.add(a)
                 break
+    return found, len(tried)
 
-    for fmt, _threshold in THRESHOLDS:
+
+def main() -> int:
+    base = os.environ.get("TWIN_URL", "http://localhost:8080").rstrip("/")
+    wanted = {
+        "DP-64QAM": int(os.environ.get("Q64_WANTED", "2")),
+        "DP-16QAM": int(os.environ.get("Q16_WANTED", "3")),
+        "DP-QPSK": int(os.environ.get("QPSK_WANTED", "3")),
+    }
+    spares = int(os.environ.get("SPARES", "1"))
+    attempts = int(os.environ.get("ATTEMPTS", "40"))
+    seed = os.environ.get("SEED_RANDOM_SEED") or None
+    rng = random.Random(seed) if seed else random.Random()
+
+    try:
+        margin = read_margin(base)
+    except MarginUnavailableError as exc:
+        print(f"cannot read the twin's admission margin: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"admission margin {margin:g} dB, read from the twin: thresholds "
+        + ", ".join(f"{fmt} {gsnr:g} dB" for fmt, gsnr in thresholds(margin)),
+        file=sys.stderr,
+    )
+
+    cities = _cities(base)
+    if len(cities) < 2:
+        print("twin reported fewer than two SIPs", file=sys.stderr)
+        return 1
+
+    found, tried = search(
+        rng,
+        sorted(cities),
+        _adjacent(base, cities),
+        lambda a, z: _probe(base, cities[a], cities[z]),
+        wanted,
+        spares,
+        attempts,
+        margin,
+    )
+
+    for fmt, _required in REQUIRED_GSNR_DB:
         for a, z, gsnr, km in found[fmt]:
             label = f"{km:.0f} km, {gsnr:.1f} dB"
             print(f"{a}:{z}:{fmt}:{label}")
@@ -182,7 +332,7 @@ def main() -> int:
         # Not fatal: a topology may simply have nothing short enough for
         # DP-64QAM. Say so rather than silently seeding fewer lightpaths.
         print(
-            f"probed {len(tried)} pairs; short of target: {', '.join(short)}",
+            f"probed {tried} pairs; short of target: {', '.join(short)}",
             file=sys.stderr,
         )
     return 0

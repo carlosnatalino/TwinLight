@@ -180,6 +180,11 @@ docker compose down          # stop the stack, keep Prometheus/Grafana volumes
 docker compose down -v       # stop and discard the metric history too
 ```
 
+The twin allows the web UI's origin through `TWINLIGHT_CORS_ORIGINS`, which
+the Compose file derives from `TWINLIGHT_UI_PORT`, so the UI keeps working on
+another port; set the variable in `.env` to allow other origins
+([docs/CONFIGURATION.md](docs/CONFIGURATION.md#server--listening-sockets)).
+
 To run a second stack beside one that is already up (another checkout, or a
 pull request under review), move its container names, image tags, ports and
 snapshot directory with the variables listed in [.env.example](.env.example);

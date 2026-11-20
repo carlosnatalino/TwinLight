@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useConnectionStore } from "@/store/connection";
-import { createClient } from "@/api/client";
+import { createClient, errorText } from "@/api/client";
 import type { SpectrumGridResponse } from "@/api/types";
 import { cn } from "@/lib/cn";
 
@@ -114,7 +114,7 @@ export default function SpectrumGridPage() {
           error: e instanceof Error ? e.message : String(e),
           stack: e instanceof Error ? e.stack : undefined,
         });
-        setError(e instanceof Error ? e.message : "Failed to load");
+        setError(errorText(e, "Failed to load"));
       })
       .finally(() => setLoading(false));
   }, [baseUrl]);

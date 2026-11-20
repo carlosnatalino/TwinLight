@@ -4,16 +4,21 @@ RFC 8040 §3.1 locates the API under a root resource that a client finds via
 ``/.well-known/host-meta`` rather than by assuming a path. TwinLight serves
 the T-API modules under ``{server.restconf_root}/data/…`` and nowhere else:
 the bare ``/data/…`` that earlier releases also served is gone, unless the
-root itself is empty, in which case ``/data/…`` *is* the data resource.
+root itself is empty, in which case ``/data/…`` *is* the data resource, and
+the API resource is ``/``.
 """
 
 from __future__ import annotations
+
+import xml.etree.ElementTree as ET
+from urllib.parse import urljoin
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import tapi_end_point
 from twinlight.app import create_app
+from twinlight.auth import parse_tokens
 from twinlight.config import GnpyConfig, ServerConfig, TwinConfig
 
 _RESOURCE = "/tapi-common:context/service-interface-point"
@@ -156,11 +161,6 @@ class TestConfigurableRoot:
         assert resp.headers["content-type"].startswith("application/yang-data+json")
         assert client.get(f"/restconf/data{path}").status_code == 404
 
-    def test_empty_root_serves_no_host_meta(self, twin_config: TwinConfig) -> None:
-        # Clients read the 404 as "T-API is at /data" (twinlight_client.restconf).
-        client = _with_root(twin_config, "")
-        assert client.get("/.well-known/host-meta").status_code == 404
-
     @pytest.mark.parametrize("root", ["restconf", "no/leading/slash"])
     def test_relative_root_is_rejected(
         self, edfa_topology_path, root: str
@@ -177,3 +177,98 @@ class TestConfigurableRoot:
         assert ServerConfig(restconf_root="/restconf/").restconf_root == (
             "/restconf"
         )
+
+
+_XRD_LINK = "{http://docs.oasis-open.org/ns/xri/xrd-1.0}Link"
+_YANG = "application/yang-data+json"
+_TOKEN = "discovery-token-0123456789abcdef"
+
+
+def _discover(client: TestClient, base: str, headers: dict[str, str]) -> str:
+    """The API resource ``{+restconf}`` as an RFC 8040 §3.1 client finds it.
+
+    Exactly one ``restconf`` link; its ``href`` resolved against host-meta's
+    own URL (RFC 3986 §5.2), as a reference in a retrieved document is.
+    """
+    resp = client.get(f"{base}/.well-known/host-meta", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/xrd+xml")
+    assert resp.headers["cache-control"] == "no-cache"
+    links = [link for link in ET.fromstring(resp.text).iter(_XRD_LINK)
+             if link.get("rel") == "restconf"]
+    assert len(links) == 1, resp.text
+    href = links[0].get("href")
+    # XRD 1.0 §1.5.2: a URI in an XRD has at least one non-whitespace character.
+    assert href and href.strip(), resp.text
+    return urljoin(f"{base}/.well-known/host-meta", href)
+
+
+class TestDiscoveryUnderEveryRoot:
+    """RFC 8040 §3.1 and §3.3 hold for the default, a custom and an empty root."""
+
+    @pytest.mark.parametrize("auth", [False, True], ids=["open", "tokens"])
+    @pytest.mark.parametrize("root", ["/restconf", "/api", ""])
+    def test_the_api_resource_and_its_children(
+        self, twin_config: TwinConfig, root: str, auth: bool,
+    ) -> None:
+        twin_config.server.restconf_root = root
+        headers: dict[str, str] = {}
+        if auth:
+            twin_config = twin_config.model_copy(
+                update={"api_tokens": parse_tokens(f"ui:{_TOKEN}")})
+            headers = {"Authorization": f"Bearer {_TOKEN}"}
+        base = "http://twin.example:8080"
+        client = TestClient(create_app(twin_config), base_url=base)
+        if auth:
+            assert client.get("/.well-known/host-meta").status_code == 401
+
+        restconf = _discover(client, base, headers)
+        # {+restconf} is the root under the host the request reached: a
+        # path-absolute href resolves to it, and so does the empty root's
+        # absolute URI, whose path is empty.
+        assert restconf == f"{base}{root}"
+        # §3.3: the API resource and each child, at {+restconf}/<child>. An
+        # empty path is requested as "/" (RFC 9110 §4.2.3).
+        api = client.get(restconf or "/", headers=headers)
+        assert api.status_code == 200, (restconf, api.text)
+        assert api.headers["content-type"].startswith(_YANG)
+        assert set(api.json()["ietf-restconf:restconf"]) == {
+            "data", "operations", "yang-library-version"}
+        children = {
+            "/data": "ietf-restconf:data",
+            "/operations": "ietf-restconf:operations",
+            "/yang-library-version": "ietf-restconf:yang-library-version",
+        }
+        for child, member in children.items():
+            resp = client.get(f"{restconf}{child}", headers=headers)
+            assert resp.status_code == 200, (child, resp.text)
+            assert resp.headers["content-type"].startswith(_YANG), child
+            assert member in resp.json(), child
+        sips = client.get(f"{restconf}/data{_RESOURCE}", headers=headers)
+        assert len(sips.json()["tapi-common:service-interface-point"]) == 2
+
+    def test_an_empty_root_is_named_by_the_host_the_request_reached(
+        self, twin_config: TwinConfig,
+    ) -> None:
+        client = _with_root(twin_config, "")
+        for host in ("localhost:18306", "twin", "[::1]:8080"):
+            resp = client.get("/.well-known/host-meta", headers={"Host": host})
+            assert f"href='http://{host}'" in resp.text, resp.text
+        https = TestClient(client.app, base_url="https://twin.example")
+        assert "href='https://twin.example'" in https.get("/.well-known/host-meta").text
+
+    def test_the_href_is_escaped(self, twin_config: TwinConfig) -> None:
+        client = _with_root(twin_config, "")
+        for host in ("a&b", "a'b"):
+            resp = client.get("/.well-known/host-meta", headers={"Host": host})
+            (link,) = ET.fromstring(resp.text).iter(_XRD_LINK)
+            assert link.get("href") == f"http://{host}"
+
+    def test_a_root_owns_slash_only_when_it_is_empty(self, twin_config: TwinConfig) -> None:
+        """No collision: nothing else is served at /, /operations or
+        /yang-library-version, and with a root they stay unserved."""
+        client = _with_root(twin_config, "/restconf")
+        for path in ("/", "/operations", "/yang-library-version"):
+            assert client.get(path).status_code == 404, path
+        for path in ("/docs", "/openapi.json", "/health"):
+            assert _with_root(twin_config, "").get(path).status_code == 200, path

@@ -48,8 +48,12 @@ what the T-API specification says it should do. The four behaviours that matter:
 4. ``TapiFlowRuleProgrammable`` POSTs a connectivity-service whose body is a
    **JSON list** under ``tapi-connectivity:connectivity-service`` and carries
    ``service-layer`` / ``service-type`` but no modulation format. The array
-   of one is RFC 7951 §5.4's encoding, which the twin takes, so it is
-   forwarded as it is; but the twin still needs a modulation, which T-API
+   of one is RFC 7951 §5.4's encoding, which the twin takes, so the envelope
+   is kept; its members are not. The twin refuses a member T-API v2.6.0 does
+   not define (``400 unknown-element``), and ``service-layer`` and
+   ``service-type`` are T-API 2.1's, so the adapter builds the entry anew
+   from what it can translate and drops the rest, member by member (see
+   ``ONOS_SERVICE_MEMBERS``). The twin still needs a modulation, which T-API
    2.1 has nowhere to carry. The adapter supplies
    one as policy, in the T-API 2.6 place: a ``tapi-photonic-media`` augment
    on the end-point. Translated in :func:`create_connectivity_service`.
@@ -107,12 +111,25 @@ GRID_GRANULARITY = os.getenv("ADAPTER_GRID_GRANULARITY", "G_50GHZ")
 # empty -- which includes the moment it first connects. Left exposed, that
 # silently tears down lightpaths the twin (or the UI, or examples/
 # demo_services.py) already had. Default is therefore to show ONOS only the
-# services ONOS itself created.
+# services ONOS itself created, and to forward its DELETEs for those only.
 EXPOSE_TWIN_SERVICES = os.getenv("ADAPTER_EXPOSE_TWIN_SERVICES", "false").lower() in (
     "1",
     "true",
     "yes",
 )
+
+# What makes a service one "ONOS itself created": this name-and-value pair,
+# which create_connectivity_service() puts in the `name` list of every service
+# it creates. The list is standard T-API (tapi-common v2.6.0, grouping
+# global-class: `list name { key 'value-name'; uses name-and-value; }`), the
+# twin stores and returns it as sent, and it is part of the twin's checkpoint.
+# Ownership therefore lives with the service, on the system of record: it
+# survives a restart of this adapter, whose registry is only memory, and it
+# cannot outlive a service the twin has lost. The twin gives the pair no
+# meaning; it is this adapter's own label, as "service-name" is the UI's.
+# One rule, _shown_to_onos(), reads it for both the list ONOS is served and
+# the DELETEs that are forwarded, so ONOS can delete exactly what it is shown.
+ONOS_MARK = {"value-name": "provisioned-by", "value": "onos-odtn"}
 
 SIP_REFRESH_SECONDS = float(os.getenv("ADAPTER_SIP_REFRESH_SECONDS", "30"))
 HTTP_TIMEOUT = float(os.getenv("ADAPTER_HTTP_TIMEOUT", "120"))
@@ -151,6 +168,57 @@ MODULATION_TO_MT = {
     "DP-64QAM": "MT_DP-QAM64",
 }
 MT_TO_MODULATION = {mt: fmt for fmt, mt in MODULATION_TO_MT.items()}
+
+
+# What becomes of each member of ONOS's T-API 2.1 create body: the members
+# TapiFlowRuleProgrammable.createConnectivityRequest() writes (pinned by
+# tests/test_tapi_adapter.onos_connectivity_request). The twin answers a
+# member T-API v2.6.0 does not define with 400 unknown-element, and a v2.6.0
+# member it does not implement with 501, so the entry the twin receives is
+# built anew in create_connectivity_service and nothing is forwarded as ONOS
+# wrote it. A member ONOS sends that is not listed here is dropped as well,
+# with a warning naming it.
+ONOS_SERVICE_MEMBERS = {
+    "uuid": "kept: the twin's service UUID, so ONOS's later DELETE lines up",
+    "end-point": "translated member by member (ONOS_END_POINT_MEMBERS)",
+    "service-layer": (
+        "dropped: T-API 2.1 only; v2.6.0 says layer-protocol-name, whose "
+        "PHOTONIC_MEDIA is the twin's default and only value"
+    ),
+    "service-type": (
+        "dropped: T-API 2.1 only; a twin service is point-to-point by "
+        "construction"
+    ),
+}
+ONOS_END_POINT_MEMBERS = {
+    "service-interface-point": "translated: ONOS's port-indexed SIP UUID to the twin's",
+    "local-id": "replaced: the end-points are numbered 1 and 2 in ONOS's order",
+    "layer-protocol-name": "dropped: PHOTONIC_MEDIA, the twin's default",
+    "layer-protocol-qualifier": (
+        "dropped: a v2.6.0 member the twin does not implement (501); ONOS "
+        "asks for the NMC qualifier, which is what a twin service is"
+    ),
+}
+# Translated rather than dropped: these reach the twin in another form.
+_ONOS_TRANSLATED = {"uuid", "end-point", "service-interface-point", "local-id"}
+
+
+def _dropped_onos_members(service: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """``(known, unexpected)``: the members of ONOS's entry the twin will not
+    receive, each with its path, split by whether ONOS_*_MEMBERS lists it."""
+    known: list[str] = []
+    unexpected: list[str] = []
+    for member in service:
+        if member not in _ONOS_TRANSLATED:
+            (known if member in ONOS_SERVICE_MEMBERS else unexpected).append(member)
+    for index, end_point in enumerate(service.get("end-point") or []):
+        if not isinstance(end_point, dict):
+            continue
+        for member in end_point:
+            if member not in _ONOS_TRANSLATED:
+                where = f"end-point[{index}]/{member}"
+                (known if member in ONOS_END_POINT_MEMBERS else unexpected).append(where)
+    return known, unexpected
 
 
 def _modulation_augment(modulation: str) -> dict[str, Any]:
@@ -506,16 +574,28 @@ class OnosServiceRegistry:
 
     Keyed by the UUID ONOS generated, which the adapter passes through to the
     twin verbatim so that ONOS's later DELETE resolves without a second lookup.
+
+    Memory only, and what ``/adapter/status`` reports, not what decides
+    ownership: that is the mark each service carries on the twin (ONOS_MARK).
+    :meth:`sync` brings the registry in line with the marked services the
+    twin holds, so it is right again after an adapter restart, and after a
+    service has left the twin without the adapter being asked.
     """
 
     def __init__(self) -> None:
         self._services: dict[str, dict[str, Any]] = {}
         self._endpoints: dict[str, dict[str, Any]] = {}
         self.rejections: list[dict[str, Any]] = []
+        # DELETEs answered without being forwarded, newest last, by UUID.
+        self.refused_deletes: dict[str, dict[str, Any]] = {}
+        # Counts the creates and deletes seen, so sync() can tell a list of
+        # the twin's services read before one of them from one read after.
+        self.version = 0
 
     def record(
         self, uuid: str, payload: dict[str, Any], endpoints: dict[str, Any] | None = None
     ) -> None:
+        self.version += 1
         self._services[uuid] = payload
         if endpoints is not None:
             # The ONOS port pair is the only field both sides share: ONOS's
@@ -526,8 +606,55 @@ class OnosServiceRegistry:
         return self._endpoints.get(uuid, {})
 
     def forget(self, uuid: str) -> None:
+        self.version += 1
         self._services.pop(uuid, None)
         self._endpoints.pop(uuid, None)
+
+    def sync(self, created: list[dict[str, Any]], version: int) -> None:
+        """Hold exactly the ONOS-created services the twin holds.
+
+        ``created`` is the twin's list, filtered on the mark; ``version`` is
+        this registry's when that list was requested. If a create or a
+        delete went by since, the list may predate it and is not applied:
+        the next call reads a newer one. Port pairs recorded at create time
+        are kept; those of services found here are read back off the twin's
+        copy (see :func:`_endpoints_of`).
+        """
+        if version != self.version:
+            return
+        held = {str(service.get("uuid")): service for service in created}
+        for uuid in [u for u in self._services if u not in held]:
+            del self._services[uuid]
+            self._endpoints.pop(uuid, None)
+        for uuid, service in held.items():
+            # The entry as its GET returns it, an array of one: the shape of
+            # the 201 that record() stores at create time.
+            self._services[uuid] = {SERVICE_KEY: [service]}
+            if uuid not in self._endpoints:
+                self._endpoints[uuid] = _endpoints_of(service)
+
+    def record_refused_delete(self, uuid: str) -> bool:
+        """Count a DELETE that was not forwarded; True the first time for a UUID.
+
+        Bounded like the rejections. A UUID that has dropped out of the last
+        50 is logged again if it comes back.
+        """
+        now = time.time()
+        entry = self.refused_deletes.pop(uuid, None)
+        first = entry is None
+        if entry is None:
+            entry = {
+                "uuid": uuid,
+                "reason": "not-shown-to-onos",
+                "count": 0,
+                "first-at": now,
+            }
+        entry["count"] += 1
+        entry["last-at"] = now
+        self.refused_deletes[uuid] = entry
+        for stale in list(self.refused_deletes)[:-50]:
+            del self.refused_deletes[stale]
+        return first
 
     def record_rejection(self, uuid: str, reason: str, detail: str) -> None:
         # Bounded: a demo left running for hours should not grow without limit.
@@ -642,9 +769,10 @@ def _parse_host_meta(xrd: str) -> str:
 async def _twin_data(request: Request) -> str:
     """The twin's data resource, ``{root}/data``, discovered once.
 
-    A twin without host-meta (404) runs with an empty root, or predates it,
-    and serves T-API at /data. Any other failure is the twin being
-    unavailable, and is not cached, so the next call retries.
+    A twin with an empty root advertises ``http://host:port``, whose path is
+    empty, so T-API is at /data; an older twin without host-meta (404)
+    serves it there too. Any other failure is the twin being unavailable,
+    and is not cached, so the next call retries.
     """
     global _data_root
     if _data_root is None:
@@ -885,37 +1013,97 @@ async def get_sip(onos_uuid: str, request: Request) -> JSONResponse:
     return JSONResponse(decorated)
 
 
+def _onos_created(service: Any) -> bool:
+    """Whether a twin connectivity-service carries the adapter's mark."""
+    names = service.get("name") if isinstance(service, dict) else None
+    return any(
+        isinstance(entry, dict)
+        and all(entry.get(key) == value for key, value in ONOS_MARK.items())
+        for entry in names or []
+    )
+
+
+def _shown_to_onos(service: Any) -> bool:
+    """The one rule for what ONOS is shown and, therefore, may delete.
+
+    The services ONOS created, or every service with EXPOSE_TWIN_SERVICES.
+    The list GET and the DELETE both ask this, of the twin's own copy of the
+    service, so the two cannot come apart.
+    """
+    return EXPOSE_TWIN_SERVICES or _onos_created(service)
+
+
+def _endpoints_of(service: dict[str, Any]) -> dict[str, Any]:
+    """The ONOS port pair and end names of a service created earlier.
+
+    What create_connectivity_service() records while it has ONOS's request
+    in hand, read back off the twin's copy for a service this process did
+    not see created: the port pair from the name it was stamped into, the
+    end names from the SIPs. The ports are the ones ONOS asked with, which
+    its flow rule still carries.
+    """
+    names = {
+        entry.get("value-name"): entry.get("value")
+        for entry in service.get("name") or []
+        if isinstance(entry, dict)
+    }
+    pair = names.get("onos-port-pair")
+    ports = re.fullmatch(r"(\d+)->(\d+)", pair) if isinstance(pair, str) else None
+    ends = ["", ""]
+    for i, end_point in enumerate((service.get("end-point") or [])[:2]):
+        ref = end_point.get("service-interface-point") if isinstance(end_point, dict) else None
+        sip = str((ref or {}).get("service-interface-point-uuid", ""))
+        ends[i] = _node_name(catalogue.twin_sip(catalogue.onos_uuid_for(sip) or "") or {})
+    return {
+        "onos-in-port": int(ports.group(1)) if ports else None,
+        "onos-out-port": int(ports.group(2)) if ports else None,
+        "onos-port-pair": pair if ports else None,
+        "a-end": ends[0],
+        "z-end": ends[1],
+    }
+
+
+async def _twin_services(request: Request) -> list[Any]:
+    """Every connectivity service the twin holds, from its list GET.
+
+    The list is the body's one top-level member (RFC 8040 §4.3). A body
+    without it is a twin this adapter does not understand, not one without
+    services: read as an empty list, it would tell ONOS that every service
+    is gone.
+    """
+    payload = await _twin_get(
+        request,
+        f"{await _twin_data(request)}/tapi-common:context"
+        "/tapi-connectivity:connectivity-context/connectivity-service",
+    )
+    services = payload.get(SERVICE_KEY) if isinstance(payload, dict) else None
+    if not isinstance(services, list):
+        raise TwinProtocolError(
+            "The twin's connectivity-service list carries no "
+            "tapi-connectivity:connectivity-service member"
+        )
+    return services
+
+
 @app.get("/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/")
 @app.get("/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context")
 async def get_connectivity_context(request: Request) -> JSONResponse:
     """Connectivity services visible to ONOS.
 
     By default only services ONOS created are listed; see EXPOSE_TWIN_SERVICES
-    for why hiding the rest protects a running demo.
+    for why hiding the rest protects a running demo. What is listed here is
+    what ONOS may delete (:func:`_shown_to_onos`).
     """
     try:
-        payload = await _twin_get(
-            request,
-            f"{await _twin_data(request)}/tapi-common:context"
-            "/tapi-connectivity:connectivity-context/connectivity-service",
-        )
+        services = await _twin_services(request)
+    except TwinProtocolError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
     except TwinUnavailableError as exc:
         raise _bad_gateway(request, exc) from exc
 
-    # The twin's list GET answers with the list as its one top-level member
-    # (RFC 8040 §4.3). A body without it is a twin this adapter does not
-    # understand, not one without services: answering ONOS with an empty
-    # list would read as "every service is gone".
-    services = payload.get("tapi-connectivity:connectivity-service")
-    if not isinstance(services, list):
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The twin's connectivity-service list carries no "
-            "tapi-connectivity:connectivity-service member",
-        )
-    if not EXPOSE_TWIN_SERVICES:
-        owned = set(registry.uuids())
-        services = [s for s in services if str(s.get("uuid")) in owned]
+    services = [s for s in services if _shown_to_onos(s)]
     try:
         services = [_onos_numbers(s) for s in services]
     except TwinProtocolError as exc:
@@ -933,11 +1121,14 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
 
     ONOS sends the entry as a list of one under
     ``tapi-connectivity:connectivity-service``, which is the standard
-    encoding the twin takes as it is. What is translated: the SIPs (ONOS's
-    port-indexed UUIDs back to the twin's), the T-API 2.1 end-point leaves
-    ONOS adds (dropped), and the modulation format, which 2.1 cannot carry
-    (added as the 2.6 augment). ONOS's UUID is reused as the twin's service
-    UUID so the later DELETE lines up.
+    encoding the twin takes as it is. The entry itself is rebuilt, since the
+    twin refuses the T-API 2.1 members in it: what each of ONOS's members
+    becomes is ``ONOS_SERVICE_MEMBERS`` and ``ONOS_END_POINT_MEMBERS``, and
+    the members dropped are logged by name, so the adapter's log records what
+    ONOS really sent. Translated: the SIPs (ONOS's port-indexed UUIDs back to
+    the twin's) and the modulation format, which 2.1 cannot carry (added as
+    the 2.6 augment). ONOS's UUID is reused as the twin's service UUID so the
+    later DELETE lines up.
 
     A 409 from the twin is not a failure of the adapter: it means the RMSA/QoT
     admission path refused the lightpath. It is relayed unchanged so ONOS marks
@@ -954,6 +1145,18 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
     # ONOS emits exactly one service per flow rule.
     onos_service = services[0]
     onos_uuid = str(onos_service.get("uuid", ""))
+    known, unexpected = _dropped_onos_members(onos_service)
+    if known:
+        log.info(
+            "not forwarded from ONOS's T-API 2.1 request %s: %s",
+            onos_uuid[:8], ", ".join(known),
+        )
+    if unexpected:
+        log.warning(
+            "ONOS's request %s carries members this adapter does not know; "
+            "dropped, since the twin refuses what T-API v2.6.0 does not define: %s",
+            onos_uuid[:8], ", ".join(unexpected),
+        )
     endpoints = onos_service.get("end-point", [])
     if len(endpoints) != 2:
         raise HTTPException(
@@ -1104,12 +1307,45 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
     "connectivity-service={uuid}"
 )
 async def delete_connectivity_service(uuid: str, request: Request) -> Response:
-    """Delete a lightpath. ONOS treats only 204 as success."""
+    """Delete a lightpath ONOS is shown. ONOS treats only 204 as success.
+
+    ONOS may delete what the list GET shows it and nothing else, so the
+    service is first read from the twin and put to the list's own rule
+    (:func:`_shown_to_onos`); only then is the DELETE forwarded. With
+    EXPOSE_TWIN_SERVICES everything is shown, and there is nothing to read.
+
+    A service the twin holds but ONOS is not shown is left alone, and the
+    answer is still 204: to ONOS that service does not exist, which is what
+    a 404 from the twin is reported as below, and for the same reason. Any
+    other status would wedge the flow rule that sent the DELETE in
+    PENDING_REMOVE. The refusal is logged once per UUID and counted in
+    ``/adapter/status``.
+    """
+    client: httpx.AsyncClient = request.app.state.client
     try:
-        response = await request.app.state.client.delete(
+        path = (
             f"{await _twin_data(request)}/tapi-common:context"
             f"/tapi-connectivity:connectivity-context/connectivity-service={uuid}"
         )
+        lookup = None if EXPOSE_TWIN_SERVICES else await client.get(path)
+        if lookup is not None and lookup.status_code == status.HTTP_200_OK:
+            service = _service_entry(lookup)
+            if service is None:
+                # Not read as "ONOS's" or as "not ONOS's": nothing is deleted
+                # on a body the adapter does not understand. A 502, logged
+                # once per outage like any unreadable answer, and ONOS retries.
+                raise TwinProtocolError(
+                    f"GET {path}: the body is not a {SERVICE_KEY} array of one"
+                )
+            if not _shown_to_onos(service):
+                request.app.state.twin_reach.recovered("unreachable")
+                return _refused_delete(uuid)
+        if lookup is None or lookup.status_code == status.HTTP_200_OK:
+            response = await client.delete(path)
+        else:
+            # The service is not there (404), or the twin could not say:
+            # answered below as the DELETE it stood in for would have been.
+            response = lookup
     except (httpx.HTTPError, TwinUnavailableError) as exc:
         raise _bad_gateway(request, exc) from exc
     if response.status_code < 500:
@@ -1135,6 +1371,34 @@ async def delete_connectivity_service(uuid: str, request: Request) -> Response:
     return JSONResponse(
         {"error": _error_detail(response)}, status_code=response.status_code
     )
+
+
+def _service_entry(response: httpx.Response) -> dict[str, Any] | None:
+    """The connectivity-service of the twin's entry GET, or None.
+
+    The entry comes as an array of one (RFC 8040 §4.3, RFC 7951 §5.4); None
+    for any other body.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    entries = payload.get(SERVICE_KEY) if isinstance(payload, dict) else None
+    if isinstance(entries, list) and len(entries) == 1 and isinstance(entries[0], dict):
+        return entries[0]
+    return None
+
+
+def _refused_delete(uuid: str) -> Response:
+    """Answer a DELETE for a service ONOS is not shown: 204, nothing deleted."""
+    if registry.record_refused_delete(uuid):
+        log.warning(
+            "refused to delete %s: the twin holds it, but ONOS did not create it "
+            "and is not shown it. Answered 204 and deleted nothing; repeats are "
+            "counted in /adapter/status, not logged",
+            uuid,
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _error_detail(response: httpx.Response) -> str:
@@ -1207,6 +1471,20 @@ async def health(request: Request) -> dict[str, Any]:
     }
 
 
+async def _sync_registry(request: Request) -> None:
+    """Bring the registry in line with the ONOS-created services on the twin.
+
+    A list the adapter cannot read leaves the registry as it was: the list
+    GET reports that to ONOS, and "no services" is not what it means.
+    """
+    version = registry.version
+    try:
+        services = await _twin_services(request)
+    except TwinProtocolError:
+        return
+    registry.sync([s for s in services if _onos_created(s)], version)
+
+
 @app.get("/adapter/status")
 async def adapter_status(request: Request) -> dict[str, Any]:
     """What the adapter is doing -- the demo's explain-yourself endpoint.
@@ -1215,6 +1493,11 @@ async def adapter_status(request: Request) -> dict[str, Any]:
     adapter's token does not make it fail, since the adapter's own state is
     still worth showing; the reason is in ``twin-error`` or
     ``twin-auth-error``.
+
+    ``onos-created-services`` is read from the twin on each call: the
+    services that carry the adapter's mark, which (unless everything is
+    exposed) are the ones ONOS is shown and may delete. While the twin
+    cannot be read it is the last answer.
     """
     auth: TwinAuthorization = request.app.state.twin_auth
     reach: TwinReachability = request.app.state.twin_reach
@@ -1223,6 +1506,7 @@ async def adapter_status(request: Request) -> dict[str, Any]:
         # While an outage is recorded, see whether it is over (the catalogue
         # may be fresh, in which case nothing above asked the twin).
         await _refresh_reachability(request)
+        await _sync_registry(request)
     except TwinUnavailableError as exc:
         reach.failed(exc)  # reported below, like a refused token
     except TwinAuthError:
@@ -1242,6 +1526,8 @@ async def adapter_status(request: Request) -> dict[str, Any]:
         # Join key between the ONOS Flows view and the twin's service list.
         "service-endpoints": {u: registry.endpoints(u) for u in registry.uuids()},
         "recent-rejections": registry.rejections[-10:],
+        # DELETEs for services ONOS is not shown: answered 204, not forwarded.
+        "refused-deletes": list(registry.refused_deletes.values())[-10:],
     }
 
 

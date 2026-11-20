@@ -6,9 +6,11 @@ in ``/.well-known/host-meta``. A client reads it from there rather than
 assuming ``/restconf``. host-meta needs a token on a twin with
 authentication on, like every path except ``/health``.
 
-A twin that answers host-meta with 404 runs with an empty root, or predates
-the RESTCONF root altogether; both serve T-API at ``/data``, so a 404 means
-the root is ``""``. Any other failure (401, a twin that is down) is raised.
+A twin with an empty root advertises it as the absolute URI the request
+reached, ``http://host:port``, whose path is empty (RFC 3986 §3.3), so the
+root is ``""`` and T-API is at ``/data``. A twin that answers host-meta with
+404 predates the RESTCONF root and serves T-API at ``/data`` too, so a 404
+also means ``""``. Any other failure (401, a twin that is down) is raised.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ def parse_host_meta(xrd: str) -> str:
 
     ``""`` when the document has no such link. An absolute ``href`` is
     reduced to its path: requests go to the base URL the client was given.
+    An empty root is advertised as ``http://host:port``, path ``""``.
     """
     for link in ET.fromstring(xrd).iter(_XRD_LINK):
         if link.get("rel") == "restconf":

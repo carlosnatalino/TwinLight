@@ -15,6 +15,11 @@
 # running, and the whole stack runs with tokens on; an extra step checks that
 # the twin refuses an anonymous request. Unset, authentication is off.
 #
+# Seeding draws its pairs with SEED_RANDOM_SEED, `twinlight-onos-test` unless
+# exported; the run prints the seed, so a failure can be replayed with it.
+# ONOS_TEST_QOT_MARGIN_DB, if exported, is the twin's admission margin for the
+# main seeding (restored afterwards), to test against a margin other than 1.5.
+#
 # e2e options:
 #   --keep        leave the stack up afterwards, for inspection
 #   --reuse       test a stack that is already up instead of booting one; it is
@@ -47,7 +52,7 @@ REPO_ROOT="$(cd "${HERE}/../../.." && pwd)"
 ADAPTER_DIR="${HERE}/../adapter"
 LABEL="org.twinlight.onos-test"
 
-usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 MODE="${1:-}"; [ -n "${MODE}" ] || usage; shift
 PINNED=""; KEEP=""; REUSE=""; BOOTS=1; RMI=""; OUT=""
@@ -83,6 +88,8 @@ export TWINLIGHT_ONOS_SUBNET_PREFIX="${TWINLIGHT_ONOS_SUBNET_PREFIX:-172.30}"
 # The URLs and the device id follow the variables above; an inherited value
 # would point the checks at some other stack.
 unset ONOS_URL ADAPTER_URL TWIN_URL DEVICE_ID
+# The order seed-demo.sh draws its pairs in (see find_pairs.py).
+export SEED_RANDOM_SEED="${SEED_RANDOM_SEED:-twinlight-onos-test}"
 
 RUN_DIR="${OUT:-${TMPDIR:-/tmp}/twinlight-onos-test-$(date +%Y%m%d-%H%M%S)}"
 RUN_DIR="${RUN_DIR%/}"
@@ -397,15 +404,198 @@ for line in sys.stdin:
 flows_match_services() {
   [ "$(onos_rest_flows | wc -l | tr -d ' ')" = "$(adapter_service_count)" ]
 }
+# With ONOS_TEST_QOT_MARGIN_DB set, this seeding runs against a twin whose
+# admission margin is that value (set before, restored after, whatever
+# happens), to check that find_pairs.py follows the twin's margin.
 check_seed() {
-  local out admitted
-  out="$("${HERE}/seed-demo.sh" --reset)" || { printf '%s\n' "${out}"; return 1; }
+  local out admitted margin="" rc=0
+  echo "SEED_RANDOM_SEED=${SEED_RANDOM_SEED}"
+  if [ -n "${ONOS_TEST_QOT_MARGIN_DB:-}" ]; then
+    margin="$(twin_margin)" || return 1
+    set_twin_margin "${ONOS_TEST_QOT_MARGIN_DB}" || return 1
+    echo "qot_margin_db ${margin} -> $(twin_margin) dB for this seeding (ONOS_TEST_QOT_MARGIN_DB)"
+  fi
+  out="$("${HERE}/seed-demo.sh" --reset)" || rc=1
+  if [ -n "${margin}" ]; then
+    set_twin_margin "${margin}" || rc=1
+    echo "qot_margin_db back to $(twin_margin) dB"
+  fi
   printf '%s\n' "${out}"
+  [ "${rc}" = 0 ] || return 1
   admitted="$(printf '%s' "${out}" | sed -n 's/.* \([0-9][0-9]*\) lightpath(s) admitted.*/\1/p')"
   [ "${admitted:-0}" -gt 0 ] || { echo "nothing admitted"; return 1; }
   until_true 90 flows_match_services \
     || { echo "ONOS holds $(onos_rest_flows | wc -l | tr -d ' ') REST flows, the adapter $(adapter_service_count) services"; return 1; }
   echo "${admitted} admitted; ONOS flows and twin services agree"
+}
+# ONOS may delete exactly what the adapter shows it, also after the adapter
+# restarts: the adapter keeps ownership on the twin, as the mark it puts in the
+# name list of every service it creates, not in its own memory. A lightpath
+# created directly on the twin (as the UI would) survives a DELETE sent through
+# the adapter, which answers 204 and reports the refusal; an ONOS-created one
+# is still released when its flow is removed in ONOS. The adapter is restarted
+# only on a stack this run booted.
+DELETE_SCOPE_DATA=""; DELETE_SCOPE_NATIVE=""; DELETE_SCOPE_VICTIM=""
+adapter_ok() {
+  local health
+  health="$(curl -sf "${ADAPTER_URL}/health" 2>/dev/null)" || return 1
+  printf '%s' "${health}" | python3 -c 'import json,sys; sys.exit(json.load(sys.stdin)["status"] != "ok")'
+}
+onos_device_available() {
+  local device
+  device="$(onos_api GET "/onos/v1/devices/${DEVICE_ID}" 2>/dev/null)" || return 1
+  printf '%s' "${device}" | python3 -c 'import json,sys; sys.exit(not json.load(sys.stdin).get("available"))' 2>/dev/null
+}
+twin_service_code() {
+  # the twin's status for GET of one connectivity-service: 200 held, 404 gone
+  twin_curl -s -o /dev/null -w '%{http_code}' \
+    "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=$1"
+}
+victim_released() { [ "$(twin_service_code "${DELETE_SCOPE_VICTIM}")" = 404 ]; }
+listed_to_onos() {
+  # the UUIDs the adapter's list GET shows ONOS, sorted, one per line
+  curl -sf "${ADAPTER_URL}/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context" 2>/dev/null \
+    | python3 -c '
+import json, sys
+body = json.load(sys.stdin)["tapi-connectivity:connectivity-context"]["connectivity-service"]
+print("\n".join(sorted(s["uuid"] for s in body)))' 2>/dev/null
+}
+DELETE_SCOPE_BEFORE=""
+listing_unchanged() { [ "$(listed_to_onos)" = "${DELETE_SCOPE_BEFORE}" ]; }
+delete_scope() {
+  local body code flow
+  body="$(curl -sS "${ADAPTER_URL}/adapter/ports" | python3 -c '
+import json, sys
+ports = json.load(sys.stdin)["ports"]
+def sip(city):
+    hits = [p for p in ports if (p["node-name"] or "").lower() == "trx " + city.lower()]
+    assert len(hits) == 1, "no single transceiver named %r" % city
+    return hits[0]["twin-sip-uuid"]
+print(json.dumps({"tapi-connectivity:connectivity-service": [{
+    "uuid": sys.argv[1],
+    "name": [{"value-name": "service-name", "value": "onos-test: created on the twin"}],
+    "end-point": [
+        {"local-id": str(i), "service-interface-point": {"service-interface-point-uuid": sip(city)}}
+        for i, city in enumerate(sys.argv[2:4], start=1)
+    ],
+}]}))
+' "${DELETE_SCOPE_NATIVE}" "${SMOKE_A}" "${SMOKE_Z}")" || return 1
+  code="$(twin_curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/yang-data+json' \
+          -d "${body}" "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context")"
+  [ "${code}" = 201 ] || { echo "the twin answered ${code} to a create sent to it directly"; return 1; }
+  echo "created ${DELETE_SCOPE_NATIVE} on the twin directly (${SMOKE_A} -> ${SMOKE_Z})"
+
+  DELETE_SCOPE_BEFORE="$(listed_to_onos)"
+  [ -n "${DELETE_SCOPE_BEFORE}" ] || { echo "ONOS is shown no service before the restart"; return 1; }
+  if printf '%s\n' "${DELETE_SCOPE_BEFORE}" | grep -qx "${DELETE_SCOPE_NATIVE}"; then
+    echo "the twin-native service is listed to ONOS"; return 1
+  fi
+  echo "ONOS is shown $(printf '%s\n' "${DELETE_SCOPE_BEFORE}" | wc -l | tr -d ' ') service(s), not the twin-native one"
+
+  if [ -n "${STARTED}" ]; then
+    docker restart "${TL_PREFIX}-tapi-adapter" >/dev/null || return 1
+    until_true 90 adapter_ok || { echo "the adapter is not healthy 90 s after its restart"; return 1; }
+    until_true 120 onos_device_available || { echo "the device is not available 120 s after the adapter's restart"; return 1; }
+    echo "adapter restarted: its memory is empty"
+  else
+    echo "--reuse: the adapter is not restarted"
+  fi
+
+  until_true 90 listing_unchanged \
+    || { printf 'ONOS is shown other services after the restart:\nbefore\n%s\nafter\n%s\n' \
+           "${DELETE_SCOPE_BEFORE}" "$(listed_to_onos)"; return 1; }
+  [ "$(adapter_service_count)" = "$(printf '%s\n' "${DELETE_SCOPE_BEFORE}" | wc -l | tr -d ' ')" ] \
+    || { echo "/adapter/status reports $(adapter_service_count) ONOS-created services after the restart"; return 1; }
+  echo "after the restart ONOS is shown the same services, and /adapter/status reports them"
+
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+    "${ADAPTER_URL}/restconf/data/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${DELETE_SCOPE_NATIVE}")"
+  [ "${code}" = 204 ] || { echo "the adapter answered ${code} to the DELETE, not 204"; return 1; }
+  code="$(twin_service_code "${DELETE_SCOPE_NATIVE}")"
+  [ "${code}" = 200 ] || { echo "the twin-native service is gone (${code}) after a DELETE through the adapter"; return 1; }
+  curl -sS "${ADAPTER_URL}/adapter/status" | python3 -c '
+import json, sys
+refused = [r["uuid"] for r in json.load(sys.stdin)["refused-deletes"]]
+assert sys.argv[1] in refused, "the refusal is not in /adapter/status"
+print("DELETE through the adapter: 204, the twin still holds it, refused-deletes reports it")
+' "${DELETE_SCOPE_NATIVE}" || return 1
+
+  read -r flow DELETE_SCOPE_VICTIM < <(onos_rest_flows | python3 -c '
+import sys, json, urllib.request
+eps = json.load(urllib.request.urlopen(sys.argv[1] + "/adapter/status")).get("service-endpoints", {})
+by_pair = {ep.get("onos-port-pair"): uuid for uuid, ep in eps.items()}
+for line in sys.stdin:
+    fid, i, o, state = line.split()
+    if state == "ADDED" and "%s->%s" % (i, o) in by_pair:
+        print(fid, by_pair["%s->%s" % (i, o)]); break
+' "${ADAPTER_URL}")
+  [ -n "${DELETE_SCOPE_VICTIM}" ] || { echo "no ADDED ONOS flow joins a service the adapter reports"; return 1; }
+  "${HERE}/lightpath.sh" delete "${flow}" || return 1
+  until_true 90 victim_released \
+    || { echo "service ${DELETE_SCOPE_VICTIM} still on the twin 90 s after its flow was removed"; return 1; }
+  echo "flow ${flow} removed in ONOS: the twin released ${DELETE_SCOPE_VICTIM}"
+}
+check_delete_scope() {
+  local rc=0
+  DELETE_SCOPE_DATA="$(twin_data)" || return 1
+  DELETE_SCOPE_NATIVE="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  delete_scope || rc=$?
+  # Whatever happened, the twin-native lightpath goes, so the later steps see
+  # a twin holding only what ONOS created.
+  twin_curl -s -o /dev/null -X DELETE \
+    "${DELETE_SCOPE_DATA}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=${DELETE_SCOPE_NATIVE}"
+  return "${rc}"
+}
+# A pair the twin refuses at create must not leave its flow in ONOS. The pairs
+# are searched at the twin's own margin and saved; the margin is then raised
+# by 3 dB and seed-demo.sh provisions the saved pairs (SEED_PAIRS_FILE), so the
+# pairs within 3 dB of their threshold are refused for certain, through the
+# same path as any refusal. seed-demo.sh must report each refusal, remove its
+# flow and provision spares, and ONOS must end with every flow ADDED. The
+# margin is put back whatever happens.
+twin_margin() {
+  # the margin as find_pairs.py reads it, from the transparent controller
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from find_pairs import read_margin; print(read_margin(sys.argv[2]))' \
+    "${HERE}" "${TWIN_URL}"
+}
+set_twin_margin() {
+  local code
+  code="$(twin_curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d "{\"twin\": {\"rmsa\": {\"qot_margin_db\": $1}}}" "${TWIN_URL}/config/set")"
+  [ "${code}" = 200 ] || { echo "the twin answered ${code} to setting qot_margin_db=$1"; return 1; }
+}
+pending_add_flows() {
+  onos_rest_flows | awk '$4 == "PENDING_ADD"' | wc -l | tr -d ' '
+}
+no_pending_add_flows() { [ "$(pending_add_flows)" = 0 ]; }
+check_seed_refusals() {
+  local margin raised out rc=0 refused removed pairs="${RUN_DIR}/refusal-step-pairs.txt"
+  margin="$(twin_margin)" || return 1
+  # Cleared first, so the search sees the line the creates will.
+  "${HERE}/lightpath.sh" clear >/dev/null 2>&1 || true
+  TWIN_URL="${TWIN_URL}" SEED_RANDOM_SEED="${SEED_RANDOM_SEED}" \
+    python3 "${HERE}/find_pairs.py" > "${pairs}" || return 1
+  echo "pairs searched at the twin's margin of ${margin} dB (SEED_RANDOM_SEED=${SEED_RANDOM_SEED}):"
+  sed 's/^/  /' "${pairs}"
+  raised="$(python3 -c 'import sys; print(float(sys.argv[1]) + 3)' "${margin}")"
+  set_twin_margin "${raised}" || return 1
+  echo "qot_margin_db ${margin} -> ${raised} dB before they are provisioned"
+  out="$(SEED_PAIRS_FILE="${pairs}" "${HERE}/seed-demo.sh" --reset)" || rc=1
+  set_twin_margin "${margin}" || rc=1
+  printf '%s\n' "${out}"
+  echo "qot_margin_db back to $(twin_margin) dB"
+  [ "${rc}" = 0 ] || return 1
+  refused="$(printf '%s' "${out}" | sed -n 's/.* lightpath(s) admitted, \([0-9][0-9]*\) refused.*/\1/p')"
+  removed="$(printf '%s\n' "${out}" | grep -c 'removed its flow')"
+  [ "${refused:-0}" -gt 0 ] || { echo "nothing was refused: the refusal path did not run"; return 1; }
+  [ "${removed}" = "${refused}" ] || { echo "${refused} refused but ${removed} flow(s) removed"; return 1; }
+  until_true 60 flows_match_services \
+    || { echo "ONOS holds $(onos_rest_flows | wc -l | tr -d ' ') REST flows, the adapter $(adapter_service_count) services"; return 1; }
+  # An admitted flow is PENDING_ADD until ONOS's next reconciliation poll,
+  # about a minute; one whose create was refused would stay there.
+  until_true 150 no_pending_add_flows \
+    || { echo "$(pending_add_flows) flow(s) still PENDING_ADD 150 s after seeding"; return 1; }
+  echo "${refused} refused, each flow removed; ONOS flows and twin services agree, and every flow reached ADDED"
 }
 check_resync() {
   local out
@@ -469,6 +659,7 @@ e2e() {
     "${COMPOSE_PROJECT_NAME}" "${TL_PREFIX}" "${TWINLIGHT_IMAGE_TAG}"
   printf '            twin %s  adapter %s  ONOS %s  device %s\n' \
     "${TWIN_URL}" "${ADAPTER_URL}" "${ONOS_URL}" "${DEVICE_ID}"
+  printf '            seeding with SEED_RANDOM_SEED=%s\n' "${SEED_RANDOM_SEED}"
   printf '            authentication %s\n\n' \
     "$([ -n "${TWINLIGHT_API_TOKENS:-}" ] && echo "on (TWINLIGHT_API_TOKENS for the twin, TWINLIGHT_API_TOKEN for the adapter and scripts)" || echo off)"
 
@@ -498,6 +689,8 @@ e2e() {
   fi
   step "seed-demo.sh --reset, ONOS flows match twin services" check_seed
   step "correlate.sh after seeding" check_correlate
+  step "seed-demo.sh with refusals: their flows are removed" check_seed_refusals
+  step "delete scope, across an adapter restart" check_delete_scope
   step "resync.sh --check" "${HERE}/resync.sh" --check
   step "resync.sh, lightpaths survive, ports enabled" check_resync
   step "onos-cli.sh devices" check_onos_cli
