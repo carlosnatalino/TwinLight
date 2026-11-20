@@ -4,11 +4,12 @@
 object to every equipment request and to the context GET. A cached answer
 that is wrong still looks plausible, so this module pins three things:
 
-- **What the tree is built from**: each element's UID, kind and
-  ``type_variety``, and nothing else. The only runtime write that can change
-  any of them is a redesign, which re-runs GNPy's design and rebuilds the
-  backend's ``uid_map``. ``TestARedesignIsFollowedAtOnce`` changes each of
-  those inputs in a redesign and reads every equipment body back.
+- **What the tree is built from**: each element's UID, kind,
+  ``type_variety`` and position (``metadata.location``), and nothing else.
+  The only runtime write that can change any of them is a redesign, which
+  re-runs GNPy's design and rebuilds the backend's ``uid_map``.
+  ``TestARedesignIsFollowedAtOnce`` changes each of those inputs in a
+  redesign and reads every equipment body back.
 - **What invalidates it**: the running revision, which every configuration
   change through any interface bumps. ``TestEveryWriteLeavesTheMemoRight``
   drives each write plane the API offers, on both backends, and compares
@@ -31,6 +32,7 @@ from tests.conftest import MeshRefs, _mesh_config, tapi_end_point
 from twinlight.api.equipment import physical_context_payload
 from twinlight.app import create_app
 from twinlight.models.equipment import PhysicalContext
+from twinlight.models.yang_numbers import PHYSICAL_CONTEXT_PATH, encode_64bit_leaves
 
 _CONTEXT = "/restconf/data/tapi-common:context"
 _BASE = f"{_CONTEXT}/tapi-equipment:physical-context"
@@ -41,11 +43,13 @@ _YANG_PATCH = {"Content-Type": "application/yang-patch+json"}
 
 
 def _fresh(client: TestClient) -> dict[str, Any]:
-    """The equipment tree built from the elements as they are right now."""
+    """The equipment tree built from the elements as they are right now,
+    as a body carries it: geolocation leaves are decimal64 strings."""
     ctx = client.app.state.context
     # The class's method: a test may count the instance's builds.
     tree = type(ctx)._build_physical_context(ctx)
-    body: dict[str, Any] = tree.model_dump(by_alias=True, mode="json")
+    body: dict[str, Any] = encode_64bit_leaves(
+        tree.model_dump(by_alias=True, mode="json"), PHYSICAL_CONTEXT_PATH)
     return body
 
 
@@ -129,7 +133,7 @@ class TestNoCallerCanChangeIt:
                 for name in type(node).model_fields:
                     walk(getattr(node, name))
             else:
-                assert node is None or isinstance(node, str), type(node)
+                assert node is None or isinstance(node, (str, float)), type(node)
 
         walk(tree)
         assert seen > len(tree.device) + len(tree.physical_span)
@@ -147,6 +151,8 @@ class TestNoCallerCanChangeIt:
             (device.name[0], "value", "x"),
             (equipment, "actual_equipment", None),
             (properties, "equipment_type_name", "x"),
+            (equipment, "geolocation", None),
+            (equipment.geolocation, "latitude", 0.0),
             (tree.physical_span[0], "uuid", "x"),
             (tree.physical_span[0].name[0], "value", "x"),
         ]:
@@ -188,7 +194,8 @@ class TestARedesignIsFollowedAtOnce:
 
     GNPy's design of an already designed network reproduces the same
     inventory, so a stand-in plays a design that chose differently: another
-    ``type_variety`` for one amplifier, one element fewer, one more.
+    ``type_variety`` and another position for one amplifier, one element
+    fewer, one more.
     """
 
     @pytest.mark.parametrize("trigger", [_config_set_redesign, _transparent_redesign])
@@ -207,8 +214,13 @@ class TestARedesignIsFollowedAtOnce:
         assert old_variety != "another_variety" and removed in devices
         assert "added amplifier" not in devices
 
+        assert devices[changed]["equipment"][0]["geolocation"] != {
+            "latitude": "45.5", "longitude": "-73.25"}
+
         def redesign() -> None:
             backend.uid_map[changed].type_variety = "another_variety"
+            backend.uid_map[changed].metadata = {
+                "location": {"latitude": 45.5, "longitude": -73.25}}
             added = type(backend.uid_map[changed]).__new__(type(backend.uid_map[changed]))
             added.uid, added.type_variety = "added amplifier", "std_low_gain"
             twin_fiber = type(backend.uid_map[fiber]).__new__(type(backend.uid_map[fiber]))
@@ -225,11 +237,15 @@ class TestARedesignIsFollowedAtOnce:
         devices_after = {_uid(d): d for d in after["device"]}
         assert devices_after[changed]["equipment"][0]["actual-equipment"][
             "common-equipment-properties"]["equipment-type-identifier"] == "another_variety"
+        assert devices_after[changed]["equipment"][0]["geolocation"] == {
+            "latitude": "45.5", "longitude": "-73.25"}
         assert removed not in devices_after
         assert gnpy_app.get(f"{_BASE}/device={devices[removed]['uuid']}").status_code == 404
         assert devices_after["added amplifier"]["equipment"][0]["actual-equipment"][
             "common-equipment-properties"] == {
                 "equipment-type-name": "Edfa", "equipment-type-identifier": "std_low_gain"}
+        # The stand-in has no metadata: no position, so no geolocation at all.
+        assert "geolocation" not in devices_after["added amplifier"]["equipment"][0]
         assert "added fiber" in {_uid(s) for s in after["physical-span"]}
         assert len(after["device"]) == len(before["device"])
         assert len(after["physical-span"]) == len(before["physical-span"]) + 1
@@ -267,7 +283,10 @@ class TestEveryWriteLeavesTheMemoRight:
         def check(response: Any, status: int) -> Any:
             assert response.status_code == status, response.text
             # The memo, and what a request is served from it, after the write.
-            assert ctx.physical_context().model_dump(by_alias=True, mode="json") == _fresh(client)
+            assert encode_64bit_leaves(
+                ctx.physical_context().model_dump(by_alias=True, mode="json"),
+                PHYSICAL_CONTEXT_PATH,
+            ) == _fresh(client)
             assert client.get(_BASE).json() == {
                 "tapi-equipment:physical-context": _fresh(client)}
             return response

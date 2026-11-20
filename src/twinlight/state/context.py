@@ -39,7 +39,7 @@ from twinlight.algorithms.path_constraints import (
 )
 from twinlight.algorithms.spectrum_assignment import first_fit, path_uids_to_edges
 from twinlight.config import TwinConfig
-from twinlight.loader.gnpy_topology import load_gnpy_topology
+from twinlight.loader.gnpy_topology import element_position, load_gnpy_topology
 from twinlight.loader.tapi_builder import TapiBuilder
 from twinlight.models.common import OperationalState, ServiceInterfacePoint
 from twinlight.models.connectivity import ConnectivityService
@@ -2906,10 +2906,17 @@ class TapiContext:
         designed network includes the boosters and preamplifiers the design
         inserted — and from the parsed topology otherwise.
 
+        Each equipment carries its element's position as ``geolocation``
+        when it has one: from the GNPy network's element when the backend
+        holds one (so the amplifiers GNPy's design inserted have the
+        position the design gave them), from the topology file otherwise.
+
         Memoised: building it is most of what an equipment request costs
         (14 ms of 16 on CORONET, 2088 elements), and several of those
         requests pick one device or span out of it. The tree is a function
-        of each element's UID, kind and ``type_variety`` and nothing else.
+        of each element's UID, kind, ``type_variety`` and position and
+        nothing else; positions come from the topology file, which no
+        runtime write changes.
         The one runtime write that can change any of them is a redesign
         (``apply_element_overrides(redesign=True)``): the backend re-runs
         GNPy's design and rebuilds its ``uid_map``. The memo is nonetheless
@@ -2938,28 +2945,34 @@ class TapiContext:
             Device,
             ElementName,
             Equipment,
+            Geolocation,
             PhysicalSpan,
             element_uuid,
         )
 
+        def location(element: Any) -> Any:
+            metadata = getattr(element, "metadata", None)
+            return metadata.get("location") if isinstance(metadata, dict) else None
+
         if self._gnpy_uid_map and self._gnpy_network is not None:
             elements = [
-                (uid, _kind_name(el), getattr(el, "type_variety", "") or "")
+                (uid, _kind_name(el), getattr(el, "type_variety", "") or "", location(el))
                 for uid, el in self._gnpy_uid_map.items()
             ]
         else:
             elements = [
-                (el.uid, el.type, el.type_variety or "")
+                (el.uid, el.type, el.type_variety or "", location(el))
                 for el in self._topo_graph._gnpy_topo.elements
             ]
 
         devices: list[Device] = []
         spans: list[PhysicalSpan] = []
-        for uid, kind, variety in elements:
+        for uid, kind, variety, where in elements:
             name = (ElementName(value_name="element-uid", value=uid),)
             if kind == "Fiber":
                 spans.append(PhysicalSpan(uuid=element_uuid(uid, "span"), name=name))
                 continue
+            position = element_position(where)
             equipment = Equipment(
                 uuid=element_uuid(uid, "equipment"),
                 name=name,
@@ -2968,6 +2981,10 @@ class TapiContext:
                         equipment_type_name=kind,
                         equipment_type_identifier=variety or None,
                     ),
+                ),
+                geolocation=(
+                    Geolocation(latitude=position[0], longitude=position[1])
+                    if position is not None else None
                 ),
             )
             devices.append(

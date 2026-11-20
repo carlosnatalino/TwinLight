@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 _BASE = "/restconf/data/tapi-common:context/tapi-equipment:physical-context"
 _DEVICE_KEYS = {"uuid", "name", "equipment"}
-_EQUIPMENT_KEYS = {"uuid", "name", "actual-equipment"}
+_EQUIPMENT_KEYS = {"uuid", "name", "actual-equipment", "geolocation"}
 
 
 def _uid(obj: dict) -> str:
@@ -26,6 +26,8 @@ class TestPhysicalContext:
             props = equipment["actual-equipment"]["common-equipment-properties"]
             assert set(props) <= {"equipment-type-name", "equipment-type-identifier"}
             assert props["equipment-type-name"] in {"Transceiver", "Roadm", "Edfa"}
+            # The fixture locates every element; it has no altitude.
+            assert set(equipment["geolocation"]) == {"latitude", "longitude"}
         for span in context["physical-span"]:
             assert set(span) == {"uuid", "name"}
 

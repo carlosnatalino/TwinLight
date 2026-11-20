@@ -188,13 +188,16 @@ _LPC = (
 )
 _OTSIA = f"{_LPC}/tapi-photonic-media:otsia-connectivity-service-end-point-spec"
 _MCG = f"{_LPC}/tapi-photonic-media:mcg-connectivity-service-end-point-spec"
+_PHYSICAL = "/tapi-common:context/tapi-equipment:physical-context"
+_GEOLOCATION = f"{_PHYSICAL}/device/equipment/geolocation"
 
 #: Every int64, uint64 and decimal64 leaf the twin emits in a T-API body, by
 #: schema path (RFC 7951 member names, module-qualified where the module
 #: changes, list keys left out), with its type as tapi-photonic-media.yang
-#: v2.6.0 declares it. tests/test_api/test_rfc7951_numbers.py walks every
-#: T-API body against a table of all the numeric leaves of v2.6.0, so a leaf
-#: the twin starts to emit and this table misses fails there.
+#: or tapi-equipment.yang v2.6.0 declares it.
+#: tests/test_api/test_rfc7951_numbers.py walks every T-API body against a
+#: table of all the numeric leaves of v2.6.0, so a leaf the twin starts to
+#: emit and this table misses fails there.
 TAPI_64BIT_LEAVES: Mapping[str, str] = {
     # spectrum-band (grouping spectrum-band): upper- and lower-frequency, uint64 Hz.
     **{
@@ -210,6 +213,10 @@ TAPI_64BIT_LEAVES: Mapping[str, str] = {
     # channel-output-power decimal64, fraction-digits 7, in 0.01 dBm.
     f"{_OTSIA}/otsi-config/central-frequency": "uint64",
     f"{_OTSIA}/otsi-config/channel-output-power": "decimal64",
+    # tapi-equipment grouping geolocation: decimal64, fraction-digits 7,
+    # decimal degrees. Its altitude is never emitted: GNPy topologies have none.
+    f"{_GEOLOCATION}/latitude": "decimal64",
+    f"{_GEOLOCATION}/longitude": "decimal64",
 }
 
 #: Schema paths of the entries the T-API builders encode.
@@ -217,6 +224,7 @@ SIP_PATH = _SIP
 CONNECTIVITY_SERVICE_PATH = (
     "/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service"
 )
+PHYSICAL_CONTEXT_PATH = _PHYSICAL
 
 
 def _encode_leaf(value: Any, kind: str, path: str) -> str:
