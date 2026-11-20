@@ -52,8 +52,11 @@ export default function GraphControls({
 
       {/* Layout selector */}
       <div className="flex items-center gap-1.5">
-        <span className="text-xs text-gray-500">Layout:</span>
+        <label htmlFor="graph-layout" className="text-xs text-gray-500">
+          Layout:
+        </label>
         <select
+          id="graph-layout"
           value={layoutName}
           onChange={(e) => onLayoutChange(e.target.value as LayoutName)}
           className="text-xs border border-gray-200 rounded px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"

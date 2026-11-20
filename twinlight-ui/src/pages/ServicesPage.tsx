@@ -278,9 +278,12 @@ function ServiceDetailPanel({
           </div>
 
           <div>
-            <label className="text-xs text-slate-500 block mb-1">Administrative State</label>
+            <label htmlFor="service-admin-state" className="text-xs text-slate-500 block mb-1">
+              Administrative State
+            </label>
             <div className="relative">
               <select
+                id="service-admin-state"
                 value={service["administrative-state"]}
                 onChange={(e) => onUpdate("administrative-state", e.target.value)}
                 className="w-full text-sm border border-slate-200 rounded px-2 py-1.5 pr-7 bg-white appearance-none focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -296,9 +299,12 @@ function ServiceDetailPanel({
           </div>
 
           <div>
-            <label className="text-xs text-slate-500 block mb-1">Lifecycle State</label>
+            <label htmlFor="service-lifecycle-state" className="text-xs text-slate-500 block mb-1">
+              Lifecycle State
+            </label>
             <div className="relative">
               <select
+                id="service-lifecycle-state"
                 value={service["lifecycle-state"]}
                 onChange={(e) => onUpdate("lifecycle-state", e.target.value)}
                 className="w-full text-sm border border-slate-200 rounded px-2 py-1.5 pr-7 bg-white appearance-none focus:outline-none focus:ring-1 focus:ring-blue-500"
