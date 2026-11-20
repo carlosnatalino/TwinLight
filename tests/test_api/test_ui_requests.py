@@ -69,8 +69,8 @@ def test_every_option_of_the_form_is_honoured(client: TestClient) -> None:
     service = resp.json()["tapi-connectivity:connectivity-service"][0]
     cfg = service["end-point"][0]["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC]["otsi-config"][0]
     assert cfg["modulation"]["standard-modulation-technique"] == "MT_DP-QAM16"
-    assert cfg["central-frequency"] == 191_306_250_000_000
-    assert cfg["channel-output-power"] == 150
+    assert cfg["central-frequency"] == "191306250000000"
+    assert cfg["channel-output-power"] == "150.0"
     path = ctx._allocated_path_uids(service["uuid"])
     assert "roadm B" in path and "roadm D" not in path
 

@@ -20,6 +20,7 @@ Only the standard library, matching the rest of the demo scripts.
 from __future__ import annotations
 
 import os
+import re
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -72,22 +73,44 @@ def modulation_of(service: dict, default: str = "?") -> str:
     return default
 
 
+_UINT64 = re.compile(r"[+-]?[0-9]+")
+
+
+def uint64(value: object, where: str) -> int:
+    """A uint64 leaf of a twin body.
+
+    RFC 7951 §6.1 encodes uint64 as a JSON string ("191278125000000"); a
+    twin before 0.2.0 sent a JSON number, which is read too. Anything else
+    raises ``ValueError`` naming the leaf, rather than turning into a wrong
+    number or a service without spectrum.
+    """
+    if isinstance(value, str) and _UINT64.fullmatch(value):
+        number = int(value)
+    elif isinstance(value, int) and not isinstance(value, bool):
+        number = value
+    else:
+        raise ValueError(f"{where}: expected a uint64 string, got {value!r}")
+    if not 0 <= number < 2**64:
+        raise ValueError(f"{where}: {value!r} is not a uint64")
+    return number
+
+
 def spectrum_of(service: dict) -> tuple[float, float] | None:
     """(centre THz, width GHz) of the assigned spectrum, or None.
 
-    The augment carries band edges in uint64 Hz; these are the units the
-    demo output prints.
+    The augment carries band edges in uint64 Hz (strings, see
+    :func:`uint64`); these are the units the demo output prints. None only
+    when the service holds no spectrum.
     """
     for constraint in _constraints(service):
         spec = constraint.get(MCG_CSEP_SPEC) or {}
         for cfg in spec.get("mc-spectrum-config-pac") or []:
             band = cfg.get("spectrum") or {}
-            lower, upper = (
-                band.get("lower-frequency"),
-                band.get("upper-frequency"),
-            )
-            if lower and upper:
-                return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
+            if not band:
+                continue
+            lower = uint64(band.get("lower-frequency"), "spectrum/lower-frequency")
+            upper = uint64(band.get("upper-frequency"), "spectrum/upper-frequency")
+            return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
     return None
 
 

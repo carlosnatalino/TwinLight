@@ -41,7 +41,8 @@ def _pac(app: TestClient, uuid: str) -> dict:
 
 
 def _width(band: dict) -> int:
-    return band["upper-frequency"] - band["lower-frequency"]
+    # uint64 Hz, a decimal string (RFC 7951 §6.1).
+    return int(band["upper-frequency"]) - int(band["lower-frequency"])
 
 
 class TestSupportableSpectrum:
@@ -49,8 +50,8 @@ class TestSupportableSpectrum:
         sip_a, _ = _sip_uuids(app)
         supportable = _pac(app, sip_a)["supportable-spectrum"]
         assert len(supportable) == 1
-        assert supportable[0]["lower-frequency"] == _BAND_LOWER_HZ
-        assert supportable[0]["upper-frequency"] == _BAND_UPPER_HZ
+        assert supportable[0]["lower-frequency"] == str(_BAND_LOWER_HZ)
+        assert supportable[0]["upper-frequency"] == str(_BAND_UPPER_HZ)
 
     def test_frequency_constraint_describes_the_real_grid(
         self, app: TestClient

@@ -42,6 +42,11 @@ from twinlight.models.connectivity import (
     ConnectivityService,
     UpdateConnectivityServiceRequest,
 )
+from twinlight.models.yang_numbers import (
+    CONNECTIVITY_SERVICE_PATH,
+    encode_64bit_leaves,
+    parse_uint64,
+)
 from twinlight.state.context import (
     EntryRefusedError,
     InsufficientQoTError,
@@ -188,11 +193,19 @@ _FIXED: dict[str, dict[str, tuple[tuple[object, ...], Callable[[object], bool]]]
         "layer-protocol-name": (("PHOTONIC_MEDIA",), _LAYER_PROTOCOL_NAMES.__contains__),
     },
     OTSIA_CSEP_SPEC: {
-        "number-of-otsi": (
-            (1,), lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
-        ),
+        "number-of-otsi": ((1,), lambda v: _uint64_or_none(v) is not None),
     },
 }
+#: _FIXED leaves of type uint64, compared by value: "1" (RFC 7951 §6.1) and
+#: the JSON number 1 are the same value.
+_FIXED_UINT64 = frozenset({(OTSIA_CSEP_SPEC, "number-of-otsi")})
+
+
+def _uint64_or_none(value: object) -> int | None:
+    try:
+        return parse_uint64(value, "uint64")
+    except ValueError:
+        return None
 
 
 def _entries(value: object) -> list[dict]:
@@ -213,9 +226,13 @@ def _unimplemented(raw: dict) -> tuple[list[str], list[str]]:
 
     def check(level: str, node: dict, at: str) -> None:
         for key, (allowed, valid) in _FIXED.get(level, {}).items():
-            if key not in node or node[key] in allowed:
+            if key not in node:
                 continue
             value = node[key]
+            if (level, key) in _FIXED_UINT64 and _uint64_or_none(value) in allowed:
+                continue
+            if (level, key) not in _FIXED_UINT64 and value in allowed:
+                continue
             if not isinstance(value, (str, int)) or not valid(value):
                 invalid.append(f"{at}{key}={value!r}")
             else:
@@ -421,6 +438,10 @@ def _connectivity_service_payload(ctx, svc) -> dict:
     It goes where T-API v2.6.0 puts it, on the end-point's
     layer-protocol-constraint alongside the modulation augment;
     ``tapi-connectivity`` has no ``frequency-slot`` leaf of its own.
+
+    The model and the spectrum hold numbers; the frequencies, counts and
+    power are uint64 and decimal64 leaves, which RFC 7951 §6.1 encodes as
+    JSON strings, so they are converted here, on the way out.
     """
     payload = svc.model_dump(by_alias=True)
     spec = ctx.service_spectrum_spec(svc.uuid)
@@ -428,7 +449,8 @@ def _connectivity_service_payload(ctx, svc) -> dict:
         for end_point in payload.get("end-point", []):
             for constraint in end_point.get("layer-protocol-constraint", []):
                 constraint[MCG_CSEP_SPEC] = spec
-    return payload
+    encoded: dict = encode_64bit_leaves(payload, CONNECTIVITY_SERVICE_PATH)
+    return encoded
 
 
 async def connectivity_context_payload(ctx) -> dict:

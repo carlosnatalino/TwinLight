@@ -1,5 +1,7 @@
 // TypeScript interfaces mirroring TAPI JSON wire format (hyphenated keys)
 
+import { parseUint64, TapiValueError } from "@/lib/yangNumbers";
+
 export interface NameAndValue {
   "value-name": string;
   value: string;
@@ -187,19 +189,22 @@ export interface LayerProtocolConstraint {
       "local-id": string;
       /** Absent in a request that leaves the format to admission; always on a read. */
       modulation?: { "standard-modulation-technique": ModulationTechnique };
-      /** uint64, Hz. */
-      "central-frequency"?: number;
-      /** decimal64, 0.01 dBm. */
-      "channel-output-power"?: number;
+      /** uint64, Hz: a string, as RFC 7951 §6.1 encodes 64-bit numbers (lib/yangNumbers.ts). */
+      "central-frequency"?: string;
+      /** decimal64, 0.01 dBm: a string, e.g. "150.0". */
+      "channel-output-power"?: string;
     }[];
-    "number-of-otsi"?: number;
+    /** uint64: "1". */
+    "number-of-otsi"?: string;
   };
   /** Present only once the service holds an allocation; frequencies in Hz. */
   "tapi-photonic-media:mcg-connectivity-service-end-point-spec"?: {
-    "number-of-mc"?: number;
+    /** uint64: "1". */
+    "number-of-mc"?: string;
     "mc-spectrum-config-pac": {
       "local-id": string;
-      spectrum: { "lower-frequency": number; "upper-frequency": number };
+      /** uint64 Hz, as strings: read them with spectrumOf. */
+      spectrum: { "lower-frequency": string; "upper-frequency": string };
       "edge-frequency-constraint"?: {
         "grid-type"?: string;
         "adjustment-granularity"?: string;
@@ -265,7 +270,10 @@ export interface AssignedSpectrum {
  *
  * T-API v2.6.0 has no `frequency-slot` leaf on connectivity-service; the
  * photonic module augments the end-point's layer-protocol-constraint, with
- * band edges in Hz. Returns undefined when the service holds no spectrum.
+ * band edges in Hz, uint64 strings (RFC 7951 §6.1). Returns undefined when
+ * the service holds no spectrum; throws `TapiValueError` when it holds one
+ * that does not parse, rather than showing it as absent. The edges are below
+ * 2^53, so the numbers are exact (lib/yangNumbers.ts).
  */
 export function spectrumOf(
   service: ConnectivityService,
@@ -275,9 +283,13 @@ export function spectrumOf(
   ];
   const band = spec?.["mc-spectrum-config-pac"]?.[0]?.spectrum;
   if (!band) return undefined;
-  const lower = band["lower-frequency"];
-  const upper = band["upper-frequency"];
-  if (typeof lower !== "number" || typeof upper !== "number") return undefined;
+  const lower = parseUint64(band["lower-frequency"], "spectrum/lower-frequency");
+  const upper = parseUint64(band["upper-frequency"], "spectrum/upper-frequency");
+  if (upper <= lower) {
+    throw new TapiValueError(
+      `spectrum: upper-frequency ${upper} Hz is not above lower-frequency ${lower} Hz`,
+    );
+  }
   return {
     centreThz: (lower + upper) / 2 / 1e12,
     widthGhz: (upper - lower) / 1e9,

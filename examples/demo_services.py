@@ -50,21 +50,36 @@ _MODULATION_TO_MT = {
 }
 
 
+def _uint64(value: object, where: str) -> int:
+    """A uint64 leaf: RFC 7951 §6.1 sends it as a decimal string.
+
+    A JSON number (what a twin before 0.2.0 sent) is read too; anything else
+    stops the script rather than printing a wrong frequency.
+    """
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    raise ValueError(f"{where}: expected a uint64 string, got {value!r}")
+
+
 def _spectrum_of(service: dict) -> tuple[float, float] | None:
     """(centre THz, width GHz) of the assigned spectrum, or None.
 
-    Assigned spectrum is an end-point augment too, with band edges in Hz --
-    there is no frequency-slot leaf on connectivity-service.
+    Assigned spectrum is an end-point augment too, with band edges in Hz,
+    uint64 strings on the wire -- there is no frequency-slot leaf on
+    connectivity-service.
     """
     for end_point in service.get("end-point") or []:
         for constraint in end_point.get("layer-protocol-constraint") or []:
             spec = constraint.get(_MCG_CSEP_SPEC) or {}
             for cfg in spec.get("mc-spectrum-config-pac") or []:
                 band = cfg.get("spectrum") or {}
-                lower = band.get("lower-frequency")
-                upper = band.get("upper-frequency")
-                if lower and upper:
-                    return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
+                if not band:
+                    continue
+                lower = _uint64(band.get("lower-frequency"), "spectrum/lower-frequency")
+                upper = _uint64(band.get("upper-frequency"), "spectrum/upper-frequency")
+                return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
     return None
 
 

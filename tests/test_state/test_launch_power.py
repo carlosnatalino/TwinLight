@@ -30,7 +30,7 @@ def _body(sip_a: str, sip_z: str, power=None) -> dict:
     return {"tapi-connectivity:connectivity-service": [{"end-point": end_points}]}
 
 
-def _reported_power(service: dict) -> float:
+def _reported_power(service: dict) -> float | str:
     return service["end-point"][0]["layer-protocol-constraint"][0][OTSIA_CSEP_SPEC][
         "otsi-config"][0]["channel-output-power"]
 
@@ -42,7 +42,8 @@ def test_channel_output_power_is_hundredths_of_a_dbm(mesh_app: TestClient, wire)
     assert resp.status_code == 201, resp.text
     service = resp.json()["tapi-connectivity:connectivity-service"][0]
     assert mesh_app.app.state.context._service_launch_power[service["uuid"]] == 1.5
-    assert _reported_power(service) == 150.0
+    # decimal64 on the wire: a canonical string (RFC 7951 §6.1).
+    assert _reported_power(service) == "150.0"
 
 
 @pytest.mark.parametrize("wire", ["abc", True, "nan"])

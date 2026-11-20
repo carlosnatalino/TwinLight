@@ -241,24 +241,123 @@ def _modulation_augment(modulation: str) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 64-bit numbers (RFC 7951 §6.1)
+# ---------------------------------------------------------------------------
+#
+# T-API v2.6.0 types its frequencies, counts and powers as uint64 and
+# decimal64, which RFC 7951 §6.1 encodes as JSON strings: the twin sends
+# "191278125000000", not 191278125000000. The adapter reads both (an earlier
+# twin sent numbers) and refuses anything else as a twin it does not
+# understand. What it hands ONOS is unchanged: JSON numbers, as ONOS's T-API
+# 2.1 driver has always been given.
+
+_UINT64_RE = re.compile(r"[+-]?[0-9]+")
+_DECIMAL64_RE = re.compile(r"[+-]?[0-9]+(?:\.[0-9]+)?")
+
+
+def _uint64(value: Any, where: str) -> int:
+    """A uint64 from the twin: the standard string, or an earlier twin's number."""
+    if isinstance(value, str) and _UINT64_RE.fullmatch(value):
+        number = int(value)
+    elif isinstance(value, int) and not isinstance(value, bool):
+        number = value
+    else:
+        raise TwinProtocolError(f"{where}: expected a uint64 string, got {value!r}")
+    if not 0 <= number < 2**64:
+        raise TwinProtocolError(f"{where}: {value!r} is not a uint64")
+    return number
+
+
+def _decimal64(value: Any, where: str) -> float:
+    """A decimal64 from the twin, as the float ONOS was always sent."""
+    if isinstance(value, str) and _DECIMAL64_RE.fullmatch(value):
+        return float(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    raise TwinProtocolError(f"{where}: expected a decimal64 string, got {value!r}")
+
+
+def _onos_numbers(service: dict[str, Any]) -> dict[str, Any]:
+    """A twin connectivity-service with its 64-bit leaves as JSON numbers.
+
+    The twin's 2.6 augments go to ONOS as they come, and this keeps them
+    byte for byte what ONOS was sent before the twin encoded them as
+    strings. A copy: the registry keeps the twin's body.
+    """
+    out = dict(service)
+    end_points = []
+    for end_point in service.get("end-point") or []:
+        end_point = dict(end_point)
+        constraints = []
+        for constraint in end_point.get("layer-protocol-constraint") or []:
+            constraint = dict(constraint)
+            otsia = constraint.get(OTSIA_CSEP_SPEC)
+            if isinstance(otsia, dict):
+                otsia = dict(otsia)
+                if "number-of-otsi" in otsia:
+                    otsia["number-of-otsi"] = _uint64(otsia["number-of-otsi"], "number-of-otsi")
+                configs = []
+                for cfg in otsia.get("otsi-config") or []:
+                    cfg = dict(cfg)
+                    if "central-frequency" in cfg:
+                        cfg["central-frequency"] = _uint64(
+                            cfg["central-frequency"], "otsi-config/central-frequency"
+                        )
+                    if "channel-output-power" in cfg:
+                        cfg["channel-output-power"] = _decimal64(
+                            cfg["channel-output-power"], "otsi-config/channel-output-power"
+                        )
+                    configs.append(cfg)
+                if "otsi-config" in otsia:
+                    otsia["otsi-config"] = configs
+                constraint[OTSIA_CSEP_SPEC] = otsia
+            mcg = constraint.get(MCG_CSEP_SPEC)
+            if isinstance(mcg, dict):
+                mcg = dict(mcg)
+                if "number-of-mc" in mcg:
+                    mcg["number-of-mc"] = _uint64(mcg["number-of-mc"], "number-of-mc")
+                pacs = []
+                for pac in mcg.get("mc-spectrum-config-pac") or []:
+                    pac = dict(pac)
+                    if isinstance(pac.get("spectrum"), dict):
+                        pac["spectrum"] = {
+                            key: _uint64(value, f"spectrum/{key}")
+                            if key in ("lower-frequency", "upper-frequency") else value
+                            for key, value in pac["spectrum"].items()
+                        }
+                    pacs.append(pac)
+                if "mc-spectrum-config-pac" in mcg:
+                    mcg["mc-spectrum-config-pac"] = pacs
+                constraint[MCG_CSEP_SPEC] = mcg
+            constraints.append(constraint)
+        if "layer-protocol-constraint" in end_point:
+            end_point["layer-protocol-constraint"] = constraints
+        end_points.append(end_point)
+    if "end-point" in service:
+        out["end-point"] = end_points
+    return out
+
+
 def _spectrum_of(service: dict[str, Any]) -> tuple[float, float] | None:
     """(centre THz, width GHz) of a twin service's assigned spectrum.
 
     Like the modulation, T-API 2.6 puts this on the end-point rather than on
     the connectivity-service -- there is no ``frequency-slot`` leaf. Band
-    edges are in Hz; this converts to the units the demo output prints.
+    edges are uint64 Hz, strings on the wire (RFC 7951 §6.1); this converts
+    them to the units the demo output prints. A band that does not parse
+    raises :class:`TwinProtocolError`, never a quiet ``None``.
     """
     for end_point in service.get("end-point") or []:
         for constraint in end_point.get("layer-protocol-constraint") or []:
             spec = constraint.get(MCG_CSEP_SPEC) or {}
             for cfg in spec.get("mc-spectrum-config-pac") or []:
                 band = cfg.get("spectrum") or {}
-                lower, upper = (
-                    band.get("lower-frequency"),
-                    band.get("upper-frequency"),
-                )
-                if lower and upper:
-                    return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
+                if not band:
+                    continue
+                lower = _uint64(band.get("lower-frequency"), "spectrum/lower-frequency")
+                upper = _uint64(band.get("upper-frequency"), "spectrum/upper-frequency")
+                return (lower + upper) / 2 / 1e12, (upper - lower) / 1e9
     return None
 
 
@@ -796,8 +895,8 @@ def _mc_pool(sip: dict[str, Any]) -> dict[str, Any]:
     def rewrite(bands: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
             {
-                "upper-frequency": _to_mhz(int(b["upper-frequency"])),
-                "lower-frequency": _to_mhz(int(b["lower-frequency"])),
+                "upper-frequency": _to_mhz(_uint64(b.get("upper-frequency"), "upper-frequency")),
+                "lower-frequency": _to_mhz(_uint64(b.get("lower-frequency"), "lower-frequency")),
                 "frequency-constraint": {
                     "grid-type": "DWDM",
                     "adjustment-granularity": GRID_GRANULARITY,
@@ -875,15 +974,18 @@ async def get_context(request: Request) -> JSONResponse:
     except TwinUnavailableError as exc:
         raise _bad_gateway(request, exc) from exc
 
-    sips = [
-        _decorate_sip(
-            live.get(_to_twin_sip(onos_uuid))
-            or catalogue.twin_sip(onos_uuid)
-            or {},
-            onos_uuid,
-        )
-        for onos_uuid in catalogue.onos_uuids()
-    ]
+    try:
+        sips = [
+            _decorate_sip(
+                live.get(_to_twin_sip(onos_uuid))
+                or catalogue.twin_sip(onos_uuid)
+                or {},
+                onos_uuid,
+            )
+            for onos_uuid in catalogue.onos_uuids()
+        ]
+    except TwinProtocolError as exc:  # a band edge that is not a uint64
+        raise _bad_gateway(request, exc) from exc
     return JSONResponse(
         {"tapi-common:context": {"uuid": "twinlight-tapi-context", "service-interface-point": sips}}
     )
@@ -905,9 +1007,10 @@ async def get_sip(onos_uuid: str, request: Request) -> JSONResponse:
         # a wavelength the twin has already assigned to something else.
         live = await _fresh_sips(request)
         sip = live.get(_to_twin_sip(onos_uuid), sip)
-    except TwinUnavailableError as exc:
+        decorated = _decorate_sip(sip, onos_uuid)
+    except TwinUnavailableError as exc:  # TwinProtocolError included
         raise _bad_gateway(request, exc) from exc
-    return JSONResponse(_decorate_sip(sip, onos_uuid))
+    return JSONResponse(decorated)
 
 
 def _onos_created(service: Any) -> bool:
@@ -1001,6 +1104,10 @@ async def get_connectivity_context(request: Request) -> JSONResponse:
         raise _bad_gateway(request, exc) from exc
 
     services = [s for s in services if _shown_to_onos(s)]
+    try:
+        services = [_onos_numbers(s) for s in services]
+    except TwinProtocolError as exc:
+        raise _bad_gateway(request, exc) from exc
 
     return JSONResponse(
         {"tapi-connectivity:connectivity-context": {"connectivity-service": services}}
@@ -1161,7 +1268,15 @@ async def create_connectivity_service(body: dict, request: Request) -> Response:
                 onos_uuid[:8], SERVICE_KEY,
             )
             return JSONResponse(payload, status_code=status.HTTP_201_CREATED)
-        spectrum = _spectrum_of(entries[0])
+        # The lightpath is up whatever its body says: a 64-bit leaf that does
+        # not parse is logged and the twin's body relayed as it came.
+        try:
+            spectrum = _spectrum_of(entries[0])
+            payload = {SERVICE_KEY: [_onos_numbers(entries[0])]}
+        except TwinProtocolError as exc:
+            log.error("twin admitted %s with a body this adapter cannot read: %s",
+                      onos_uuid[:8], exc)
+            return JSONResponse(payload, status_code=status.HTTP_201_CREATED)
         if spectrum is None:
             log.info("twin admitted %s (no spectrum reported)", onos_uuid[:8])
         else:

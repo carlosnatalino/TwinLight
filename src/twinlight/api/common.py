@@ -23,6 +23,7 @@ from twinlight.api.path_computation import path_computation_context_payload
 from twinlight.api.restconf import RestconfError, refuse_unknown_members, target_member
 from twinlight.api.streaming import stream_context_payload
 from twinlight.models import tapi_schema
+from twinlight.models.yang_numbers import SIP_PATH, encode_64bit_leaves
 
 router = APIRouter(prefix="/data", tags=["tapi-common"])
 
@@ -41,10 +42,13 @@ def _sip_payload(ctx, sip) -> dict:
     request rather than stored on the model — a SIP that cached it would
     hand out a stale ``available-spectrum`` after the next service is
     admitted, and would carry it into snapshots.
+
+    Its band edges are uint64 Hz, JSON strings per RFC 7951 §6.1.
     """
     payload = sip.model_dump(by_alias=True)
     payload[PHOTONIC_SIP_SPEC] = ctx.sip_photonic_spec(sip.uuid)
-    return payload
+    encoded: dict = encode_64bit_leaves(payload, SIP_PATH)
+    return encoded
 
 
 @router.get("/tapi-common:context")
