@@ -88,6 +88,11 @@ services:
       # which the twin treats as unset: authentication stays off. Only this
       # variable is passed, not the whole .env file.
       TWINLIGHT_API_TOKENS: ${TWINLIGHT_API_TOKENS:-}
+      # The origins the browser may call the twin from: the web UI's, on the
+      # port it is published on, so moving TWINLIGHT_UI_PORT moves this too.
+      # It replaces server.cors_origins of the scenario YAML; set
+      # TWINLIGHT_CORS_ORIGINS (comma-separated) to allow others.
+      TWINLIGHT_CORS_ORIGINS: ${TWINLIGHT_CORS_ORIGINS:-http://localhost:${TWINLIGHT_UI_PORT:-5173}}
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
@@ -109,11 +114,11 @@ services:
       # the visitor's browser, not on this docker network, so this must be a
       # host-reachable address — the twin's published port, NOT the "twin"
       # compose service name. Override for a remotely-hosted twin.
-      # localhost:5173 is already in the twin's cors_origins, so CORS works
-      # out of the box with the default config.
+      # The twin allows this UI's origin through TWINLIGHT_CORS_ORIGINS
+      # (above), which follows TWINLIGHT_UI_PORT.
       TWIN_URL: "http://localhost:${TWINLIGHT_REST_PORT:-8080}"
     ports:
-      - "${TWINLIGHT_UI_PORT:-5173}:80"   # served by nginx; matches the twin's allowed CORS origin
+      - "${TWINLIGHT_UI_PORT:-5173}:80"   # served by nginx; the twin's allowed CORS origin follows it
     depends_on:
       - twin
     restart: unless-stopped

@@ -263,6 +263,9 @@ class TapiContext:
         # -- Per-service caches and serialization lock ---------------------
         self._route_cache: dict[tuple[str, str], list[str]] = {}
         self._baseline_cache: dict[str, OpmBaseline] = {}
+        # The T-API equipment tree and the revision it was built at (see
+        # physical_context); None until the first equipment request.
+        self._physical_context_cache: tuple[int, PhysicalContext] | None = None
         self._propagation_lock: asyncio.Lock = asyncio.Lock()
         # Serialises changes to the set of admitted services. Admission yields
         # while it propagates; without this, two admissions could pick the
@@ -2739,12 +2742,38 @@ class TapiContext:
         Elements come from the backend when it holds a network — GNPy's
         designed network includes the boosters and preamplifiers the design
         inserted — and from the parsed topology otherwise.
+
+        Memoised: building it is most of what an equipment request costs
+        (14 ms of 16 on CORONET, 2088 elements), and several of those
+        requests pick one device or span out of it. The tree is a function
+        of each element's UID, kind and ``type_variety`` and nothing else.
+        The one runtime write that can change any of them is a redesign
+        (``apply_element_overrides(redesign=True)``): the backend re-runs
+        GNPy's design and rebuilds its ``uid_map``. The memo is nonetheless
+        tied to the running revision, which every configuration change
+        through any interface bumps (element parameters, redesign, link
+        failures, twin config, restore), so that a write that comes to
+        reach the tree later is covered without anyone having to remember
+        this cache: the price is one rebuild after a parameter write.
+        ``tests/test_api/test_equipment_cache.py`` drives every
+        write the API offers and compares the memo with a fresh build.
+
+        The object returned is shared by every caller and immutable (frozen
+        models, tuples); ``model_dump`` gives a caller its own copy.
         """
-        from twinlight.models.common import NameAndValue
+        cached = self._physical_context_cache
+        if cached is None or cached[0] != self._revision:
+            cached = (self._revision, self._build_physical_context())
+            self._physical_context_cache = cached
+        return cached[1]
+
+    def _build_physical_context(self) -> PhysicalContext:
+        """Build the equipment tree from the elements as they are now."""
         from twinlight.models.equipment import (
             ActualEquipment,
             CommonEquipmentProperties,
             Device,
+            ElementName,
             Equipment,
             PhysicalSpan,
             element_uuid,
@@ -2761,13 +2790,12 @@ class TapiContext:
                 for el in self._topo_graph._gnpy_topo.elements
             ]
 
-        context = PhysicalContext()
+        devices: list[Device] = []
+        spans: list[PhysicalSpan] = []
         for uid, kind, variety in elements:
-            name = [NameAndValue(value_name="element-uid", value=uid)]
+            name = (ElementName(value_name="element-uid", value=uid),)
             if kind == "Fiber":
-                context.physical_span.append(
-                    PhysicalSpan(uuid=element_uuid(uid, "span"), name=name)
-                )
+                spans.append(PhysicalSpan(uuid=element_uuid(uid, "span"), name=name))
                 continue
             equipment = Equipment(
                 uuid=element_uuid(uid, "equipment"),
@@ -2779,10 +2807,10 @@ class TapiContext:
                     ),
                 ),
             )
-            context.device.append(
-                Device(uuid=element_uuid(uid, "device"), name=name, equipment=[equipment])
+            devices.append(
+                Device(uuid=element_uuid(uid, "device"), name=name, equipment=(equipment,))
             )
-        return context
+        return PhysicalContext(device=tuple(devices), physical_span=tuple(spans))
 
     # -- Snapshot / restore (checkpoints) ------------------------------------
 

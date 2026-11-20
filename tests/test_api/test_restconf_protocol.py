@@ -43,7 +43,9 @@ def _restconf_urls(root: str) -> list[str]:
         f"{data}/tapi-common:context/tapi-connectivity:connectivity-context/connectivity-service=x",
         f"{data}/ietf-yang-library:yang-library",
     ]
-    return urls + ([root, f"{root}/yang-library-version", f"{root}/operations"] if root else [])
+    # The API resource and its other children, under an empty root too: "/"
+    # is the API resource then (RFC 8040 §3.3, RFC 9110 §4.2.3).
+    return urls + [root or "/", f"{root}/yang-library-version", f"{root}/operations"]
 
 
 class TestHeaderFields:

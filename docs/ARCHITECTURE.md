@@ -379,9 +379,10 @@ observe the tentative values; nothing is cached.
 
 | Cache | Key | Invalidated by |
 |-------|-----|----------------|
-| `_gnpy_uid_map` | element UID | never (built once at startup) |
+| `_gnpy_uid_map` | element UID | built at startup; rebuilt by a redesign |
 | `_route_cache` | `(src_uid, dst_uid)` | topology mutation (e.g. link failure) |
 | `_baseline_cache` | service UUID | service deletion, `/config` parameter change (including `/config/parameters` batches), link failure |
+| `_physical_context_cache` | running revision | any configuration change (every write that bumps the revision: element parameters, redesign, link failure, twin config, restore). Holds the T-API `physical-context` tree, built from each element's UID, kind and `type_variety`; frozen models and tuples, so no request can change the shared object |
 
 ## Middleware
 

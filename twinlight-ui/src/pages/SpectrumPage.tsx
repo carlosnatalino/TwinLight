@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useConnectionStore } from "@/store/connection";
-import { createClient } from "@/api/client";
+import { createClient, errorText } from "@/api/client";
 import { spectrumOf } from "@/api/types";
 import type { SpectrumContextResponse } from "@/api/types";
 import type { ConnectivityService } from "@/api/types";
@@ -27,7 +27,7 @@ export default function SpectrumPage() {
         setSpectrumContext(ctx ?? null);
         setServices(svcs);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
+      .catch((e) => setError(errorText(e, "Failed to load")))
       .finally(() => setLoading(false));
   }, [baseUrl]);
 

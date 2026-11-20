@@ -77,14 +77,16 @@ class TestConstellationEndpoint:
         resp = app.get(
             f"/internal/services/{svc_uuid}/constellation?n_symbols=10"
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
 
     def test_validates_n_symbols_max(self, app: TestClient) -> None:
         svc_uuid = _create_service(app)
         resp = app.get(
             f"/internal/services/{svc_uuid}/constellation?n_symbols=200000"
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
 
     def test_measurements_includes_gsnr(self, app: TestClient) -> None:
         svc_uuid = _create_service(app)
@@ -137,14 +139,16 @@ class TestEyeDiagramEndpoint:
         resp = app.get(
             f"/internal/services/{svc_uuid}/eye-diagram?n_traces=5"
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
 
     def test_validates_samples_per_symbol(self, app: TestClient) -> None:
         svc_uuid = _create_service(app)
         resp = app.get(
             f"/internal/services/{svc_uuid}/eye-diagram?samples_per_symbol=8"
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
 
     def test_measurements_includes_gsnr_and_pmd(self, app: TestClient) -> None:
         svc_uuid = _create_service(app)

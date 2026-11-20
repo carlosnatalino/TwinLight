@@ -8,7 +8,9 @@
 - A reference to a SIP, node or link that does not exist is a leafref with
   no instance: RFC 7950 §15.5, ``data-missing`` with ``instance-required``,
   which §7 pairs with 409.
-- The proprietary endpoints keep their 404 ``data-missing`` and 422.
+- The proprietary endpoints (``/internal``, ``/admin``, ``/config``,
+  ``/transparent``) follow the same convention: one way to handle every
+  error of the twin.
 
 The 404 sweep is driven by the app's own OpenAPI schema: every keyed path
 under the RESTCONF root, with every method it serves, under the default
@@ -232,13 +234,163 @@ class TestUnresolvedReferences:
         assert _error(resp)["error-tag"] == "resource-denied"
 
 
-class TestProprietaryEndpointsAreUnchanged:
-    def test_a_missing_internal_resource_keeps_data_missing(self, app: TestClient) -> None:
-        resp = app.get("/internal/services/nope")
-        assert resp.status_code == 404
-        assert _error(resp)["error-tag"] == "data-missing"
+_PROPRIETARY = ("/internal", "/admin", "/config", "/transparent")
 
-    def test_an_invalid_internal_request_keeps_422(self, app: TestClient) -> None:
-        resp = app.get("/internal/path-info")
-        assert resp.status_code == 422
+
+def _proprietary_operations(client: TestClient) -> list[tuple[str, str, dict]]:
+    """(method, path template, operation) of every documented proprietary route."""
+    paths = client.get("/openapi.json").json()["paths"]
+    return [
+        (method.upper(), path, operation)
+        for path, operations in paths.items() if path.startswith(_PROPRIETARY)
+        for method, operation in operations.items()
+    ]
+
+
+@pytest.fixture(scope="module")
+def refusing_app(tmp_path_factory: pytest.TempPathFactory) -> TestClient:
+    """One mesh twin for the refusals below: none of them changes its state."""
+    return TestClient(create_app(_mesh_config(tmp_path_factory.mktemp("refusals"), "gnpy")))
+
+
+class TestProprietaryEndpointsFollowRfc8040:
+    """The proprietary endpoints answer errors as the T-API resources do.
+
+    Before, a missing resource there was 404 ``data-missing`` (a 409 tag in
+    RFC 8040 §7) and a request that did not validate was FastAPI's 422,
+    which RFC 8040 does not use.
+    """
+
+    def test_every_keyed_get_answers_404_invalid_value(self, refusing_app: TestClient) -> None:
+        probes = [
+            re.sub(r"\{[^}]+\}", "no-such-key", path)
+            for method, path, _ in _proprietary_operations(refusing_app)
+            if method == "GET" and "{" in path
+        ]
+        assert len(probes) >= 5, probes
+        failures, missing = [], 0
+        for url in probes:
+            resp = refusing_app.get(url)
+            assert resp.status_code != 422, (url, resp.text)
+            if resp.status_code == 404:
+                missing += 1
+                if _error(resp)["error-tag"] != "invalid-value":
+                    failures.append((url, resp.json()))
+        assert not failures, failures
+        assert missing >= 5, probes
+
+    @pytest.mark.parametrize("prefix", _PROPRIETARY)
+    def test_an_unknown_path_is_404_invalid_value(self, refusing_app: TestClient, prefix: str) -> None:
+        resp = refusing_app.get(f"{prefix}/no-such-thing/at-all")
+        assert resp.status_code == 404, resp.text
         assert _error(resp)["error-tag"] == "invalid-value"
+
+    def test_no_operation_answers_422_to_a_body_of_the_wrong_type(
+        self, refusing_app: TestClient,
+    ) -> None:
+        """Every documented write, given a JSON array where it expects an object."""
+        probes = [
+            (method, re.sub(r"\{[^}]+\}", "no-such-key", path))
+            for method, path, operation in _proprietary_operations(refusing_app)
+            if method in ("POST", "PUT", "PATCH") and "requestBody" in operation
+        ]
+        assert len(probes) >= 6, probes
+        for method, url in probes:
+            resp = refusing_app.request(method, url, content=b'"x"',
+                                    headers={"Content-Type": "application/json"})
+            assert resp.status_code != 422, (method, url, resp.text)
+            assert 400 <= resp.status_code < 500, (method, url, resp.text)
+            error = _error(resp)
+            if resp.status_code == 400:
+                assert error["error-tag"] in (
+                    "malformed-message", "missing-element", "bad-element",
+                    "unknown-element", "invalid-value"), (method, url, error)
+
+    @pytest.mark.parametrize(("method", "url", "body", "code", "tag", "message"), [
+        # A missing resource: 404 invalid-value (was data-missing).
+        ("GET", "/internal/services/nope", None, 404, "invalid-value",
+         "Service nope not found"),
+        ("GET", "/config/devices/nope", None, 404, "invalid-value",
+         "Unknown element UID: 'nope'"),
+        ("POST", "/config/set", {"devices": {"nope": {"loss_coef": 0.2}}}, 404,
+         "invalid-value", "Unknown element UID: 'nope"),
+        # A query parameter left out (was 422).
+        ("GET", "/internal/path-info", None, 400, "missing-element",
+         "Query parameters sip_a and sip_z are required"),
+        ("GET", "/admin/snapshot/content", None, 400, "missing-element",
+         "Missing query parameter: path"),
+        ("POST", "/admin/restore", {}, 400, "missing-element", "Missing 'path' in body"),
+        # A query parameter outside its range (was 422).
+        ("GET", "/config/parameters?path=/Fiber/*/no_such_attr", None, 400, "invalid-value",
+         None),
+        # Bodies pydantic refuses (was 422): the tag says why, as on T-API.
+        ("POST", "/internal/compute-path", b"{bad", 400, "malformed-message", None),
+        ("POST", "/internal/compute-path", [], 400, "bad-element", None),
+        ("POST", "/internal/compute-path", {"end-point": []}, 400, "invalid-value", None),
+        ("POST", "/internal/compute-path", {"bogus": 1}, 400, "missing-element", None),
+        ("POST", "/config/set", [1, 2, 3], 400, "bad-element", None),
+        ("POST", "/config/parameters/changes", [{"path": "/Fiber/*/loss_coef"}], 400,
+         "invalid-value", None),
+        ("POST", "/config/parameters/changes", {"path": "/Fiber/*/loss_coef", "by": 1}, 400,
+         "bad-element", None),
+        # Values the twin does not accept.
+        ("POST", "/config/set", {"twin": {"no_such": {"key": 1}}}, 400, "invalid-value",
+         None),
+        ("POST", "/config/parameters", {"set": {"/Fiber/*/loss_coef": 99.0}}, 400,
+         "invalid-value", None),
+    ])
+    def test_each_refusal_has_its_status_tag_and_message(
+        self, refusing_app: TestClient, method: str, url: str, body: object, code: int,
+        tag: str, message: str | None,
+    ) -> None:
+        if isinstance(body, bytes):
+            resp = refusing_app.request(method, url, content=body,
+                                    headers={"Content-Type": "application/json"})
+        else:
+            resp = refusing_app.request(method, url, json=body)
+        assert resp.status_code == code, resp.text
+        error = _error(resp)
+        assert error["error-tag"] == tag, error
+        if message is not None:
+            assert error["error-message"] == message
+
+    def test_compute_path_classifies_as_the_path_comp_service_does(
+        self, refusing_app: TestClient,
+    ) -> None:
+        refs = MeshRefs(refusing_app.app.state.context)
+        eps = [{"service-interface-point": {"service-interface-point-uuid": refs.sip(trx)}}
+               for trx in ("trx A", "trx C")]
+        # A SIP that does not exist: RFC 7950 §15.5, as for a T-API end-point.
+        nope = [eps[0], {"service-interface-point": {"service-interface-point-uuid": "nope"}}]
+        resp = refusing_app.post("/internal/compute-path", json={"end-point": nope})
+        assert resp.status_code == 409, resp.text
+        error = _error(resp)
+        assert (error["error-tag"], error["error-app-tag"]) == ("data-missing", "instance-required")
+        assert error["error-message"] == "SIP 'nope' not found"
+        # A node that does not exist in a constraint: the same.
+        ghost = {"topology-uuid": refs.node("roadm D")["topology-uuid"], "node-uuid": "ghost"}
+        resp = refusing_app.post("/internal/compute-path", json={
+            "end-point": eps, "topology-constraint": {"include-node": [ghost]}})
+        assert resp.status_code == 409, resp.text
+        assert _error(resp)["error-tag"] == "data-missing"
+        # A constraint the twin does not support: 400 invalid-value.
+        resp = refusing_app.post("/internal/compute-path", json={
+            "end-point": eps, "routing-constraint": {"max-allowed-delay": {"value": 5}}})
+        assert resp.status_code == 400, resp.text
+        assert _error(resp)["error-tag"] == "invalid-value"
+        assert "max-allowed-delay" in _error(resp)["error-message"]
+        # A member the body does not define.
+        resp = refusing_app.post("/internal/compute-path", json={"end-point": eps, "bogus": 1})
+        assert resp.status_code == 400, resp.text
+        assert _error(resp)["error-tag"] == "unknown-element"
+
+    def test_statuses_that_mean_something_else_keep_it(
+        self, tmp_path: Path,
+    ) -> None:
+        egn = TestClient(create_app(_mesh_config(tmp_path, "egn")))
+        resp = egn.post("/config/set", json={"redesign": True})
+        assert resp.status_code == 501, resp.text
+        assert _error(resp)["error-tag"] == "operation-not-supported"
+        resp = egn.post("/transparent/data/ElementList", json={})
+        assert resp.status_code == 405, resp.text
+        assert _error(resp)["error-tag"] == "operation-not-supported"

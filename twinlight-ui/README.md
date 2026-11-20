@@ -79,6 +79,10 @@ server:
     - "http://localhost:5173"
 ```
 
+`TWINLIGHT_CORS_ORIGINS` (comma-separated) replaces that list without editing
+the file; the Compose stack sets it to the UI's published origin,
+`http://localhost:${TWINLIGHT_UI_PORT:-5173}`.
+
 ## Docker
 
 The UI ships as a static nginx image. The Digital Twin URL is **not** baked in
@@ -97,8 +101,8 @@ docker compose up --build      # UI on http://localhost:5173
 `TWIN_URL` is the address the **browser** uses, so it must be reachable from
 the host (the twin's published port, e.g. `http://localhost:8080`) — not the
 compose service name. A value saved in the UI's Settings page (localStorage)
-overrides the injected default. Make sure that origin is listed in the twin's
-`cors_origins`; `http://localhost:5173` already is in the example configs.
+overrides the injected default. Make sure the UI's origin is allowed by the
+twin (`cors_origins`, or `TWINLIGHT_CORS_ORIGINS`, which Compose sets).
 
 ## Features
 
@@ -127,7 +131,7 @@ synthesises the data (`/internal/services/{uuid}/constellation` and
 - **React 18 + TypeScript** on Vite 6
 - **Zustand** stores: connection, topology, monitoring, services, selection
 - **localStorage** caching: topology (5-minute TTL) plus time-series ring buffers (1000 points per metric per service)
-- **Cytoscape.js** for graph rendering, via react-cytoscapejs
+- **Cytoscape.js** for graph rendering, through `src/components/graph/CytoscapeGraph.tsx`
 - **Recharts** for time-series charts
 - **Tailwind CSS v3** for styling
 
@@ -143,6 +147,12 @@ synthesises the data (`/internal/services/{uuid}/constellation` and
   `Array<cytoscape.StylesheetStyle | cytoscape.StylesheetCSS>`, not
   `cytoscape.Stylesheet[]`.
 - Local type declarations for untyped packages live in `src/types/`.
+- Mount a Cytoscape graph with `CytoscapeGraph`, never with `cytoscape()` in a
+  page: it owns the core, runs the layouts and stops one before the next, and
+  on unmount destroys the core one animation frame after stopping the last
+  layout. An animated `cose` layout runs a final frame after `stop()`, and on
+  a core already destroyed that frame throws
+  `TypeError: Cannot read properties of null (reading 'notify')`.
 
 ## Tech stack
 
@@ -152,7 +162,7 @@ synthesises the data (`/internal/services/{uuid}/constellation` and
 | Build | Vite 6 |
 | Routing | React Router v7 |
 | State | Zustand v5 |
-| Graph | Cytoscape.js + react-cytoscapejs |
+| Graph | Cytoscape.js |
 | Charts | Recharts |
 | Styling | Tailwind CSS v3 |
 | Testing | Vitest + React Testing Library |

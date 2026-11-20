@@ -9,7 +9,7 @@ import {
 } from "@/store/monitoring";
 import { usePolling } from "@/hooks/usePolling";
 import { useMonitoringHistory, TIME_RANGES, type TimeRange } from "@/hooks/useMonitoringHistory";
-import { createClient } from "@/api/client";
+import { createClient, errorText } from "@/api/client";
 import MetricChart from "@/components/monitoring/MetricChart";
 import MetricCard from "@/components/monitoring/MetricCard";
 import HistoryControls from "@/components/monitoring/HistoryControls";
@@ -237,9 +237,7 @@ export default function MonitoringPage() {
       setConstellationData(constellation);
       setEyeDiagramData(eye);
     } catch (err) {
-      setDiagramsError(
-        err instanceof Error ? err.message : "Failed to load diagrams"
-      );
+      setDiagramsError(errorText(err, "Failed to load diagrams"));
       setConstellationData(null);
       setEyeDiagramData(null);
     } finally {

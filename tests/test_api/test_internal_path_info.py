@@ -32,9 +32,10 @@ def test_path_info_returns_hops_and_optional_measurements(app) -> None:
     assert "measurements" in data
 
 
-def test_path_info_422_when_missing_params(app) -> None:
+def test_path_info_400_missing_element_when_missing_params(app) -> None:
     resp = app.get("/internal/path-info")
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "missing-element"
 
 
 def test_path_info_404_when_sip_not_found(app) -> None:

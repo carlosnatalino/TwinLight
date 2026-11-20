@@ -64,6 +64,18 @@ def _addresses(body: Any) -> list[list[str]]:
     return []
 
 
+def test_the_suite_does_not_ask_the_host_resolver(twin_config: TwinConfig) -> None:
+    """An app built by a test advertises the fixed name of ``conftest.py``.
+
+    Without ``_no_host_name_lookup`` this is the host's own FQDN, and every
+    app in the suite waits for the resolver to produce it.
+    """
+    twin_config.streaming.advertised_address = ""
+    with TestClient(create_app(twin_config)) as client:
+        body = client.get(f"{_SC}/available-stream").json()
+    assert _addresses(body) == [[f"grpc://localhost:{twin_config.server.grpc_port}"]]
+
+
 def _served(client: TestClient, rounds: int) -> list[list[str]]:
     served: list[list[str]] = []
     for _ in range(rounds):
