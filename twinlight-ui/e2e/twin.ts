@@ -93,6 +93,12 @@ export class TwinApi {
     return body["tapi-connectivity:connectivity-service"][0];
   }
 
+  /** The service's route and length (/internal/services/{uuid}, proprietary). */
+  async serviceInfo(uuid: string): Promise<{ "total-fiber-km"?: number; hops?: { uid: string }[] }> {
+    const resp = await this.request.get(`/internal/services/${uuid}`);
+    return (await ok(resp, `GET /internal/services/${uuid}`)).json();
+  }
+
   /** Create a service through T-API and return it as the twin admitted it. */
   async createService(svc: NewService): Promise<Service> {
     const [a, z] = await Promise.all([this.sipUuid(svc.from), this.sipUuid(svc.to)]);
