@@ -168,6 +168,9 @@ class MeasurementStream:
         self._last_logged_ns = logged_ns
         if self.state is StreamState.ALIGNING:
             self.state = StreamState.ACTIVE
+            # The available-stream's stream-state is in T-API bodies: move the
+            # datastore validators, or a client could keep ALIGNING via a 304.
+            ctx.note_state_change()
             logger.info("Measurement stream ACTIVE (first tick logged)")
         self._generation += 1
         cond = self._condition()

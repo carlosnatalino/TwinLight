@@ -57,7 +57,7 @@ spans. See [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir).
 | EGN correction on cross-channel NLI; actual line load under GNPy | Both backends compute the plain incoherent GN model (Poggiolini 2014), and agree within 0.05–0.25 dB at full load; neither applies the EGN correction. The GNPy backend evaluates every channel on the fully loaded SI comb; only the EGN backend follows the lightpaths actually lit |
 | Event-driven simulation clock | The transient layer is evaluated at wall-clock time |
 | Soft failures in the web UI | Driven by the `twinlight-soft-failure` client only |
-| RESTCONF features still missing | `ETag`/`Last-Modified` and conditional requests, `content=config`/`nonconfig`, 64-bit numbers as JSON strings, refusing unknown request members on a connectivity-service; each with a recommendation in [TAPI_COMPLIANCE.md § 2.7](TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix) |
+| RESTCONF features still missing | 64-bit numbers as JSON strings, refusing unknown request members on a connectivity-service; each with a recommendation in [TAPI_COMPLIANCE.md § 2.7](TAPI_COMPLIANCE.md#27-rfc-8040-and-rfc-7951-conformance-matrix) |
 | T-API notification, fault and virtual-network modules; OAM beyond read-only jobs | Not implemented; see [TAPI_COMPLIANCE.md](TAPI_COMPLIANCE.md) |
 | TR-548 entity and alarm streams | Only the performance-measurement stream is offered; entity streams need a compacted log, and the twin has no alarms yet |
 | Persistent, shared measurement log | The log is in-process and starts empty on restart (so the stream re-enters `ALIGNING`); it sits behind the `RecordLog` interface so a Valkey Streams backend can be added without touching the gNMI code |

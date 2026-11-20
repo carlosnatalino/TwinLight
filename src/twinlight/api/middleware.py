@@ -22,7 +22,7 @@ from starlette.responses import Response
 from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from twinlight.api.restconf import is_restconf_path
+from twinlight.api.restconf import is_data_path, is_restconf_path
 from twinlight.auth import TokenAuthenticator, bearer_token
 
 RESTCONF_MEDIA_TYPE = "application/yang-data+json"
@@ -221,11 +221,15 @@ _ACCEPTABLE_OUTPUT = frozenset({
 
 #: Query parameters a RESTCONF resource accepts: only ``content``, which RFC
 #: 8040 §4.8.1 makes mandatory ("This query parameter MUST be supported by
-#: the server"), and only for GET and HEAD. Every optional one is
-#: unsupported (none is advertised in restconf-state/capabilities), so
-#: §4.8 applies: "A server MUST return an error with a '400 Bad Request'
-#: status-line if a query parameter is unexpected."
+#: the server"), and only for GET and HEAD on the datastore and data
+#: resources ("This parameter is only allowed for GET methods on datastore
+#: and data resources. A '400 Bad Request' status-line is returned if used
+#: for other methods or resource types"). Every optional one is unsupported
+#: (none is advertised in restconf-state/capabilities), so §4.8 applies: "A
+#: server MUST return an error with a '400 Bad Request' status-line if a
+#: query parameter is unexpected." ``api/conditional.py`` applies it.
 _CONTENT_METHODS = frozenset({"GET", "HEAD"})
+CONTENT_VALUES = ("config", "nonconfig", "all")
 
 
 def _restconf_error(status: int, tag: str, message: str) -> Response:
@@ -258,14 +262,13 @@ def _acceptable(accept: str) -> bool:
     return False
 
 
-def check_restconf_request(scope: Scope) -> Response | None:
+def check_restconf_request(scope: Scope, restconf_root: str = "") -> Response | None:
     """The protocol error a RESTCONF request earns before routing, or None.
 
     In order: the query (RFC 8040 §4.8: an unexpected parameter, or one
     given twice, "MUST" be a 400 ``invalid-value``; §4.8.1's ``content``
-    only on GET and HEAD, and only ``all``, the default — ``config`` and
-    ``nonconfig`` need the YANG config/state split the twin does not have,
-    so they are a 501), then ``Accept`` (§5.2: "The server MUST support the
+    only on a GET or HEAD of the datastore or a data resource, with one of
+    its three values), then ``Accept`` (§5.2: "The server MUST support the
     'Accept' header field and the '406 Not Acceptable' status-line"; the
     tag RFC 8040 §7 pairs with 406 is ``invalid-value``), then the body's
     ``Content-Type`` (§5.2, 415; a body without one is refused too, RFC
@@ -289,12 +292,12 @@ def check_restconf_request(scope: Scope) -> Response | None:
             return _restconf_error(
                 400, "invalid-value", f"query parameter 'content' is not allowed on {method}",
             )
-        if value in ("config", "nonconfig"):
+        if not is_data_path(scope["path"], restconf_root):
             return _restconf_error(
-                501, "operation-not-supported",
-                f"content={value} is not supported by this server; content=all is",
+                400, "invalid-value",
+                "query parameter 'content' is only allowed on the datastore and data resources",
             )
-        if value != "all":
+        if value not in CONTENT_VALUES:
             return _restconf_error(
                 400, "invalid-value",
                 f"content={value!r} is not one of 'config', 'nonconfig', 'all'",
@@ -335,7 +338,7 @@ class RestconfRequestMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and is_restconf_path(scope["path"], self._root):
-            refused = check_restconf_request(scope)
+            refused = check_restconf_request(scope, self._root)
             if refused is not None:
                 await refused(scope, receive, send)
                 return
