@@ -23,6 +23,11 @@ brand-workshop/
 # Node JS
 node_modules/
 
+# Playwright browser tests (twinlight-ui/e2e): results, report, twin state
+twinlight-ui/e2e/test-results/
+twinlight-ui/e2e/playwright-report/
+twinlight-ui/e2e/.twin-state/
+
 # Distribution / packaging
 .Python
 build/

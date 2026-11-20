@@ -1,0 +1,22 @@
+# The twin the browser tests use for the map checks: the 75-node CORONET
+# CONUS backbone, whose ROADMs carry geographic coordinates. It is slower to
+# start than the mesh, so only the tests tagged @coronet use it.
+#
+# Relative paths resolve against this file's directory. The GNPy files are
+# provisioned by `twinlight-fetch-examples`, which e2e/twin/start.sh runs when
+# they are missing. Ports, the snapshot directory, CORS origins and API tokens
+# are set by playwright.config.ts.
+gnpy:
+  topology: "../../../examples/gnpy-data/CORONET_CONUS_Topology.json"
+  equipment: "../../../examples/gnpy-data/eqpt_config.json"
+  no_insert_edfas: true
+
+physics:
+  backend: gnpy
+
+simulation:
+  auto_snapshot_interval: 0
+  auto_checkpoint: false
+
+logging:
+  level: "ERROR"
