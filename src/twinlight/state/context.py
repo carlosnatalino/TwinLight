@@ -15,11 +15,13 @@ algorithms/spectrum_assignment.py).
 from __future__ import annotations
 
 import asyncio
+import copy
 import itertools
 import json
 import logging
 import math
 import uuid as uuid_lib
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,6 +93,21 @@ class InsufficientSpectrumError(RmsaError):
 
 class InsufficientQoTError(RmsaError):
     """Path GSNR below the format's required threshold plus the system margin."""
+
+
+class EntryRefusedError(Exception):
+    """One entry of a list replacement was refused, so none of it was made.
+
+    ``list_name`` is ``connectivity-service`` or ``path-comp-service``,
+    ``uuid`` the entry's key, and the exception it was refused with is the
+    ``__cause__`` (one of the admission or path-computation errors).
+    """
+
+    def __init__(self, list_name: str, uuid: str, cause: Exception) -> None:
+        super().__init__(f"{list_name} {uuid}: {cause}")
+        self.list_name = list_name
+        self.uuid = uuid
+        self.cause = cause
 
 
 class SpectrumRequestError(ValueError):
@@ -196,6 +213,28 @@ class _DetachedService:
     fibers: frozenset[str] | None
     edfa_uids: list[str]
     oam_job: OamJob | None
+
+
+@dataclass(frozen=True)
+class _Checkpoint:
+    """Every structure a change to the service and path-comp-service lists
+    touches, as it was (:meth:`TapiContext.replace_lists`). The dicts are
+    copies; the entries they hold are not changed in place by those
+    mutators, except a service's operational-state, kept apart."""
+
+    services: dict[str, ConnectivityService]
+    operational_states: dict[str, OperationalState]
+    oam_jobs: dict[str, OamJob]
+    allocation: dict[str, tuple[list[tuple[str, str]], int, int]]
+    launch_power: dict[str, float]
+    baselines: dict[str, OpmBaseline]
+    fibers: dict[str, frozenset[str]]
+    edfa_uids: dict[str, list[str]]
+    element_to_services: dict[str, set[str]]
+    spectrum: SpectrumState
+    edfa_tracker: Any
+    path_comp_services: dict[str, PathCompService]
+    paths: dict[str, dict[str, Any]]
 
 
 class TapiContext:
@@ -1617,6 +1656,130 @@ class TapiContext:
 
     def get_path(self, uuid: str) -> dict[str, Any] | None:
         return self._paths.get(uuid)
+
+    # -- Replacing whole lists (RFC 8040 §4.5, PUT on their containers) -----
+
+    async def replace_lists(
+        self,
+        *,
+        services: list[ConnectivityService] | None = None,
+        keep_services: Collection[str] = (),
+        path_comp_services: list[PathCompService] | None = None,
+        keep_path_comp_services: Collection[str] = (),
+    ) -> None:
+        """Replace the connectivity-service and path-comp-service lists, or
+        change nothing.
+
+        For each list given: the current entries whose UUID is in ``keep_*``
+        stay exactly as they are; every other current entry is deleted;
+        then each entry given is created, through the same admission as a
+        POST (route, spectrum, QoT) or the same path computation. ``None``
+        leaves that list alone. Path-comp-services go first: they commit no
+        resources.
+
+        All or nothing: one critical section under the admission lock, and
+        if any entry is refused, every structure is put back as it was
+        before the call — the services and their OAM jobs, the spectrum
+        occupancy, the caches, the EDFA tracker, the path-comp-services and
+        their paths — rather than undone step by step. A refused entry is
+        reported with its key.
+
+        Raises:
+            EntryRefusedError: An entry was refused; its cause is the
+                admission or path-computation error.
+        """
+        async with self._admission_lock:
+            checkpoint = self._checkpoint()
+            try:
+                if path_comp_services is not None:
+                    keep = set(keep_path_comp_services)
+                    for uuid in [u for u in self._path_comp_services if u not in keep]:
+                        self.delete_path_comp_service(uuid)
+                    for pcs in path_comp_services:
+                        try:
+                            self.create_path_comp_service(pcs)
+                        except (KeyError, ValueError, ConstraintError, RmsaError) as exc:
+                            raise EntryRefusedError("path-comp-service", pcs.uuid, exc) from exc
+                if services is not None:
+                    keep = set(keep_services)
+                    for uuid in [u for u in self._services if u not in keep]:
+                        self.delete_service(uuid)
+                    for svc in services:
+                        try:
+                            await self._add_service(svc)
+                        except (ValueError, ConstraintError, RmsaError) as exc:
+                            raise EntryRefusedError("connectivity-service", svc.uuid, exc) from exc
+            except BaseException:
+                self._rollback(checkpoint)
+                raise
+        # The lightpaths left in place may have gained or lost neighbours.
+        await self.refresh_operational_states()
+
+    def _checkpoint(self) -> _Checkpoint:
+        return _Checkpoint(
+            services=dict(self._services),
+            operational_states={u: s.operational_state for u, s in self._services.items()},
+            oam_jobs=dict(self._oam_jobs),
+            allocation=dict(self._service_allocation),
+            launch_power=dict(self._service_launch_power),
+            baselines=dict(self._baseline_cache),
+            fibers=dict(self._service_fibers),
+            edfa_uids=dict(self._service_edfa_uids),
+            element_to_services={u: set(s) for u, s in self._element_to_services.items()},
+            spectrum=copy.deepcopy(self._spectrum_state),
+            edfa_tracker=copy.deepcopy(self._edfa_tracker),
+            path_comp_services=dict(self._path_comp_services),
+            paths=dict(self._paths),
+        )
+
+    def _rollback(self, checkpoint: _Checkpoint) -> None:
+        """Put every structure :meth:`_checkpoint` saved back as it was."""
+        self._services = dict(checkpoint.services)
+        for uuid, state in checkpoint.operational_states.items():
+            self._services[uuid].operational_state = state
+        self._oam_jobs = dict(checkpoint.oam_jobs)
+        self._service_allocation = dict(checkpoint.allocation)
+        self._service_launch_power = dict(checkpoint.launch_power)
+        self._baseline_cache = dict(checkpoint.baselines)
+        self._service_fibers = dict(checkpoint.fibers)
+        self._service_edfa_uids = dict(checkpoint.edfa_uids)
+        self._element_to_services = {u: set(s) for u, s in checkpoint.element_to_services.items()}
+        self._spectrum_state = copy.deepcopy(checkpoint.spectrum)
+        self._edfa_tracker = copy.deepcopy(checkpoint.edfa_tracker)
+        self._path_comp_services = dict(checkpoint.path_comp_services)
+        self._paths = dict(checkpoint.paths)
+        # The entity-tags handed out while the replacement was under way name
+        # states that are gone. Move both validators: a reader that saw one
+        # of those states must not be told 304 for the one restored here.
+        self._tapi_changed(config=True)
+
+    async def put_path_comp_service(self, service: PathCompService) -> bool:
+        """Create a path-comp-service, or replace the one with its UUID by it
+        (its paths computed anew); a refused replacement leaves the old one
+        and its paths as they were. Returns whether it was created.
+
+        Raises:
+            Whatever :meth:`create_path_comp_service` raises but for a
+            duplicate UUID.
+        """
+        async with self._admission_lock:
+            old = self._path_comp_services.get(service.uuid)
+            old_paths = (
+                {ref["path-uuid"]: self._paths[ref["path-uuid"]]
+                 for ref in old.path if ref["path-uuid"] in self._paths}
+                if old is not None else {}
+            )
+            if old is not None:
+                self.delete_path_comp_service(service.uuid)
+            try:
+                self.create_path_comp_service(service)
+            except BaseException:
+                if old is not None:
+                    self._path_comp_services[old.uuid] = old
+                    self._paths.update(old_paths)
+                    self._tapi_changed(config=True)  # as in _rollback
+                raise
+            return old is None
 
     async def get_or_compute_baseline(
         self, svc: ConnectivityService

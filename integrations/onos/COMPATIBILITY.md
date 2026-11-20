@@ -24,6 +24,7 @@ modules implement only the standard (see
 | A4 | ONOS cannot express a modulation format | Adapter (policy) |
 | A5 | ONOS reads the T-API **2.1** photonic SIP shape | Adapter |
 | A6 | ONOS mis-parses `G_6_25GHZ` and divides by zero | Adapter |
+| A7 | ONOS's create body carries T-API **2.1** members | Adapter |
 | B1 | SIP spectrum capability | Twin |
 | B2 | RESTCONF root resource | Twin |
 | B3 | Single-entry JSON array in POST bodies | Twin |
@@ -133,6 +134,27 @@ TwinLight's grid is a 6.25 GHz flexi-grid and advertises itself that way:
 `ADAPTER_GRID_GRANULARITY` (default `G_50GHZ`). No standard asks a 6.25 GHz port
 to claim 50 GHz, and a twin that did would mislead every other client into
 computing channel centres that do not line up with its slots.
+
+### A7. ONOS's create body carries T-API 2.1 members
+
+`TapiFlowRuleProgrammable.createConnectivityRequest()` writes `service-layer`
+and `service-type` on the connectivity-service, and `layer-protocol-name` and
+`layer-protocol-qualifier` (`tapi-photonic-media:PHOTONIC_LAYER_QUALIFIER_NMC`)
+on each end-point, beside the `uuid`, the end-point `local-id` and the SIP
+(the shape `adapter/tests/test_tapi_adapter.py` pins as
+`onos_connectivity_request`). `service-layer` and `service-type` are not
+T-API v2.6.0 members, and the twin refuses a member v2.6.0 does not define
+(`400 unknown-element`, RFC 6241 Appendix A); `layer-protocol-qualifier` is a
+v2.6.0 member the twin does not implement (`501`).
+
+**Handled in the adapter.** The adapter builds the entry it forwards from
+what it translates — the UUID, the SIPs, the end-point numbering — plus its
+modulation policy (A4), and drops every other member ONOS sent. Each member
+and what becomes of it is listed in `ONOS_SERVICE_MEMBERS` and
+`ONOS_END_POINT_MEMBERS` in `tapi_adapter.py`. Each create logs the members
+it did not forward (`not forwarded from ONOS's T-API 2.1 request …`), so the
+adapter's log records what ONOS really sent; a member the tables do not list
+is dropped too, with a warning naming it.
 
 ---
 

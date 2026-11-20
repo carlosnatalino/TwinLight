@@ -74,12 +74,9 @@ class TestPathCompService:
         ({"routing-constraint": {"max-allowed-hops": {"value": 3}}}, "max-allowed-hops"),
         ({"routing-constraint": {"diversity-policy": "SRLG"}}, "diversity-policy"),
         ({"topology-constraint": [{"local-id": "1", "include-topology": []}]}, "include-topology"),
-        ({"path-set-constraint": {}}, "path-set-constraint"),
-        ({"objective-function": {"cost-optimization": "MINIMIZE"}}, "cost-optimization"),
         ({"direction": "BIDIRECTIONAL"}, "BIDIRECTIONAL"),
-        ({"path": [{"path-uuid": "x"}]}, "path"),
     ])
-    def test_unsupported_leaves_are_refused_by_name(
+    def test_unsupported_values_are_refused_by_name(
         self, app: TestClient, extra: dict, named: str,
     ) -> None:
         sip_a, sip_z = _two_sips(app)
@@ -88,14 +85,82 @@ class TestPathCompService:
         assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
         assert named in resp.json()["ietf-restconf:errors"]["error"][0]["error-message"]
 
-    def test_unsupported_end_point_leaf(self, app: TestClient) -> None:
+    @pytest.mark.parametrize(("extra", "named"), [
+        ({"path-set-constraint": {}}, "path-set-constraint"),
+        ({"path-set": [{"path-set-uuid": "x"}]}, "path-set"),
+        ({"adopt-orphan-path": {}}, "adopt-orphan-path"),
+    ])
+    def test_unimplemented_members_are_501(
+        self, app: TestClient, extra: dict, named: str,
+    ) -> None:
+        """A standard member the twin does not compute from is refused as
+        not implemented, as on a connectivity-service, not ignored."""
+        sip_a, sip_z = _two_sips(app)
+        resp = app.post(_BASE, json={"end-point": _end_points(sip_a, sip_z), **extra})
+        assert resp.status_code == 501, resp.text
+        (error,) = resp.json()["ietf-restconf:errors"]["error"]
+        assert error["error-tag"] == "operation-not-supported"
+        assert named in error["error-message"]
+        assert app.get(f"{_BASE}/path-comp-service").json() == {_SVC_KEY: []}
+
+    @pytest.mark.parametrize("leaf", ["capacity", "role", "node-edge-point"])
+    def test_unimplemented_end_point_member(self, app: TestClient, leaf: str) -> None:
         sip_a, sip_z = _two_sips(app)
         eps = _end_points(sip_a, sip_z)
-        eps[0]["capacity"] = {}
+        eps[0][leaf] = {}
         resp = app.post(_BASE, json={"end-point": eps})
-        assert resp.status_code == 400
-        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == "invalid-value"
-        assert "capacity" in resp.text
+        assert resp.status_code == 501
+        assert resp.json()["ietf-restconf:errors"]["error"][0]["error-tag"] == (
+            "operation-not-supported")
+        assert f"end-point[{eps[0]['local-id']}]/{leaf}" in resp.text
+
+    @pytest.mark.parametrize("extra", [
+        {"path": [{"path-uuid": "x"}]},
+        {"objective-function": {"local-id": "o", "cost-optimization": "MINIMIZE"}},
+    ])
+    def test_config_false_members_are_ignored(self, app: TestClient, extra: dict) -> None:
+        """``path`` and the objective's leaves are config false: state the
+        server reports, which an edit neither sets nor refuses (RFC 7950
+        §7.21.1), so a GET body can be sent back."""
+        sip_a, sip_z = _two_sips(app)
+        resp = app.post(_BASE, json={"end-point": _end_points(sip_a, sip_z), **extra})
+        assert resp.status_code == 201, resp.text
+        (service,) = resp.json()[_SVC_KEY]
+        assert service["path"] and service["path"] != [{"path-uuid": "x"}]
+        assert "cost-optimization" not in service.get("objective-function", {})
+
+    @pytest.mark.parametrize(("where", "member"), [
+        ("service", "foo"),
+        ("service", "service-layer"),
+        ("end-point", "foo"),
+        ("objective-function", "foo"),
+    ])
+    def test_unknown_members_are_400(self, app: TestClient, where: str, member: str) -> None:
+        """RFC 6241 Appendix A: "An unexpected element is present" is
+        unknown-element, with the member as bad-element and the node
+        holding it as error-path; nothing is created."""
+        sip_a, sip_z = _two_sips(app)
+        body = {"uuid": "pcs-1", "end-point": _end_points(sip_a, sip_z),
+                "objective-function": {"local-id": "o"}}
+        node = {"service": body, "end-point": body["end-point"][1],
+                "objective-function": body["objective-function"]}[where]
+        node[member] = 1
+        resp = app.post(_BASE, json={_SVC_KEY: [body]})
+        assert resp.status_code == 400, resp.text
+        (error,) = resp.json()["ietf-restconf:errors"]["error"]
+        assert error["error-tag"] == "unknown-element"
+        assert error["error-info"] == {"bad-element": member}
+        parent = (
+            "/tapi-common:context/tapi-path-computation:path-computation-context"
+            "/path-comp-service[uuid='pcs-1']"
+        )
+        assert error["error-path"] == {
+            "service": parent,
+            "end-point": f"{parent}/end-point[local-id='{body['end-point'][1]['local-id']}']",
+            "objective-function": f"{parent}/objective-function",
+        }[where]
+        assert member in error["error-message"]
+        assert app.get(f"{_BASE}/path-comp-service").json() == {_SVC_KEY: []}
 
 
 class TestOnTheMesh:

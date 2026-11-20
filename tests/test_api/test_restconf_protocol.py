@@ -226,11 +226,16 @@ class TestProtocolResources:
         version = app.get("/restconf/yang-library-version")
         assert version.json() == {"ietf-restconf:yang-library-version": "2019-01-04"}
 
-    def test_the_datastore_is_read_only(self, app: TestClient) -> None:
-        for method in ("POST", "PUT", "PATCH", "DELETE"):
+    def test_the_datastore_takes_put_only(self, app: TestClient) -> None:
+        """RFC 8040 §4.5: "The PUT method MUST be supported for data and
+        datastore resources"; POST, PATCH and DELETE are not offered."""
+        for method in ("POST", "PATCH", "DELETE"):
             resp = app.request(method, "/restconf/data", json={})
             assert resp.status_code == 405, method
-            assert resp.headers["allow"] == "GET, HEAD, OPTIONS"
+            assert resp.headers["allow"] == "GET, HEAD, PUT, OPTIONS"
+        resp = app.put("/restconf/data", json={})
+        assert resp.status_code == 400
+        assert _tag(resp) == "invalid-value"
 
 
 class TestWithTokens:
