@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import type cytoscape from "cytoscape";
 import type { ElementDefinition, Core } from "cytoscape";
-import { CYTOSCAPE_STYLESHEET, LAYOUT_CONFIGS, type LayoutName } from "@/lib/cytoscape-layout";
+import { CYTOSCAPE_STYLESHEET, layoutOptions, type LayoutName } from "@/lib/cytoscape-layout";
+import type { Point } from "@/lib/geo";
 import CytoscapeGraph from "@/components/graph/CytoscapeGraph";
 import NodeTooltip from "./NodeTooltip";
 import LinkTooltip from "./LinkTooltip";
@@ -22,6 +23,8 @@ export interface TopologyGraphRef {
 interface TopologyGraphProps {
   elements: ElementDefinition[];
   layoutName: LayoutName;
+  /** Where the "geographic" layout draws each node (lib/geo.ts geographicPositions). */
+  positions?: Record<string, Point>;
   showLabels: boolean;
   showArrows: boolean;
   onNodeClick: (nodeId: string, topoId: string) => void;
@@ -33,6 +36,7 @@ interface TopologyGraphProps {
 export default function TopologyGraph({
   elements,
   layoutName,
+  positions,
   showLabels,
   showArrows,
   onNodeClick,
@@ -113,7 +117,12 @@ export default function TopologyGraph({
     };
   }, [cyInstance, onNodeClick, onLinkClick, onNodeDblClick]);
 
-  const currentLayout = LAYOUT_CONFIGS[layoutName] || LAYOUT_CONFIGS.cose;
+  // One object per layout and set of positions: CytoscapeGraph re-runs the
+  // layout when it changes, and only then.
+  const currentLayout = useMemo(
+    () => layoutOptions(layoutName, positions),
+    [layoutName, positions],
+  );
 
   return (
     <div className="relative h-full w-full">

@@ -2,6 +2,8 @@ import { create } from "zustand";
 import type { TopologyData, Topology, TapiNode, TapiLink, ServiceInterfacePoint } from "@/api/types";
 import { createClient } from "@/api/client";
 import { cacheRead, cacheWrite, CACHE_KEYS, TOPOLOGY_MAX_AGE_MS } from "@/lib/cache";
+import { nodePositions } from "@/lib/geo";
+import { TapiValueError } from "@/lib/yangNumbers";
 
 interface TopologyState {
   data: TopologyData | null;
@@ -65,6 +67,17 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
         topologies,
         sips,
       };
+      // Only the node positions are kept of the physical context. A position
+      // that does not parse is reported, not drawn somewhere plausible: the
+      // topology still loads, and the Topology page shows the error.
+      try {
+        const positions = nodePositions(topologies, ctx["tapi-equipment:physical-context"]);
+        if (Object.keys(positions).length > 0) topologyData.positions = positions;
+      } catch (err) {
+        if (!(err instanceof TapiValueError)) throw err;
+        console.error("Node positions not read:", err.message);
+        topologyData.positionsError = err.message;
+      }
 
       set({
         data: topologyData,

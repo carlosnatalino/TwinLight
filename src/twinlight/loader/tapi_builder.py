@@ -3,6 +3,8 @@
 Mapping rules:
     GNPy Transceiver -> TAPI Node (1 NEP, 1 SIP, layer=PHOTONIC_MEDIA)
     GNPy Roadm       -> TAPI Node (N NEPs, one per degree/direction)
+    (each Node names its element's physical-context device in the
+    tapi-equipment:device-supports-node augment)
     Fiber+Edfa spans  -> TAPI Link (connecting NEPs on terminal nodes)
 
 A *terminal node* is a Transceiver or Roadm. Fiber, Edfa, Fused, and
@@ -21,7 +23,9 @@ from twinlight.models.common import (
     NameAndValue,
     ServiceInterfacePoint,
 )
+from twinlight.models.equipment import element_uuid
 from twinlight.models.topology import (
+    DeviceSupportsNode,
     ForwardingDirection,
     LatencyCharacteristic,
     Link,
@@ -29,6 +33,7 @@ from twinlight.models.topology import (
     NodeEdgePoint,
     NodeEdgePointRef,
     ServiceInterfacePointRef,
+    SupportingDevice,
     Topology,
     TopologyContext,
 )
@@ -122,6 +127,12 @@ class TapiBuilder:
                 uuid=node_uuid,
                 name=[NameAndValue(value_name="node-name", value=el.uid)],
                 owned_node_edge_point=neps,
+                # The element's device in physical-context (the same uuid5
+                # the equipment tree derives), the standard way from a node
+                # to its equipment and that equipment's geolocation.
+                device_supports_node=DeviceSupportsNode(supporting_device=[
+                    SupportingDevice(device_uuid=element_uuid(el.uid, "device")),
+                ]),
             )
             self._nodes[el.uid] = node
 

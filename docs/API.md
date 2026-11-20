@@ -743,10 +743,45 @@ from the element UID, which each object keeps in its `name` list as
     "name": [{"value-name": "element-uid", "value": "east edfa in Brest to Morlaix"}],
     "actual-equipment": {"common-equipment-properties": {
       "equipment-type-name": "Edfa", "equipment-type-identifier": "std_medium_gain"
-    }}
+    }},
+    "geolocation": {"latitude": "48.39", "longitude": "-4.49"}
   }]
 }
 ```
+
+**Positions.** An equipment whose element has a position in the GNPy
+topology file (`metadata.location.latitude` / `longitude`) carries it in
+`geolocation`, the container `tapi-equipment.yang` gives every equipment:
+`latitude` and `longitude` in decimal degrees, `decimal64` with
+`fraction-digits 7`, so JSON strings (see [Numbers](#numbers-rfc-7951-61)),
+config false, within -90..90 and -180..180. The amplifiers GNPy's design
+inserts have the position the design gives them (a booster or preamplifier at
+its ROADM, an inline amplifier along its fiber). GNPy topologies have no
+altitude, so `altitude` is never sent, and the deprecated string leaf
+`geographical-location` is not used. An element without a usable position
+has no `geolocation` member at all — not zeros, not `null`: no location, a
+coordinate missing, not a number or out of range, and latitude and longitude
+both exactly 0, which is what GNPy reads for a file that gives none
+(`gnpy.core.elements.Location` defaults both to 0, and `gnpy.tools.convert`
+writes 0 for a node without coordinates). Positions come from the topology
+file; no runtime write changes them.
+
+**From a topology node to its position.** Every topology node is one GNPy
+element, so one device; the node names it in the standard
+`tapi-equipment:device-supports-node` augment of the node ("Provides direct
+navigation to a device where the node is supported by only one device"):
+
+```json
+"tapi-equipment:device-supports-node": {
+  "supporting-device": [{"device-uuid": "158a3dc7-8afc-54c5-a6e4-02ad58e74011"}]
+}
+```
+
+A client follows `device-uuid` to the device in `physical-context` and reads
+its equipment's `geolocation`; the web UI draws the Topology page that way.
+Both members are standard v2.6.0, so there is no proprietary endpoint for
+positions. The city and region of the topology file are not served: T-API has
+no leaf for them, and nothing the twin draws needs them.
 
 Element attributes T-API has no leaf for — a fiber's length among them — are
 not in this tree; read them from the transparent controller,
@@ -977,8 +1012,9 @@ its canonical form (RFC 7950 §9.2.2, §9.3.2): `"191278125000000"` for a
 frequency in Hz, `"1"` for a count, `"-234.5"` or `"0.0"` for a
 `channel-output-power`. The leaves the twin serves are the SIP
 `spectrum-capability-pac` band edges, the end-point's MCG `number-of-mc` and
-`spectrum` edges, and the OTSiA `number-of-otsi`, `central-frequency` and
-`channel-output-power`.
+`spectrum` edges, the OTSiA `number-of-otsi`, `central-frequency` and
+`channel-output-power`, and an equipment's `geolocation` `latitude` and
+`longitude` (`"48.39"`, `"-4.49"`).
 
 | Request value of a 64-bit leaf | Answer |
 |--------------------------------|--------|

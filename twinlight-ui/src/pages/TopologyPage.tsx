@@ -5,12 +5,13 @@ import { useConnectionStore } from "@/store/connection";
 import { useTopologyStore } from "@/store/topology";
 import { useSelectionStore } from "@/store/selection";
 import { useTopologyGraph } from "@/hooks/useTopologyGraph";
+import { useGeographicPositions } from "@/hooks/useGeographicPositions";
 import TopologyGraph from "@/components/topology/TopologyGraph";
 import GraphControls from "@/components/topology/GraphControls";
 import DetailPanel from "@/components/topology/DetailPanel";
 import EmptyState from "@/components/common/EmptyState";
-import { Network, Loader2 } from "lucide-react";
-import type { LayoutName } from "@/lib/cytoscape-layout";
+import { Network, Loader2, MapPinOff } from "lucide-react";
+import { availableLayouts, chooseLayout, type LayoutName } from "@/lib/cytoscape-layout";
 
 export default function TopologyPage() {
   const { baseUrl } = useConnectionStore();
@@ -18,7 +19,8 @@ export default function TopologyPage() {
   const { selectNode, selectLink } = useSelectionStore();
   const navigate = useNavigate();
 
-  const [layoutName, setLayoutName] = useState<LayoutName>("cose");
+  // null until the user picks one: the default follows the data.
+  const [chosenLayout, setChosenLayout] = useState<LayoutName | null>(null);
   const [showLabels, setShowLabels] = useState(true);
   const [showArrows, setShowArrows] = useState(true);
   const cyRef = useRef<Core | null>(null);
@@ -32,6 +34,9 @@ export default function TopologyPage() {
   const allLinks = topologies.flatMap((t) => t.link);
   const allNodes = topologies.flatMap((t) => t.node);
   const elements = useTopologyGraph(topologies, sips);
+  const positions = useGeographicPositions(elements, data?.positions);
+  const hasPositions = positions !== undefined;
+  const layoutName = chooseLayout(chosenLayout, hasPositions);
 
   const handleNodeClick = useCallback(
     (nodeId: string, topoId: string) => {
@@ -68,7 +73,8 @@ export default function TopologyPage() {
     <div className="flex h-full flex-col">
       <GraphControls
         layoutName={layoutName}
-        onLayoutChange={setLayoutName}
+        layouts={availableLayouts(hasPositions)}
+        onLayoutChange={setChosenLayout}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onFit={handleFit}
@@ -81,6 +87,19 @@ export default function TopologyPage() {
         linkCount={allLinks.length}
         nodeCount={allNodes.length}
       />
+
+      {data?.positionsError && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700"
+        >
+          <MapPinOff className="h-4 w-4 shrink-0" />
+          <span>
+            The twin's node positions could not be read, so the map is not drawn:{" "}
+            {data.positionsError}
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         {isLoading && !data && (
@@ -104,6 +123,7 @@ export default function TopologyPage() {
             <TopologyGraph
               elements={elements}
               layoutName={layoutName}
+              positions={positions}
               showLabels={showLabels}
               showArrows={showArrows}
               onNodeClick={handleNodeClick}

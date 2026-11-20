@@ -13,6 +13,7 @@ computation, but this parser remains the source for TAPI model building.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -75,6 +76,48 @@ def fiber_length_m(params: dict) -> float | None:
         return None
     scale = _LENGTH_TO_METRES.get(str(params.get("length_units") or "km").strip().lower())
     return None if scale is None else length * scale
+
+
+def _degrees(value: object, limit: float) -> float | None:
+    """``value`` as a coordinate within ``-limit..limit`` degrees, or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or not -limit <= number <= limit:
+        return None
+    return number
+
+
+def element_position(location: object) -> tuple[float, float] | None:
+    """An element's ``(latitude, longitude)`` in decimal degrees, or None.
+
+    ``location`` is an element's ``metadata.location``: the dict of a GNPy
+    topology file, or the ``Location`` named tuple GNPy keeps on a network
+    element (``gnpy.core.elements.Location``), which the amplifiers GNPy's
+    design inserts also carry — a booster or preamplifier at its ROADM's
+    coordinates, an inline amplifier interpolated along its fiber.
+
+    None when the element has no usable position:
+
+    * a missing location, or a latitude or longitude missing, not a number,
+      not finite, or outside -90..90 / -180..180 degrees (the ranges
+      ``tapi-equipment.yang`` gives ``geolocation``);
+    * latitude and longitude both exactly 0. GNPy's ``Location`` defaults
+      both to 0 when a file gives none, and ``gnpy.tools.convert`` writes 0
+      for a node its spreadsheet has no coordinates for, so (0, 0) is how an
+      unlocated element reads, not a site in the Gulf of Guinea.
+    """
+    if location is None:
+        return None
+    if isinstance(location, dict):
+        latitude, longitude = location.get("latitude"), location.get("longitude")
+    else:
+        latitude = getattr(location, "latitude", None)
+        longitude = getattr(location, "longitude", None)
+    lat, lng = _degrees(latitude, 90.0), _degrees(longitude, 180.0)
+    if lat is None or lng is None or (lat == 0.0 and lng == 0.0):
+        return None
+    return lat, lng
 
 
 def load_gnpy_topology(topology_path: Path) -> GnpyTopology:

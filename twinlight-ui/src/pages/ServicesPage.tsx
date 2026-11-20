@@ -11,7 +11,14 @@ import { extractName, getNodeDisplayName } from "@/lib/tapi-helpers";
 import { createClient } from "@/api/client";
 import { cn } from "@/lib/cn";
 import CytoscapeGraph, { type CytoscapeStylesheet } from "@/components/graph/CytoscapeGraph";
-import { LAYOUT_CONFIGS, LAYOUT_LABELS, type LayoutName } from "@/lib/cytoscape-layout";
+import {
+  availableLayouts,
+  chooseLayout,
+  LAYOUT_LABELS,
+  layoutOptions,
+  type LayoutName,
+} from "@/lib/cytoscape-layout";
+import { useGeographicPositions } from "@/hooks/useGeographicPositions";
 import {
   Loader2,
   RefreshCw,
@@ -461,7 +468,8 @@ export default function ServicesPage() {
     useServicesStore();
 
   const [selectedUuid, setSelectedUuid] = useState<string | null>(null);
-  const [layoutName, setLayoutName] = useState<LayoutName>("cose");
+  // null until the user picks one: the default follows the data.
+  const [chosenLayout, setChosenLayout] = useState<LayoutName | null>(null);
   const [showLabels, setShowLabels] = useState(true);
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [serviceInfo, setServiceInfo] = useState<ServiceInfoResponse | null>(null);
@@ -493,6 +501,11 @@ export default function ServicesPage() {
   }, [baseUrl, selectedUuid]);
 
   const elements = useServiceGraph(services, topologyData);
+  // The service end-points drawn where they are, as on the Topology page.
+  const positions = useGeographicPositions(elements, topologyData?.positions);
+  const hasPositions = positions !== undefined;
+  const layoutName = chooseLayout(chosenLayout, hasPositions);
+  const layout = useMemo(() => layoutOptions(layoutName, positions), [layoutName, positions]);
 
   // SIP UUID → node display name (for detail panel)
   const sipToNodeName = useMemo(() => {
@@ -615,11 +628,11 @@ export default function ServicesPage() {
           </button>
           {showLayoutMenu && (
             <div className="absolute right-0 top-full z-10 mt-1 w-40 rounded border border-slate-200 bg-white py-1 shadow-lg">
-              {(Object.keys(LAYOUT_LABELS) as LayoutName[]).map((name) => (
+              {availableLayouts(hasPositions).map((name) => (
                 <button
                   key={name}
                   onClick={() => {
-                    setLayoutName(name);
+                    setChosenLayout(name);
                     setShowLayoutMenu(false);
                   }}
                   className={`w-full px-3 py-1.5 text-left text-xs hover:bg-slate-50 ${
@@ -752,7 +765,7 @@ export default function ServicesPage() {
             <CytoscapeGraph
               elements={elements}
               stylesheet={SERVICE_STYLESHEET}
-              layout={LAYOUT_CONFIGS[layoutName] || LAYOUT_CONFIGS.cose}
+              layout={layout}
               layoutKey={elements}
               style={{ width: "100%", height: "100%" }}
               onCy={handleCy}

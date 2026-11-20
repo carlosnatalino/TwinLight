@@ -157,3 +157,43 @@ describe("ServicesPage graph teardown", () => {
     expect(watch.errors).toEqual([]);
   });
 });
+
+describe("ServicesPage layout", () => {
+  function coreOf(container: HTMLElement) {
+    const host = [...container.querySelectorAll("div")].find(
+      (d) => (d as unknown as { _cyreg?: { cy?: unknown } })._cyreg?.cy,
+    ) as unknown as { _cyreg: { cy: import("cytoscape").Core } };
+    return host._cyreg.cy;
+  }
+
+  it("draws the end-points where they are when the twin gives positions", async () => {
+    const watch = collectUncaughtErrors();
+    useTopologyStore.setState({
+      data: {
+        ...TOPOLOGY,
+        positions: {
+          "site-a": { latitude: 47.60621, longitude: -122.332071 }, // Seattle
+          "site-b": { latitude: 25.76168, longitude: -80.19179 }, // Miami
+        },
+      },
+    });
+    const view = renderPage([service("svc-1", "coast to coast", "sip-a", "sip-b")]);
+    expect(screen.getByRole("button", { name: /Geographic/ })).toBeInTheDocument();
+    const cy = coreOf(view.container);
+    const a = cy.getElementById("site-a").position();
+    const b = cy.getElementById("site-b").position();
+    expect(a.x).toBeLessThan(b.x);
+    expect(a.y).toBeLessThan(b.y);
+    view.unmount();
+    await act(() => wait(100));
+    watch.stop();
+    expect(watch.errors).toEqual([]);
+  });
+
+  it("starts force-directed without positions and offers no Geographic layout", () => {
+    renderPage([service("svc-1", "plain", "sip-a", "sip-b")]);
+    fireEvent.click(screen.getByRole("button", { name: /Force-directed/ }));
+    expect(screen.queryByRole("button", { name: "Geographic" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Circle" })).toBeInTheDocument();
+  });
+});

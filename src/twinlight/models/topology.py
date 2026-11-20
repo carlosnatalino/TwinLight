@@ -93,6 +93,35 @@ class NodeEdgePoint(BaseModel):
     )
 
 
+class SupportingDevice(BaseModel):
+    """``supporting-device`` entry (grouping device-ref): a device's uuid."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    device_uuid: str = Field(..., alias="device-uuid")
+
+
+class DeviceSupportsNode(BaseModel):
+    """``tapi-equipment:device-supports-node``, an augment of the node.
+
+    tapi-equipment.yang v2.6.0 augments
+    ``/tapi-common:context/tapi-topology:topology-context/topology/node``
+    with this container: "Provides direct navigation to a device where the
+    node is supported by only one device ... CONDITION: Mandatory where the
+    node is supported by one device." Every node the twin builds is one
+    GNPy element, which is one ``device`` of ``physical-context``
+    (``models/equipment.py``), so every node lists exactly that device. It
+    is how a client gets from a node to its equipment's ``geolocation``
+    with members the standard defines.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    supporting_device: list[SupportingDevice] = Field(
+        default_factory=list, alias="supporting-device"
+    )
+
+
 class Node(BaseModel):
     """tapi.topology.Node"""
 
@@ -118,6 +147,10 @@ class Node(BaseModel):
     lifecycle_state: LifecycleState = Field(
         default=LifecycleState.INSTALLED,
         alias="lifecycle-state",
+    )
+    #: Module-qualified: an augment from tapi-equipment (RFC 7951 §4).
+    device_supports_node: DeviceSupportsNode = Field(
+        ..., alias="tapi-equipment:device-supports-node"
     )
 
 

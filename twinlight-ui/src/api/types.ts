@@ -1,5 +1,6 @@
 // TypeScript interfaces mirroring TAPI JSON wire format (hyphenated keys)
 
+import type { GeoPosition } from "@/lib/geo";
 import { parseUint64, TapiValueError } from "@/lib/yangNumbers";
 
 export interface NameAndValue {
@@ -46,6 +47,14 @@ export interface TapiNode {
   "administrative-state": string;
   "operational-state": string;
   "lifecycle-state": string;
+  /**
+   * The tapi-equipment augment of the node: the physical-context device that
+   * supports it (lib/geo.ts follows it to the node's position). Absent from
+   * an older twin.
+   */
+  "tapi-equipment:device-supports-node"?: {
+    "supporting-device"?: Array<{ "device-uuid": string }>;
+  };
 }
 
 export interface TapiLink {
@@ -108,6 +117,7 @@ export interface ContextResponse {
     uuid: string;
     "service-interface-point": ServiceInterfacePoint[];
     "tapi-topology:topology-context": TopologyContext;
+    "tapi-equipment:physical-context"?: PhysicalContext;
   };
 }
 
@@ -419,12 +429,24 @@ export interface CommonEquipmentProperties {
   "equipment-type-identifier"?: string;
 }
 
+/**
+ * `geolocation` (grouping geolocation): decimal degrees as decimal64, so
+ * strings (RFC 7951 §6.1); read them with lib/geo.ts parseGeolocation.
+ * Absent when the topology does not locate the element.
+ */
+export interface Geolocation {
+  latitude?: string;
+  longitude?: string;
+  altitude?: string;
+}
+
 export interface Equipment {
   uuid: string;
   name: NameAndValue[];
   "actual-equipment": {
     "common-equipment-properties": CommonEquipmentProperties;
   };
+  geolocation?: Geolocation;
 }
 
 export interface Device {
@@ -438,11 +460,13 @@ export interface PhysicalSpan {
   name: NameAndValue[];
 }
 
+export interface PhysicalContext {
+  device: Device[];
+  "physical-span": PhysicalSpan[];
+}
+
 export interface PhysicalContextResponse {
-  "tapi-equipment:physical-context": {
-    device: Device[];
-    "physical-span": PhysicalSpan[];
-  };
+  "tapi-equipment:physical-context": PhysicalContext;
 }
 
 // GET /transparent/data/ElementList (only the leaves the UI reads). Element
@@ -491,6 +515,13 @@ export interface ComputePathResponse {
 export interface TopologyData {
   topologies: Topology[];
   sips: ServiceInterfacePoint[];
+  /**
+   * Node UUID -> geographic position (lib/geo.ts nodePositions); absent when
+   * the twin places no node, or in an entry cached by an earlier release.
+   */
+  positions?: Record<string, GeoPosition>;
+  /** Why the positions the twin sent could not be read, when they could not. */
+  positionsError?: string;
 }
 
 // Constellation diagram API response
