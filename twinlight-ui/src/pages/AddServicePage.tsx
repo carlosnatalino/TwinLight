@@ -49,15 +49,17 @@ function getSipDisplayName(sip: ServiceInterfacePoint, ownerNode: TapiNode | und
 
 interface FormGroupProps {
   label: string;
+  /** The id of the control the label names. */
+  htmlFor: string;
   required?: boolean;
   hint?: string;
   children: React.ReactNode;
 }
 
-function FormGroup({ label, required, hint, children }: FormGroupProps) {
+function FormGroup({ label, htmlFor, required, hint, children }: FormGroupProps) {
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">
+      <label htmlFor={htmlFor} className="block text-sm font-medium text-gray-700 mb-1">
         {label}
         {required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
@@ -68,6 +70,7 @@ function FormGroup({ label, required, hint, children }: FormGroupProps) {
 }
 
 interface SelectProps {
+  id: string;
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
@@ -75,9 +78,10 @@ interface SelectProps {
   hasError?: boolean;
 }
 
-function Select({ value, onChange, disabled, children, hasError }: SelectProps) {
+function Select({ id, value, onChange, disabled, children, hasError }: SelectProps) {
   return (
     <select
+      id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
@@ -283,8 +287,13 @@ export default function AddServicePage() {
             Service Identity
           </h2>
 
-          <FormGroup label="Service Name" hint="Optional human-readable label stored as a name/value pair.">
+          <FormGroup
+            label="Service Name"
+            htmlFor="service-name"
+            hint="Optional human-readable label stored as a name/value pair."
+          >
             <input
+              id="service-name"
               type="text"
               value={serviceName}
               onChange={(e) => setServiceName(e.target.value)}
@@ -302,10 +311,17 @@ export default function AddServicePage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             {/* A-End */}
-            <div className="space-y-4 rounded-lg border border-blue-100 bg-blue-50/50 p-4">
-              <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide">A-End</p>
-              <FormGroup label="Service Interface Point" required>
+            <div
+              role="group"
+              aria-labelledby="a-end-title"
+              className="space-y-4 rounded-lg border border-blue-100 bg-blue-50/50 p-4"
+            >
+              <p id="a-end-title" className="text-xs font-semibold text-blue-700 uppercase tracking-wide">
+                A-End
+              </p>
+              <FormGroup label="Service Interface Point" htmlFor="a-end-sip" required>
                 <Select
+                  id="a-end-sip"
                   value={aEndSip}
                   onChange={setAEndSip}
                   disabled={noSips}
@@ -329,10 +345,17 @@ export default function AddServicePage() {
             </div>
 
             {/* Z-End */}
-            <div className="space-y-4 rounded-lg border border-green-100 bg-green-50/50 p-4">
-              <p className="text-xs font-semibold text-green-700 uppercase tracking-wide">Z-End</p>
-              <FormGroup label="Service Interface Point" required>
+            <div
+              role="group"
+              aria-labelledby="z-end-title"
+              className="space-y-4 rounded-lg border border-green-100 bg-green-50/50 p-4"
+            >
+              <p id="z-end-title" className="text-xs font-semibold text-green-700 uppercase tracking-wide">
+                Z-End
+              </p>
+              <FormGroup label="Service Interface Point" htmlFor="z-end-sip" required>
                 <Select
+                  id="z-end-sip"
                   value={zEndSip}
                   onChange={setZEndSip}
                   disabled={noSips}
@@ -366,9 +389,10 @@ export default function AddServicePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <FormGroup
               label="Administrative State"
+              htmlFor="admin-state"
               hint="UNLOCKED enables the service; LOCKED suspends it."
             >
-              <Select value={adminState} onChange={setAdminState}>
+              <Select id="admin-state" value={adminState} onChange={setAdminState}>
                 {ADMIN_STATES.map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -379,9 +403,10 @@ export default function AddServicePage() {
 
             <FormGroup
               label="Lifecycle State"
+              htmlFor="lifecycle-state"
               hint="PLANNED is typical for newly provisioned services."
             >
-              <Select value={lifecycleState} onChange={setLifecycleState}>
+              <Select id="lifecycle-state" value={lifecycleState} onChange={setLifecycleState}>
                 {LIFECYCLE_STATES.map((s) => (
                   <option key={s} value={s}>
                     {s.replace(/_/g, " ")}
@@ -392,9 +417,10 @@ export default function AddServicePage() {
 
             <FormGroup
               label="Modulation Format"
+              htmlFor="modulation-format"
               hint="Automatic picks the densest format whose QoT closes on the route."
             >
-              <Select value={modulationFormat} onChange={setModulationFormat}>
+              <Select id="modulation-format" value={modulationFormat} onChange={setModulationFormat}>
                 <option value={AUTOMATIC}>Automatic</option>
                 {MODULATION_FORMATS.map((f) => (
                   <option key={f} value={f}>
@@ -406,9 +432,11 @@ export default function AddServicePage() {
 
             <FormGroup
               label="Central Frequency (THz)"
+              htmlFor="central-frequency"
               hint="Optional: the centre of a media-channel block, e.g. 191.30625. Empty: first free block."
             >
               <input
+                id="central-frequency"
                 type="number"
                 step="any"
                 value={centralFrequency}
@@ -420,9 +448,11 @@ export default function AddServicePage() {
 
             <FormGroup
               label="Launch Power (dBm)"
+              htmlFor="launch-power"
               hint={`Optional, ${LAUNCH_POWER_RANGE_DBM[0]} to ${LAUNCH_POWER_RANGE_DBM[1]} dBm. Empty: the equipment default.`}
             >
               <input
+                id="launch-power"
                 type="number"
                 step="0.01"
                 min={LAUNCH_POWER_RANGE_DBM[0]}

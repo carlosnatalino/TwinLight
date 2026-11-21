@@ -8,6 +8,11 @@ coverage
 *.log
 .DS_Store
 
+# Browser-test output (traces, screenshots, twin state): never part of the image.
+e2e/test-results
+e2e/playwright-report
+e2e/.twin-state
+
 # Git metadata isn't needed in the image.
 .git
 .gitignore

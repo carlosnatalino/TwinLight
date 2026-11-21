@@ -43,6 +43,15 @@ function loadInitialFromCache(): { data: TopologyData; fetchedAt: number; isStal
 
 const _initial = loadInitialFromCache();
 
+// What the getters return before a topology is loaded. One shared array
+// each, not a fresh `[]` per call: components use getTopologies and getSips
+// as selectors (useTopologyStore((s) => s.getSips())), and a selector whose
+// result changes on every call makes zustand re-render until React gives up
+// ("Maximum update depth exceeded"), which crashed the Topology and Path
+// pages on a first visit, before the topology had arrived.
+const NO_TOPOLOGIES: Topology[] = [];
+const NO_SIPS: ServiceInterfacePoint[] = [];
+
 export const useTopologyStore = create<TopologyState>()((set, get) => ({
   data: _initial?.data ?? null,
   fetchedAt: _initial?.fetchedAt ?? null,
@@ -118,8 +127,10 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
     set({ data: null, fetchedAt: null, isStale: false, error: null });
   },
 
-  getTopologies: () => get().data?.topologies ?? [],
+  getTopologies: () => get().data?.topologies ?? NO_TOPOLOGIES,
+  // These two build a new array on every call, so they are not selectors:
+  // call them on getState(), or select data and derive with useMemo.
   getAllNodes: () => get().data?.topologies.flatMap((t) => t.node) ?? [],
   getAllLinks: () => get().data?.topologies.flatMap((t) => t.link) ?? [],
-  getSips: () => get().data?.sips ?? [],
+  getSips: () => get().data?.sips ?? NO_SIPS,
 }));

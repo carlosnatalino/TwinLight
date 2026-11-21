@@ -1,0 +1,25 @@
+# The twin the browser tests run against for most pages: the five-ROADM mesh
+# the routing tests use (tests/fixtures/mesh_network.json), with the GNPy
+# backend. It starts in seconds.
+#
+# Relative paths resolve against this file's directory. The equipment library
+# is provisioned by `twinlight-fetch-examples`, which e2e/twin/start.sh runs
+# when it is missing. Ports, the snapshot directory, CORS origins and API
+# tokens are set by playwright.config.ts, so they live in one place.
+gnpy:
+  topology: "../../../tests/fixtures/mesh_network.json"
+  equipment: "../../../examples/gnpy-data/eqpt_config.json"
+
+physics:
+  backend: gnpy
+
+rmsa:
+  k_shortest_paths: 5
+
+simulation:
+  # Every run starts from a clean twin and leaves nothing behind.
+  auto_snapshot_interval: 0
+  auto_checkpoint: false
+
+logging:
+  level: "ERROR"

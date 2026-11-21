@@ -36,6 +36,11 @@ npm --prefix twinlight-ui test -- run   # web UI tests
 npm --prefix twinlight-ui run build     # web UI build
 ```
 
+A change to how a UI page behaves should also pass the browser tests,
+`npm --prefix twinlight-ui run test:e2e`. They run the UI in Chromium against
+real twins they start themselves, and are not part of the checks above or CI;
+see [twinlight-ui/e2e/README.md](twinlight-ui/e2e/README.md).
+
 CI additionally builds both Docker images and smoke-tests the twin image, so a
 change that breaks `docker compose up --build` will be caught there.
 

@@ -154,3 +154,16 @@ describe("fetchTopology: node positions", () => {
     expect(useTopologyStore.getState().data).not.toHaveProperty("positionsError");
   });
 });
+
+describe("selectors before a topology is loaded", () => {
+  // Components select these (useTopologyStore((s) => s.getSips())); a new
+  // array per call would make zustand re-render without end.
+  it("return the same empty array on every call", () => {
+    useTopologyStore.setState({ data: null });
+    const { getTopologies, getSips } = useTopologyStore.getState();
+    expect(getTopologies()).toEqual([]);
+    expect(getTopologies()).toBe(getTopologies());
+    expect(getSips()).toEqual([]);
+    expect(getSips()).toBe(getSips());
+  });
+});

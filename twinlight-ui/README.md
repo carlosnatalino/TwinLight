@@ -19,6 +19,7 @@ npm ci             # reproducible install from package-lock.json
 npm run dev        # dev server on http://localhost:5173
 npm run build      # production build → dist/
 npm test           # test suite (vitest)
+npm run test:e2e   # browser tests against real twins (Playwright; see e2e/README.md)
 npm run lint       # eslint
 ```
 
@@ -175,4 +176,4 @@ synthesises the data (`/internal/services/{uuid}/constellation` and
 | Graph | Cytoscape.js |
 | Charts | Recharts |
 | Styling | Tailwind CSS v3 |
-| Testing | Vitest + React Testing Library |
+| Testing | Vitest + React Testing Library; Playwright Test for the browser tests |
