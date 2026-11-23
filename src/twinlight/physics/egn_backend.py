@@ -387,7 +387,7 @@ class EgnBackend:
             total_fiber_km=total_km,
             edfa_uids=edfa_uids,
             fiber_uids=fiber_uids,
-            pdl_elements=[(uid, "Edfa") for uid in edfa_uids],
+            pdl_elements=self._pdl_hinges(path_uids),
         )
 
     def _neighbours_by_fiber(
@@ -705,24 +705,54 @@ class EgnBackend:
 
         Returns None when no leg of the route resolved to a link.
         """
-        index = self._egn_topo.gnpy_uid_index
-        # Keep only UIDs the designed topology knows as terminals. A raw
-        # fiber UID from the route is absent from the designed index; it
-        # must be dropped, not defaulted to a terminal, or it would break
-        # the ROADM adjacency the link lookup depends on.
-        terminals = [
-            uid for uid in path_uids
-            if (loc := index.get(uid)) is not None
-            and loc.kind in ("roadm", "transceiver")
-        ]
         link_ids = [
             link_id
-            for pair in itertools.pairwise(terminals)
+            for pair in itertools.pairwise(self._route_terminals(path_uids))
             # Legs with no fiber (a transceiver's access hop to its own
             # ROADM) are not EGN links; they contribute no noise.
             if (link_id := self._egn_topo.link_by_endpoints.get(pair)) is not None
         ]
         return link_ids or None
+
+    def _route_terminals(self, path_uids: list[str]) -> list[str]:
+        """The route's ROADMs and transceivers, in order."""
+        index = self._egn_topo.gnpy_uid_index
+        # Keep only UIDs the designed topology knows as terminals. A raw
+        # fiber UID from the route is absent from the designed index; it
+        # must be dropped, not defaulted to a terminal, or it would break
+        # the ROADM adjacency the link lookup depends on.
+        return [
+            uid for uid in path_uids
+            if (loc := index.get(uid)) is not None
+            and loc.kind in ("roadm", "transceiver")
+        ]
+
+    def _pdl_hinges(self, path_uids: list[str]) -> list[tuple[str, str]]:
+        """The route's PDL hinges in propagation order: every ROADM, and
+        between two terminals the amplifiers of the link joining them.
+
+        Hinge model of Zarkosvky & Shtaif, Opt. Lett. 45(5):1224 (2020):
+        ROADMs/WSSs and EDFAs are the discrete PDL elements, the same list
+        ``gnpy_adapter.compute_path_baseline`` builds from GNPy's path. The
+        ROADMs carry the larger PDL (``pdl_per_roadm_db``), so leaving them
+        out would understate the PDL penalty under this backend.
+        """
+        index = self._egn_topo.gnpy_uid_index
+        hinges: list[tuple[str, str]] = []
+        previous: str | None = None
+        for uid in self._route_terminals(path_uids):
+            if previous is not None:
+                link_id = self._egn_topo.link_by_endpoints.get((previous, uid))
+                if link_id is not None:
+                    hinges.extend(
+                        (amp.uid, "Edfa")
+                        for amp in self._link_plan(link_id).amplifiers
+                        if amp.uid is not None
+                    )
+            if index[uid].kind == "roadm":
+                hinges.append((uid, "Roadm"))
+            previous = uid
+        return hinges
 
     def _locate(self, uid: str) -> EgnNodeKind:
         loc = self._egn_topo.gnpy_uid_index.get(uid)

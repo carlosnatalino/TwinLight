@@ -403,6 +403,24 @@ class TestAgreementWithGnpy:
         assert ours.gsnr_db == pytest.approx(ref.gsnr_db, abs=0.05)
         assert ours.edfa_uids == ref.edfa_uids
 
+    @pytest.mark.parametrize(("src", "dst"), [("trx A", "trx B"), ("trx A", "trx C")])
+    def test_pdl_hinges_match(self, tmp_path, src, dst) -> None:
+        """The time-varying layer sees the same PDL hinges under both
+        backends: every ROADM and EDFA on the route, in propagation order.
+        The ROADMs carry the larger PDL, so dropping them would make the PDL
+        penalty depend on the QoT engine rather than on the line."""
+        import asyncio
+
+        gnpy, egn = self._contexts(tmp_path)
+        channel = {"centre_frequency_hz": 193.1e12, "media_channel_width_hz": 56.25e9,
+                   "launch_power_dbm": 0.0}
+        (g_path,), (e_path,) = gnpy.candidate_paths(src, dst), egn.candidate_paths(src, dst)
+        ref = asyncio.run(gnpy._backend.compute_baseline(g_path, "DP-QPSK", **channel))
+        ours = asyncio.run(egn._backend.compute_baseline(e_path, "DP-QPSK", **channel))
+        assert ref is not None and ours is not None
+        assert any(kind == "Roadm" for _, kind in ref.pdl_elements)
+        assert ours.pdl_elements == ref.pdl_elements
+
     def test_noise_figure_is_gnpys_at_the_operating_gain(self, tmp_path) -> None:
         """EGN reports (and propagates) the NF GNPy's amplifier has after a
         propagation, not a figure averaged from the type's datasheet."""
