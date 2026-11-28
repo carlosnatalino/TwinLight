@@ -126,17 +126,23 @@ class TestApplyAllTransients:
         cfg.environmental.enabled = False
 
         tracker = EdfaStateTracker()
+        for _ in range(3):
+            tracker.notify_channel_change(
+                ["edfa1", "edfa2"], +1, cfg.edfa_reservoir, t=-1.0,
+            )
         tracker.notify_channel_change(
             ["edfa1", "edfa2"], +1, cfg.edfa_reservoir, t=0.0,
         )
 
         baseline = self._make_baseline()
-        # At the event: 2 EDFAs × -0.3 dB of gain excursion.
+        # At the event: one swing of 10·log10(3/4) for the two amplifiers of
+        # one link (Sun et al. 1997), on both the GSNR and the OSNR track.
         peak = apply_all_transients(
-            baseline, "svc-1", "DP-QPSK", t=1e-9,
+            baseline, "svc-1", "DP-QPSK", t=0.0,
             cfg=cfg, edfa_tracker=tracker,
         )
-        assert abs(peak["gsnr-db"] - (25.0 - 0.6)) < 0.1
+        assert peak["gsnr-db"] == pytest.approx(25.0 + 10 * math.log10(3 / 4))
+        assert peak["osnr-db"] == pytest.approx(28.0 + 10 * math.log10(3 / 4))
 
         # Once relaxed, the cascade is back at the designed operating
         # point the baseline already represents — no standing offset.

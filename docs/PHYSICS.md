@@ -248,10 +248,40 @@ r(t) = r_ss_new + (r_ss_old − r_ss_new) · exp(−(t − t_event) / τ_e)
 ```
 
 where τ_e (Eq. 29) is input-power dependent and **asymmetric**: ≈1–10 µs for a
-channel add, ≈100–500 µs for a drop. Cascade behaviour follows Sun 1997: the
-transient rate scales linearly with amplifier count, `1/T_N = N · 1/T_1`, and
-peak excursions can reach ~28 dB p-p without AGC
-[[3]](../README.md#ref-3).
+channel add, ≈100–500 µs for a drop.
+
+**Magnitude.** A saturated amplifier holds its total output power, so the
+swing in surviving-channel power follows "the ratio of the number of channels
+initially to the number of surviving channels" (Sun *et al.* 1997, § Single
+EDFA, [[2]](../README.md#ref-2)):
+
+```
+Δ = 10·log10(N_before / N_after)
+```
+
+negative for an add, positive for a drop: −0.05 dB for one channel onto 87,
+−3 dB for one onto one. With no channel before or after there is no surviving
+channel and no swing.
+
+**Cascade.** Along a chain carrying the same channels the first amplifier sets
+a channel's share of the output power and the others conserve it; Sun *et
+al.*'s cascade simulation shows the overshoot approaching "but never
+exceed[ing]" a bounded value. The amplifiers of one ROADM-to-ROADM link carry
+the same lightpaths, so a route counts each run of consecutive amplifiers with
+the same event record (one link, one load step) once, and adds the runs: a
+further swing appears only where the channel meets amplifiers whose load
+changed differently. The transient's **rate** scales linearly with the number
+of EDFAs (Sun *et al.*, *Electron. Lett.* 1997,
+[[34]](../README.md#ref-34)), so an event that touched M of the route's
+amplifiers relaxes with τ_e / M. Without AGC, cascades in packet-like
+operation reach ~28 dB p-p [[3]](../README.md#ref-3); the AGC assumption
+below is what keeps this model's excursions transient.
+
+**Reference load.** The channel counts are the lit lightpaths through each
+amplifier, under both backends. The GNPy backend's QoT baseline assumes the
+full SI comb on every line, but the reservoir does not: an excursion is what an
+amplifier carrying only the lit lightpaths would see, not one whose empty
+slots are filled with loading channels.
 
 **The steady state is zero deviation**, and this is the load-bearing detail.
 Between events an AGC-controlled, gain-flattened EDFA delivers its designed
@@ -259,17 +289,18 @@ per-channel gain whatever its loading — and that designed operating point is
 precisely what the QoT baseline already represents, since `designed_network()`
 sets every amplifier's operating point before propagation. So `r_ss_old` and
 `r_ss_new` both map to *zero* deviation from the baseline, and what this model
-contributes is the excursion between them:
+contributes is the excursion between them, summed over the route's runs r:
 
 ```
-Δ(t) = Δ_event · exp(−(t − t_event) / τ_e),   Δ_event = −gain_per_channel_db · Δchannels
+Δ(t) = Σ_r Δ_r · exp(−(t − t_r) · M_r / τ_e),   Δ_r = 10·log10(N_before / N_after)
 ```
 
-Adding channels depletes the reservoir, so gain drops and surviving channels
-lose GSNR (negative excursion); dropping channels lets gain overshoot
-(positive). Treating the steady state itself as a load-dependent penalty would
-double-count loading the baseline has already priced in — and, summed over a
-long cascade, would swamp it: 30 amplifiers × 0.3 dB × one channel is 9 dB.
+The peak is the saturated amplifier's swing, the upper bound for an AGC loop
+slower than the reservoir; the loop's own response is not modelled. Treating
+the steady state itself as a load-dependent penalty would double-count loading
+the baseline has already priced in. Before this revision every amplifier added
+its own fixed 0.3 dB per channel: one channel onto a 40-amplifier route swung
+the GSNR by −12 dB, where the ratio gives −0.05 dB on a loaded line.
 
 `EdfaStateTracker` is owned by `TapiContext` and updated whenever a service is
 created or deleted — so an add/drop event on one lightpath perturbs every other
@@ -510,9 +541,9 @@ used for research.
 
 | Area | What TwinLight does | What the literature does | Severity |
 |------|---------------------|--------------------------|----------|
-| **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop, linear dB cascade | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events |
+| **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop; the peak is the saturated amplifier's swing, reached at the event and relaxing to the AGC set point with τ_e/M | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping, and the AGC loop's own response | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events, and an AGC loop faster than the reservoir would cut the peak below the saturated swing |
 | **EDFA excursion visibility** | τ_e is 10–100 µs, so a wall-clock poll essentially always samples the relaxed state and the model reads ~0 dB between events | Same physics — this *is* what AGC does | Low, but easy to mistake for an inactive model: to see the excursion you must sample near an add/drop, which the twin only produces on service create/delete |
-| **EDFA excursion magnitude** | Excursion scales with the absolute load step, `gain_per_channel_db × \|Δchannels\|` | Sun 1997 scales it with the *fraction* of channels added or dropped, so one channel added to a full C-band perturbs far less than one added to an empty one | Low at the loadings the bundled scenarios reach; refine before claiming excursion magnitudes on heavily loaded spans |
+| **EDFA excursion magnitude** | 10·log10(N_before/N_after) per run of amplifiers with the same event record, the runs added; N counts the lit lightpaths through the amplifier, under both backends | Sun *et al.* 1997: the same ratio for a saturated amplifier, with spectral hole burning and gain tilt adding channel-dependent terms | Low — two links whose loads change by the same counts at the same event are taken for one run, which can undercount a route whose companions differ; under GNPy the QoT baseline assumes the full comb while the reservoir sees only the lit lightpaths, so its excursions are those of a line without loading channels |
 | **EGN kernel** | The incoherent GN model (Poggiolini 2014 Eq. 120/123) for the channel itself and each co-propagating lightpath, over GNPy's designed amplifiers at their operating points and noise figures; γ, \|β₂\| and the NF at one frequency; no EGN correction on the cross-channel term; no ROADM or transceiver noise (GNPy adds none on these paths either: the adapter's transmitter is ideal) | GNPy evaluates each channel at its own frequency, with gain and NF ripple and the dispersion slope | Low — with the same load the backends agree within 0.05 dB on 80–160 km routes and 0.25 dB at 2,850 km. Before this revision the self-channel term used π²/4 inside the asinh (≈2 dB too little NLI) and the boosters, connector losses and operating-gain NF were missing, which put EGN OSNR ~7 dB above GNPy |
 | **Phase noise (EEPN)** | Shieh & Ho Eq. 33–41, contributing ≈ −0.1 dB at 2150 km on CORONET | Same | None — implemented per the reference; the penalty scales with accumulated dispersion as Shieh & Ho predict |
 | **PMD drift** | Each fiber's DGD (τᵢ ∝ √Lᵢ) drifts sinusoidally, ±10 % with a 90 s period, and the path DGD is their quadrature sum | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — the quadrature accumulation and the per-fiber magnitudes are right; the trajectory shape is an approximation, and on a long route the incoherent phases shrink the path's swing well below ±10 % |

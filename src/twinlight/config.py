@@ -261,15 +261,10 @@ class EdfaReservoirConfig(BaseModel):
         default=10.0, gt=0,
         description=(
             "Erbium metastable lifetime [ms]. "
-            "Sun-Saleh-Zyskind 1997, Electron. Lett. vol. 33."
-        ),
-    )
-    gain_per_channel_db: float = Field(
-        default=0.3, ge=0,
-        description=(
-            "Per-channel GSNR contribution [dB] for Bononi "
-            "reservoir model. Cascade accumulates linearly "
-            "(Sun 1997)."
+            "Sun-Saleh-Zyskind 1997, Electron. Lett. vol. 33. "
+            "The excursion's magnitude is not a knob: it follows from the "
+            "channel counts before and after the event (Sun, Zyskind & "
+            "Srivastava, IEEE JSTQE 3(4):991, 1997)."
         ),
     )
     tau_add_factor: float = Field(

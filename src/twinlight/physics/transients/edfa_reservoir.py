@@ -4,8 +4,7 @@ Physical basis
 --------------
 The Giles-Desurvire 1991 (JLT vol. 9) / Sun-Saleh-Zyskind 1997
 (Electron. Lett. vol. 33) reservoir model describes EDFA gain transients
-during channel add/drop events.  The single-ODE model (Bononi-Rusch,
-JLT 1998, Eq. 5):
+during channel add/drop events.  The single-ODE model (Bononi-Rusch, JLT 1998, Eq. 5):
 
     dr/dt = -r(t)/τ + Σ Q_j^in(t) [1 - exp(B_j·r(t) - A_j)]
 
@@ -17,31 +16,68 @@ where τ_e is the effective time constant (Bononi-Rusch Eq. 29), which
 depends on input power and is asymmetric for add (~1-10 µs) vs.
 drop (~100-500 µs).
 
-Cascade behaviour (Sun 1997): transient rate scales linearly with
-amplifier count: 1/T_N = N · 1/T_1.  Peak excursions can reach
-~28 dB p-p without AGC (Tancevski-Bononi-Rusch, IEEE JLT 1999).
+Magnitude (Sun et al., JSTQE 1997, § Single EDFA).  A saturated amplifier
+holds its total output power, so the swing in surviving-channel power is set
+by the ratio of the channel counts before and after the event:
+
+    Δ = 10·log10(N_before / N_after)   [dB]
+
+negative for an add (the channels share the output with one more), positive
+for a drop.  One channel added to 87 is −0.05 dB; one added to one is −3 dB.
+With no channel before (or none after) there is no surviving channel, and
+nothing to perturb.
+
+Cascade (same paper, § Numerical Simulation of Fast Power Transients: the
+overshoot along a chain "asymptotically approaches, but never exceed[s] a
+certain value").  In a chain of amplifiers carrying the same channels the
+first one sets the surviving channel's share of the output power and the
+others conserve it, so the swing does not grow with the number of
+amplifiers.  A further swing appears only where the channel meets another
+amplifier whose load changed differently.  The amplifiers of one
+ROADM-to-ROADM link carry the same lightpaths, so a route's excursion counts
+each run of consecutive amplifiers with the same event record once, and
+adds the runs.
+
+Rate (Sun et al., Electron. Lett. 33(4):313, 1997: "the rate at which
+surviving channel power increases scales linearly with the number of
+EDFAs").  A channel that crosses M amplifiers touched by the event sees the
+transient M times faster than one crossing a single amplifier, so the
+route's excursion relaxes with τ_e / M.
+
+Without AGC, and with packet-like loading, cascades show peak swings of up to
+~28 dB p-p (Tancevski-Bononi-Rusch, IEEE JLT 1999); the AGC assumption below
+is what keeps this model's excursions transient.
 
 Implementation
 --------------
-This module maintains per-EDFA state tracking the current channel count,
-the last event time, and the gain excursion that event produced.  On each
-query, the exponential decay is evaluated at the current wall-clock time.
+This module tracks, per EDFA, the number of lit lightpaths through it and
+the last add/drop event: its time, the excursion it left (the swing above,
+plus whatever an earlier transient still had in flight) and τ_e.  A route's
+excursion is evaluated at query time from the records of its amplifiers.
 
-**The steady state is zero deviation.**  Between add/drop events an
+**Reference load.**  The channel counts are the admitted lightpaths through
+each amplifier, under both backends.  The GNPy backend's QoT baseline
+assumes the full SI comb on every line; the reservoir does not, so under
+GNPy an excursion is what an amplifier carrying only the lit lightpaths
+would see, not one whose empty slots are filled with loading channels
+(PHYSICS.md § Known limitations).
+
+**The steady state is zero deviation (AGC).**  Between add/drop events an
 AGC-controlled, gain-flattened EDFA delivers its designed per-channel gain
 regardless of how many channels it carries — and that designed operating
 point is exactly what the QoT backend's baseline already represents
 (``designed_network()`` sets each amplifier's operating point before any
 propagation).  What this model contributes is therefore the *excursion*
-around that baseline, which relaxes back to it with τ_e, and never a
-standing offset.  Modelling the steady state itself as a load-dependent
-penalty would double-count the loading the baseline has already priced in.
+around that baseline, and never a standing offset.  The peak is the swing of
+the saturated amplifier above, the upper bound for an AGC loop slower than
+the reservoir; the loop's own response is not modelled, and the excursion
+relaxes to the set point with τ_e / M.  Modelling the steady state as a
+load-dependent penalty would double-count the loading the baseline has
+already priced in.
 
 Default parameters:
-  - tau_ms = 10.0 ms: erbium metastable lifetime (Sun-Saleh-Zyskind 1997)
-  - gain_per_channel_db = 0.3 dB: peak gain excursion [dB] per channel of
-    load step (conservative for a single EDFA; cascade accumulates
-    linearly in dB, Sun 1997)
+  - tau_ms = 10.0 ms: erbium metastable lifetime (Sun-Saleh-Zyskind 1997,
+    Electron. Lett. vol. 33)
   - tau_add_factor = 0.001: τ_e/τ ratio for channel-add events
     (Bononi-Rusch 1998: ~1-10 µs for τ = 10 ms)
   - tau_drop_factor = 0.01: τ_e/τ ratio for channel-drop events
@@ -50,8 +86,10 @@ Default parameters:
 
 from __future__ import annotations
 
+import itertools
 import math
 import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -59,18 +97,34 @@ if TYPE_CHECKING:
     from twinlight.config import EdfaReservoirConfig
 
 
-@dataclass
+@dataclass(frozen=True)
 class EdfaEvent:
     """Record of the last channel-count change on an EDFA.
 
     The reservoir relaxes back to zero deviation (the designed operating
     point), so only the excursion at the event and its decay constant
-    need to be stored — see the module docstring.
+    need to be stored — see the module docstring.  The amplifiers of one
+    link, notified by the same event with the same load, hold equal records.
     """
 
     event_time: float          # wall-clock time [s] of the event
     excursion_db: float        # GSNR deviation [dB] immediately after the step
-    tau_eff_s: float           # effective time constant [s]
+    tau_eff_s: float           # effective time constant [s] of one amplifier
+
+
+def load_step_swing_db(n_before: int, n_after: int) -> float:
+    """Surviving-channel power swing [dB] of a saturated EDFA whose load goes
+    from ``n_before`` to ``n_after`` channels.
+
+    Sun, Zyskind & Srivastava, IEEE JSTQE 3(4):991 (1997), § Single EDFA:
+    "the total swing in surviving channel power is proportional to ratio of
+    the number of channels initially to the number of surviving channels",
+    which is the saturated amplifier holding its total output power.  Zero
+    when either count is zero: no channel survives the step.
+    """
+    if n_before <= 0 or n_after <= 0:
+        return 0.0
+    return 10.0 * math.log10(n_before / n_after)
 
 
 class EdfaStateTracker:
@@ -81,7 +135,7 @@ class EdfaStateTracker:
     """
 
     def __init__(self) -> None:
-        # edfa_uid -> current channel count
+        # edfa_uid -> current channel count (lit lightpaths through it)
         self._channel_count: dict[str, int] = {}
         # edfa_uid -> last event record
         self._last_event: dict[str, EdfaEvent] = {}
@@ -117,16 +171,15 @@ class EdfaStateTracker:
 
             # Current deviation at event time (evaluate ongoing transient)
             # so back-to-back events compose instead of discarding whatever
-            # excursion is still in flight.
+            # excursion is still in flight.  It is this amplifier's own
+            # (M = 1) view of the transient.
             current_dev = self._get_deviation(uid, t)
 
-            # Bononi-Rusch: the gain excursion is proportional to the load
-            # *change*. Adding channels depletes the reservoir, so gain
-            # drops and surviving channels lose GSNR (negative excursion);
-            # dropping channels lets gain overshoot (positive excursion).
-            # It then relaxes back to the designed operating point — the
-            # steady state is zero deviation, not a standing penalty.
-            excursion = current_dev - cfg.gain_per_channel_db * effective_delta
+            # Sun et al. JSTQE 1997: the swing follows the channel-count
+            # ratio — negative for an add (gain compresses), positive for a
+            # drop (gain overshoots).  It then relaxes back to the designed
+            # operating point: the steady state is zero deviation.
+            excursion = current_dev + load_step_swing_db(old_count, new_count)
 
             # Effective time constant depends on direction
             # (Bononi-Rusch 1998, Eq. 29: τ_e is asymmetric)
@@ -145,19 +198,12 @@ class EdfaStateTracker:
             )
 
     def _get_deviation(self, uid: str, t: float) -> float:
-        """Evaluate current GSNR deviation for an EDFA at time t."""
+        """GSNR deviation of one EDFA at time t, as a channel crossing it
+        alone would see it (no cascade speed-up)."""
         ev = self._last_event.get(uid)
         if ev is None:
             return 0.0
-        elapsed = t - ev.event_time
-        if elapsed < 0:
-            # Before the recorded event the amplifier is at its designed
-            # operating point as far as this tracker can tell — only the
-            # most recent event is retained.
-            return 0.0
-        # Bononi-Rusch Eq. 19: exponential step response, relaxing to the
-        # zero-deviation steady state (see the module docstring).
-        return ev.excursion_db * math.exp(-elapsed / ev.tau_eff_s)
+        return _decayed(ev, t, 1)
 
     def get_total_delta_gsnr_db(
         self,
@@ -166,8 +212,14 @@ class EdfaStateTracker:
     ) -> float:
         """Compute total GSNR perturbation from all EDFAs on a path.
 
-        Cascade accumulation: GSNR deviations add linearly in dB
-        (Sun 1997: 1/T_N = N · 1/T_1).
+        Cascade (module docstring): a run of consecutive amplifiers with the
+        same event record (one link's, notified by one event with one load)
+        counts once, since a saturated chain conserves the surviving
+        channel's share of its output (Sun et al., JSTQE 1997); different
+        runs add.  Each event's excursion relaxes with τ_e / M, M being the
+        number of the path's amplifiers that event touched (Sun et al.,
+        Electron. Lett. 1997: the rate scales linearly with the number of
+        EDFAs).
 
         Args:
             edfa_uids: Ordered EDFA UIDs along the path.
@@ -181,12 +233,31 @@ class EdfaStateTracker:
         """
         if t is None:
             t = time.time()
-        return sum(self._get_deviation(uid, t) for uid in edfa_uids)
+        records = [self._last_event.get(uid) for uid in edfa_uids]
+        touched = Counter(ev.event_time for ev in records if ev is not None)
+        total = 0.0
+        for ev, _run in itertools.groupby(records):
+            if ev is not None:
+                total += _decayed(ev, t, touched[ev.event_time])
+        return total
 
     def clear_edfa(self, uid: str) -> None:
         """Remove state for an EDFA (e.g. when no services traverse it)."""
         self._channel_count.pop(uid, None)
         self._last_event.pop(uid, None)
+
+
+def _decayed(ev: EdfaEvent, t: float, speed_up: int) -> float:
+    """The excursion of ``ev`` at time t, relaxing with τ_e / ``speed_up``."""
+    elapsed = t - ev.event_time
+    if elapsed < 0:
+        # Before the recorded event the amplifier is at its designed
+        # operating point as far as this tracker can tell — only the
+        # most recent event is retained.
+        return 0.0
+    # Bononi-Rusch Eq. 19: exponential step response, relaxing to the
+    # zero-deviation steady state (see the module docstring).
+    return ev.excursion_db * math.exp(-elapsed * max(speed_up, 1) / ev.tau_eff_s)
 
 
 def delta_gsnr_db(

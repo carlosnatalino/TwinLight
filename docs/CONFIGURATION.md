@@ -194,7 +194,6 @@ isolate one effect in an experiment. The physics is described in
 edfa_reservoir:
   enabled: true
   tau_ms: 10.0
-  gain_per_channel_db: 0.3
   tau_add_factor: 0.001
   tau_drop_factor: 0.01
   solver_method: "RK45"
@@ -203,8 +202,7 @@ edfa_reservoir:
 
 | Field | Default | Meaning and source |
 |-------|---------|--------------------|
-| `tau_ms` | `10.0` | Erbium metastable lifetime [ms] — Sun, Zyskind & Srivastava 1997 |
-| `gain_per_channel_db` | `0.3` | Peak gain excursion [dB] per channel of load step, at the moment of an add/drop; the cascade accumulates linearly in dB (Sun 1997). It decays to zero with τ_e — it is **not** a standing per-channel penalty, see [PHYSICS.md § 2.1](PHYSICS.md) |
+| `tau_ms` | `10.0` | Erbium metastable lifetime [ms] — Sun, Zyskind & Srivastava 1997. The excursion's size is not a parameter: it is 10·log10(N_before/N_after) from the channel counts at the event, and it relaxes to zero with τ_e/M on a route whose M amplifiers the event touched, see [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir) |
 | `tau_add_factor` | `0.001` | τ_e/τ for channel-add events — Bononi & Rusch 1998 Eq. 29 (≈1–10 µs) |
 | `tau_drop_factor` | `0.01` | τ_e/τ for channel-drop events — ibid. (≈100–500 µs) |
 | `solver_method` | `RK45` | `scipy.integrate.solve_ivp` method |
