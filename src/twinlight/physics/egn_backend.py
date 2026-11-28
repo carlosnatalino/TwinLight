@@ -275,6 +275,10 @@ class EgnBackend:
         # equipment library is available the topology is first run through
         # GNPy's design step, so both backends see the same amplifiers.
         gnpy_topo, self._models = _load_topology_with_amplifiers(config)
+        # The elements propagated over, designed when an equipment library is
+        # configured: the context indexes links and the inventory from them,
+        # so both backends list the same elements (PhysicalBackend).
+        self.element_topology: GnpyTopology | None = gnpy_topo
         # The reference channel and design launch power: the configured
         # equipment library's SI, else GNPy's bundled one (channel_plan.py).
         self.spectral_defaults = load_spectral_defaults(config.gnpy.equipment)

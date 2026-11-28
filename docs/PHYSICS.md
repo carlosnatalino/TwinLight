@@ -161,9 +161,13 @@ amplifiers at identical operating points; they differ only in how the noise
 is computed.
 
 The GNPy-format topology remains the single source of truth: `TapiContext`
-parses it for the T-API model and routing exactly as before, and the designed,
-amplified view is derived from it inside the EGN backend alone — nothing else in
-the twin sees the split spans.
+parses it for the T-API model and for routing, and the designed, amplified view
+is derived from it. The EGN backend exposes that view as its
+`element_topology`, so the twin lists the same elements under both backends:
+the link index behind `/LinkList` and parameter paths, the T-API physical
+inventory, and the fibers a cut can name. A cut of a fiber the design split
+removes the parsed fiber it came from from the routing graph, and the link
+stays cut while any of its sub-spans is.
 
 Without an equipment library the design step is skipped and the topology is used
 as written, which stays correct for topologies that already specify their own

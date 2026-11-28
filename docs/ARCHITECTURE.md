@@ -310,8 +310,12 @@ read reflect the current instant.
    backend's `uid_map` and `supported_attributes()` schema, so the same path
    language works under GNPy and EGN. `/Service` scopes use the
    element → service reverse index; `/Link` scopes use an inline-element →
-   terminal index built at startup by walking the backend's own graph (GNPy's
-   designed network contains booster amplifiers the parsed topology lacks).
+   terminal index built at startup by walking the elements the backend
+   propagates over: GNPy's designed network, or the EGN backend's
+   `element_topology`, which is the same design (both contain the boosters,
+   preamplifiers and split fibers the parsed topology lacks). Route
+   constraints use a second index over the routing graph, which under EGN is
+   the parsed topology.
 2. `state/parameter_ops.py` computes every resulting value from the values
    before the batch and checks them all — range, type, no parameter written
    twice — collecting every error before refusing. A dry run stops here.
