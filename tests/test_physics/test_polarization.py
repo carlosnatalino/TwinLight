@@ -1,6 +1,12 @@
 """Tests for the PDL OSNR penalty — Zarkosvky-Shtaif hinge model (Opt. Lett.
 45(5):1224, 2020, Eq. 3-5) — and the PMD drift model."""
 
+import math
+from typing import ClassVar
+
+import numpy as np
+import pytest
+
 from twinlight.config import PolarizationConfig
 from twinlight.physics.transients.polarization import (
     _hinge_period_s,
@@ -198,7 +204,19 @@ class TestPdlOsnrPenalty:
 
 
 class TestPmdDrift:
-    """Verify PMD drift model."""
+    """The path DGD is the quadrature sum of drifting per-fiber DGDs, τᵢ ∝ √Lᵢ
+    (Gordon & Kogelnik, PNAS 2000, Sec. III); its drift is signed and has the
+    configured period."""
+
+    _FIBERS: ClassVar[list[str]] = [f"fiber-{i}" for i in range(32)]
+
+    def _series(self, cfg: PolarizationConfig, fibers: list[str], **kwargs) -> np.ndarray:
+        """ΔPMD over three periods, 200 samples per period, with hash phases."""
+        period = cfg.pmd_drift_period_s
+        times = np.arange(0.0, 3 * period, period / 200)
+        return np.array([
+            delta_pmd_ps(t, fibers, 2.134, cfg, **kwargs) for t in times
+        ])
 
     def test_zero_amplitude_gives_zero(self):
         cfg = PolarizationConfig(pmd_drift_amplitude=0.0)
@@ -208,11 +226,63 @@ class TestPmdDrift:
         )
         assert result == 0.0
 
-    def test_positive_result(self):
-        """PMD drift should always add to baseline (positive)."""
+    def test_takes_both_signs_over_one_period(self):
+        # The old model returned √(Σ drift²), never below the baseline.
+        drift = self._series(PolarizationConfig(), self._FIBERS)
+        assert drift.min() < 0.0 < drift.max()
+
+    def test_dominant_period_is_the_configured_one(self):
+        # The old model's sin² ran at twice the configured frequency.
+        cfg = PolarizationConfig(pmd_drift_period_s=90.0)
+        drift = self._series(cfg, self._FIBERS)
+        spectrum = np.abs(np.fft.rfft(drift - drift.mean()))
+        frequencies = np.fft.rfftfreq(drift.size, d=cfg.pmd_drift_period_s / 200)
+        dominant = frequencies[1:][spectrum[1:].argmax()]
+        assert 1.0 / dominant == pytest.approx(cfg.pmd_drift_period_s, rel=1e-6)
+
+    def test_a_single_fiber_moves_by_exactly_the_amplitude(self):
         cfg = PolarizationConfig(pmd_drift_amplitude=0.1)
+        drift = self._series(cfg, ["only-fiber"]) / 2.134
+        assert drift.max() == pytest.approx(0.1, abs=1e-4)
+        assert drift.min() == pytest.approx(-0.1, abs=1e-4)
+
+    def test_in_phase_fibers_move_together_by_the_amplitude(self):
+        # With equal phases every τᵢ scales by the same factor, so the
+        # quadrature sum does too, whatever the lengths.
+        cfg = PolarizationConfig(pmd_drift_amplitude=0.1)
+        quarter = cfg.pmd_drift_period_s / 4
         result = delta_pmd_ps(
-            t=10.0, fiber_uids=["f1", "f2"],
-            baseline_pmd_ps=1.0, cfg=cfg, _phase_fn=_fixed_phase,
+            quarter, ["a", "b", "c"], 2.0, cfg,
+            fiber_lengths_km=[10.0, 80.0, 120.0], _phase_fn=_fixed_phase,
         )
-        assert result >= 0.0
+        assert result == pytest.approx(0.2)
+
+    def test_a_longer_fiber_weighs_more(self):
+        # τᵢ ∝ √Lᵢ: at T/4 fiber "long" (phase 0) is at its peak and "short"
+        # (phase 3π/2) at a zero crossing, so only the long fiber has moved.
+        cfg = PolarizationConfig(pmd_drift_amplitude=0.1)
+
+        def phases(uid: str, _metric: str) -> float:
+            return 0.0 if uid == "long" else 1.5 * math.pi
+
+        quarter = cfg.pmd_drift_period_s / 4
+        result = delta_pmd_ps(
+            quarter, ["long", "short"], 1.0, cfg,
+            fiber_lengths_km=[90.0, 10.0], _phase_fn=phases,
+        )
+        expected = math.sqrt(0.9 * 1.1 ** 2 + 0.1) - 1.0
+        assert result == pytest.approx(expected)
+
+    def test_unknown_lengths_mean_equal_sections(self):
+        cfg = PolarizationConfig()
+        equal = delta_pmd_ps(17.0, self._FIBERS, 2.0, cfg)
+        assert delta_pmd_ps(
+            17.0, self._FIBERS, 2.0, cfg, fiber_lengths_km=[50.0] * 32,
+        ) == pytest.approx(equal)
+        # A length list that does not match the fibers is ignored.
+        assert delta_pmd_ps(
+            17.0, self._FIBERS, 2.0, cfg, fiber_lengths_km=[50.0, 60.0],
+        ) == pytest.approx(equal)
+
+    def test_no_fiber_no_drift(self):
+        assert delta_pmd_ps(5.0, [], 2.0, PolarizationConfig()) == 0.0

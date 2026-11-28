@@ -281,9 +281,20 @@ approximation.
 
 `physics/transients/polarization.py`. Two distinct effects.
 
-**PMD.** Per-fiber differential group delay drifts sinusoidally (default ±10 %,
-90 s period) and accumulates in quadrature along the path, per the
-Gordon–Kogelnik framework `[Gordon-Kogelnik]` [[4]](../README.md#ref-4).
+**PMD.** The DGDs of concatenated fibers add in quadrature, per the
+Gordon–Kogelnik framework `[Gordon-Kogelnik]` [[4]](../README.md#ref-4). Fiber
+i carries τᵢ ∝ √Lᵢ (the PMD coefficient is in ps/√km), normalised so that
+√(Σ τᵢ²) is the baseline PMD, and each τᵢ drifts sinusoidally (default ±10 %,
+90 s period, phase from the fiber UID):
+
+```
+ΔPMD(t) = √(Σ (τᵢ · (1 + a·sin(2πt/T + φᵢ)))²) − √(Σ τᵢ²)
+```
+
+The drift is signed, has period T, and stays within ±a of the baseline; a
+single fiber moves by exactly ±a. Before this revision the twin returned the
+root-sum-square of the perturbations alone: never below the baseline, with
+period T/2, and about 0.3 % peak to peak on a 32-fiber route.
 
 **PDL.** A coherent link is treated as a cascade of N discrete *hinges* —
 ROADMs/WSSs and EDFAs — following Zarkosvky & Shtaif 2020
@@ -502,7 +513,7 @@ used for research.
 | **EDFA excursion magnitude** | Excursion scales with the absolute load step, `gain_per_channel_db × \|Δchannels\|` | Sun 1997 scales it with the *fraction* of channels added or dropped, so one channel added to a full C-band perturbs far less than one added to an empty one | Low at the loadings the bundled scenarios reach; refine before claiming excursion magnitudes on heavily loaded spans |
 | **EGN kernel** | The incoherent GN model (Poggiolini 2014 Eq. 120/123) for the channel itself and each co-propagating lightpath, over GNPy's designed amplifiers at their operating points and noise figures; γ, \|β₂\| and the NF at one frequency; no EGN correction on the cross-channel term; no ROADM or transceiver noise (GNPy adds none on these paths either: the adapter's transmitter is ideal) | GNPy evaluates each channel at its own frequency, with gain and NF ripple and the dispersion slope | Low — with the same load the backends agree within 0.05 dB on 80–160 km routes and 0.25 dB at 2,850 km. Before this revision the self-channel term used π²/4 inside the asinh (≈2 dB too little NLI) and the boosters, connector losses and operating-gain NF were missing, which put EGN OSNR ~7 dB above GNPy |
 | **Phase noise (EEPN)** | Shieh & Ho Eq. 33–41, contributing ≈ −0.1 dB at 2150 km on CORONET | Same | None — implemented per the reference; the penalty scales with accumulated dispersion as Shieh & Ho predict |
-| **PMD drift** | Sinusoidal, 10 % amplitude, 90 s period | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — magnitude and quadrature accumulation are right; the trajectory shape is an approximation |
+| **PMD drift** | Each fiber's DGD (τᵢ ∝ √Lᵢ) drifts sinusoidally, ±10 % with a 90 s period, and the path DGD is their quadrature sum | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — the quadrature accumulation and the per-fiber magnitudes are right; the trajectory shape is an approximation, and on a long route the incoherent phases shrink the path's swing well below ±10 % |
 | **PDL ensemble** | Deterministic incommensurate drift covers the alignment ensemble over time | Explicit Monte-Carlo over hinge alignments | Low — equivalent in the long run, and reproducible, but a short window is not a fair ensemble sample |
 | **EDFA noise figure at runtime (GNPy)** | `nf_offset` adds a frequency-flat dB offset to the NF GNPy's equipment model computes, by folding it into the per-channel NF ripple (`Edfa._calc_nf`); the gain dependence of a variable-gain NF is kept. `nf0` is not a GNPy knob: `params.nf0` is an equipment-library input that propagation never reads. The EGN backend exposes the NF itself as `nf0`: a write replaces the equipment model's figure at the operating gain | An ageing amplifier's NF rises by a different amount across the band and with gain | Low — a flat offset is the usual first-order model of NF degradation; the equipment model's `nf_min`/`nf_max`/`nf0` are not runtime-mutable |
 | **Post-FEC BER, threshold model** | A step at the configured pre-FEC BER limit; beyond it the input passes through | Measured waterfall per code | Low for planning, where the step is the convention; it says nothing about how close to the cliff a link is — read `q-factor-db` against the limit for that |

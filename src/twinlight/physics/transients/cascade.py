@@ -112,7 +112,8 @@ def apply_all_transients(
     #    power fluctuation degrades both ASE-limited and NLI-limited SNR.
     if cfg.polarization.enabled:
         pmd += polarization.delta_pmd_ps(
-            t, baseline.fiber_uids, baseline.pmd_ps, cfg.polarization
+            t, baseline.fiber_uids, baseline.pmd_ps, cfg.polarization,
+            fiber_lengths_km=baseline.fiber_lengths_km,
         )
         pdl_penalty = polarization.delta_osnr_from_pdl_db(
             t, baseline.pdl_elements, cfg.polarization,

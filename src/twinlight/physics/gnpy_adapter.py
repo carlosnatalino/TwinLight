@@ -54,6 +54,9 @@ class OpmBaseline:
     total_fiber_km: float      # Total fiber length [km]
     edfa_uids: list[str] = field(default_factory=list)   # Ordered EDFA UIDs on path
     fiber_uids: list[str] = field(default_factory=list)  # Ordered Fiber UIDs on path
+    # Length [km] of each fiber in ``fiber_uids``, in the same order. Empty
+    # when unknown: the PMD drift then treats the fibers as equal sections.
+    fiber_lengths_km: list[float] = field(default_factory=list)
     # Ordered (uid, kind) of PDL hinges on the path, kind in {"Roadm", "Edfa"}.
     # Hinge model of Zarkosvky & Shtaif, Opt. Lett. 45(5):1224 (2020): PDL is
     # dominated by a discrete set of components; fibers contribute negligibly.
@@ -225,15 +228,18 @@ def compute_path_baseline(
     # are the authority for what SpectralInformation carries: accumulated
     # CD is in s/m (×1e3 → ps/nm), PMD in s (×1e12 → ps), latency in s
     # (×1e3 → ms).
+    fibers = [(uid, el) for uid, el in path_items if type(el).__name__ == "Fiber"]
+    lengths_km = [_fiber_km(el) for _uid, el in fibers]
     return OpmBaseline(
         gsnr_db=float(si.gsnr_db[ch]),
         osnr_ase_db=float(si.snr_lin_db[ch]),
         cd_ps_nm=float(si.chromatic_dispersion[ch]) * 1e3,  # s/m → ps/nm
         pmd_ps=float(si.pmd[ch] * 1e12),                     # s → ps
         latency_ms=float(si.latency[ch] * 1e3),              # s → ms
-        total_fiber_km=_sum_fiber_km(path_items),
+        total_fiber_km=sum(lengths_km),
         edfa_uids=[uid for uid, el in path_items if type(el).__name__ == "Edfa"],
-        fiber_uids=[uid for uid, el in path_items if type(el).__name__ == "Fiber"],
+        fiber_uids=[uid for uid, _el in fibers],
+        fiber_lengths_km=lengths_km,
         # PDL hinges in propagation order — Zarkosvky & Shtaif, Opt. Lett.
         # 45(5):1224 (2020). ROADMs/WSSs and EDFAs are discrete PDL elements;
         # fibers are excluded (negligible intrinsic PDL per the hinge model).
@@ -253,14 +259,10 @@ def _count_type(network: nx.DiGraph, type_name: str) -> int:
     return sum(1 for n in network.nodes() if type(n).__name__ == type_name)
 
 
-def _sum_fiber_km(path_items: list[tuple[str, Any]]) -> float:
-    """Sum fiber lengths [km] along a path."""
-    total = 0.0
-    for _uid, el in path_items:
-        if type(el).__name__ == "Fiber":
-            # gnpy Fiber stores length in metres via params.length
-            try:
-                total += float(el.params.length) / 1000.0
-            except AttributeError:
-                pass
-    return total
+def _fiber_km(fiber: Any) -> float:
+    """A GNPy Fiber's length [km]; 0 when it carries none."""
+    # gnpy Fiber stores length in metres via params.length
+    try:
+        return float(fiber.params.length) / 1000.0
+    except AttributeError:
+        return 0.0

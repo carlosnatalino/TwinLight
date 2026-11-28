@@ -377,7 +377,8 @@ class EgnBackend:
         qot = budget.result()
         # Treat infinite GSNR (no noise source) as a saturated 60 dB so
         # the BER calculation downstream stays finite.
-        total_km = sum(f.length_km for plan in plans for f in plan.fibers)
+        lengths_km = [f.length_km for plan in plans for f in plan.fibers]
+        total_km = sum(lengths_km)
         return OpmBaseline(
             gsnr_db=min(qot.gsnr_db, 60.0),
             osnr_ase_db=min(qot.osnr_ase_db, 60.0),
@@ -387,6 +388,7 @@ class EgnBackend:
             total_fiber_km=total_km,
             edfa_uids=edfa_uids,
             fiber_uids=fiber_uids,
+            fiber_lengths_km=lengths_km,
             pdl_elements=self._pdl_hinges(path_uids),
         )
 

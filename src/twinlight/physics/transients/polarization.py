@@ -3,12 +3,19 @@
 Physical basis
 --------------
 PMD: The state of polarization drifts due to thermal and mechanical
-perturbations.  Each fiber segment independently drifts, and the contributions
-add in quadrature (incoherent sum) — the classic PMD random-walk model
-(Gordon-Kogelnik, PNAS 2000, Sec. III).  DGD follows Maxwell distribution;
-quadrature accumulation: <DGD²> = Σ <DGD_i²>.
-Period and amplitude are configurable (pmd_drift_period_s,
-pmd_drift_amplitude).
+perturbations.  The DGDs of concatenated fiber sections add in quadrature
+(incoherent sum), the classic PMD random-walk model (Gordon-Kogelnik, PNAS
+2000, Sec. III): DGD follows a Maxwell distribution and <DGD²> = Σ <DGD_i²>.
+Each fiber's DGD scales with the square root of its length (the PMD
+coefficient is in ps/√km), so fiber i carries τᵢ ∝ √Lᵢ, normalised so that
+√(Σ τᵢ²) is the baseline PMD.  Each τᵢ drifts sinusoidally,
+
+    τᵢ(t) = τᵢ · (1 + a · sin(2πt/T + φᵢ)),
+
+and the path's PMD is the quadrature sum of the drifting DGDs, so the drift
+is τ(t) − τ = √(Σ τᵢ(t)²) − √(Σ τᵢ²): signed, with period T.  The
+amplitude a and the period T are configurable (pmd_drift_amplitude,
+pmd_drift_period_s); φᵢ comes from the fiber UID.
 
 PDL: The hinge model of Zarkosvky & Shtaif, "Statistical distribution of
 polarization-dependent loss in systems characterized by the hinge model",
@@ -97,33 +104,49 @@ def delta_pmd_ps(
     fiber_uids: list[str],
     baseline_pmd_ps: float,
     cfg: PolarizationConfig,
+    fiber_lengths_km: list[float] | None = None,
     _phase_fn=None,
 ) -> float:
-    """Time-varying PMD perturbation [ps] from per-fiber SOP drift.
+    """Time-varying PMD perturbation [ps] from per-fiber DGD drift.
+
+    The path's DGD is the quadrature sum of its fibers' DGDs (Gordon &
+    Kogelnik, PNAS 2000, Sec. III), and each fiber's drifts by
+    ±``pmd_drift_amplitude`` around its share τᵢ ∝ √Lᵢ of the baseline
+    (module docstring):
+
+        ΔPMD(t) = √(Σ (τᵢ · (1 + a·sin(2πt/T + φᵢ)))²) − √(Σ τᵢ²)
 
     Args:
         t: Wall-clock time [s].
         fiber_uids: Ordered Fiber UIDs along the path.
-        baseline_pmd_ps: GNPy-computed baseline PMD [ps].
+        baseline_pmd_ps: Baseline PMD of the path [ps], √(Σ τᵢ²).
         cfg: Polarization config (pmd_drift_period_s, pmd_drift_amplitude).
+        fiber_lengths_km: Length of each fiber in ``fiber_uids`` [km]; the
+            fibers are equal sections when omitted or not one per fiber.
         _phase_fn: Optional callable(uid, metric) for testing.
 
     Returns:
-        Additional PMD [ps] (positive, adds to baseline).
+        PMD change [ps], signed: within ±a of the baseline, and exactly ±a·PMD
+        on a single-fiber path.  Zero on a path with no fiber.
     """
     from twinlight.physics.transients.cascade import hash_phase
     ph = _phase_fn or hash_phase
 
-    n_fibers = max(len(fiber_uids), 1)
-    per_fiber_pmd = baseline_pmd_ps / n_fibers
-    variance = 0.0
-    for uid in fiber_uids:
-        phase = ph(uid, "pmd")
-        drift = per_fiber_pmd * cfg.pmd_drift_amplitude * math.sin(
-            2 * math.pi * t / cfg.pmd_drift_period_s + phase
+    if not fiber_uids or baseline_pmd_ps <= 0.0:
+        return 0.0
+    lengths = fiber_lengths_km or []
+    if len(lengths) != len(fiber_uids) or sum(lengths) <= 0.0:
+        lengths = [1.0] * len(fiber_uids)
+    # τᵢ² ∝ Lᵢ, normalised so that Σ τᵢ² is the baseline PMD squared.
+    total_km = sum(lengths)
+    drifted_sq = 0.0
+    for uid, length_km in zip(fiber_uids, lengths, strict=True):
+        tau_sq = baseline_pmd_ps ** 2 * max(length_km, 0.0) / total_km
+        factor = 1.0 + cfg.pmd_drift_amplitude * math.sin(
+            2 * math.pi * t / cfg.pmd_drift_period_s + ph(uid, "pmd")
         )
-        variance += drift ** 2
-    return math.sqrt(variance)
+        drifted_sq += tau_sq * factor ** 2
+    return math.sqrt(drifted_sq) - baseline_pmd_ps
 
 
 def _pdl_db_to_gamma(pdl_db: float) -> float:

@@ -62,6 +62,12 @@ class TestBaselineUnits:
         # 80 km of fiber at ~2e8 m/s is ~0.4 ms.
         assert 0.1 < baseline.latency_ms < 10.0
 
+    def test_fiber_lengths_follow_the_fibers(self, baseline) -> None:
+        """One length per fiber, in path order, summing to the route length:
+        the PMD drift weighs each fiber's DGD by √L."""
+        assert len(baseline.fiber_lengths_km) == len(baseline.fiber_uids) > 0
+        assert sum(baseline.fiber_lengths_km) == pytest.approx(baseline.total_fiber_km)
+
 
 class TestPropagationComb:
     """The launched comb is the equipment library's SI comb, fully loaded,
