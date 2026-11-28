@@ -331,6 +331,10 @@ class TapiContext:
         self._service_allocation: dict[str, tuple[list[tuple[str, str]], int, int]] = {}
         # service_uuid -> launch power in effect [dBm] (requested or SI default)
         self._service_launch_power: dict[str, float] = {}
+        # service_uuid -> (allocation, service, (launch power, format), its
+        # channel as a neighbour): see _lit_channel. Entries are checked on
+        # use; dropping one only saves memory.
+        self._lit_channel_memo: dict[str, tuple[Any, Any, tuple[Any, Any], LitChannel | None]] = {}
 
         # -- Path computation: GNPy UID <-> TAPI topology refs -------------
         # gnpy_uid -> (topology_uuid, node_uuid)
@@ -501,7 +505,11 @@ class TapiContext:
         """Delete a service and bring the others' operational-state up to
         date (it may have been a neighbour of theirs)."""
         async with self._admission_lock:
+            neighbours = self._sharing_services(uuid)
             removed = self.delete_service(uuid)
+            # Its neighbours lost a channel: re-evaluate them now, as an
+            # admission does, so their operational-state never lags.
+            await self._reevaluate(neighbours)
         await self.refresh_operational_states()
         return removed
 
@@ -520,6 +528,7 @@ class TapiContext:
             Whatever admission raises, after the rollback.
         """
         async with self._admission_lock:
+            old_neighbours = self._sharing_services(svc.uuid)
             detached = self._detach_service(svc.uuid)
             try:
                 await self._add_service(svc)
@@ -533,6 +542,9 @@ class TapiContext:
                 self._edfa_tracker.notify_channel_change(
                     detached.edfa_uids, -1, self._config.transients.edfa_reservoir,
                 )
+            # The old route's neighbours lost it; the new route's were
+            # re-evaluated by the admission.
+            await self._reevaluate(old_neighbours - self._sharing_services(svc.uuid))
 
     def _detach_service(self, uuid: str) -> _DetachedService:
         """Take a service out of every structure, keeping what puts it back.
@@ -667,10 +679,24 @@ class TapiContext:
 
         # The new channel is a neighbour of every lightpath sharing a fiber
         # with it: their GSNR drops, possibly below what their format needs.
-        for uuid in self._sharing_services(svc.uuid):
+        await self._reevaluate(self._sharing_services(svc.uuid))
+
+    async def _reevaluate(self, uuids: Collection[str]) -> None:
+        """Propagate the lightpaths ``uuids`` anew and set their
+        operational-state: the line load changed under them.
+
+        Called with the admission lock held, which every coroutine that adds
+        or removes a lightpath takes, so the load is the same for all of
+        them and is built once rather than once per lightpath.
+        """
+        if not uuids:
+            return
+        load = self._lit_channels()
+        for uuid in uuids:
             self.invalidate_baseline(uuid)
             if (other := self._services.get(uuid)) is not None:
-                await self.get_or_compute_baseline(other)
+                baseline = await self._baseline_for(other, load=load)
+                self._apply_operational_state(other, baseline)
 
     async def _admit(
         self, svc: ConnectivityService, paths: list[list[str]],
@@ -1272,6 +1298,7 @@ class TapiContext:
             )
 
         self.invalidate_baseline(uuid)
+        self._lit_channel_memo.pop(uuid, None)
         self._oam_jobs.pop(oam_job_uuid(uuid), None)
         # Strip this service from the /config reverse index.
         for svc_set in self._element_to_services.values():
@@ -1933,27 +1960,63 @@ class TapiContext:
         """The admitted lightpaths' channels (all but ``exclude``), for a
         backend that models the actual line load; empty for one that
         assumes a fully loaded line."""
+        return [c for uuid, c in self._lit_channels().items() if uuid != exclude]
+
+    def _lit_channels(self) -> dict[str, LitChannel]:
+        """Every admitted lightpath's channel, by service, for a backend that
+        models the actual line load; empty for one that assumes a fully
+        loaded line."""
         if not self._backend.uses_line_load:
-            return []
+            return {}
+        return {
+            uuid: channel for uuid, svc in self._services.items()
+            if (channel := self._lit_channel(uuid, svc)) is not None
+        }
+
+    def _lit_channel(self, uuid: str, svc: ConnectivityService) -> LitChannel | None:
+        """``svc``'s channel as the neighbour of others, or None when it
+        lights nothing: no route recorded, or a block outside the band its
+        amplifiers pass (the first EDFA drops it).
+
+        Memoised per service on what it is computed from, and checked
+        against those on every use, so no change can leave it stale: the
+        allocation and the service objects, which admission, replacement and
+        restore assign anew rather than mutate; the launch power and the
+        format, by value. The amplifier bands are never written and the
+        spectrum grid is restart-only. An admission re-evaluates every
+        neighbour, each over every lit lightpath, so this is what keeps the
+        line load from being rebuilt service by service each time.
+        """
         from twinlight.physics.modulation import get_params
 
-        load: list[LitChannel] = []
-        for uuid, svc in self._services.items():
-            path = self._allocated_path_uids(uuid)
-            if uuid == exclude or not path or self._out_of_band(uuid):
-                continue  # an out-of-band channel is dropped by the first EDFA
+        allocation = self._service_allocation.get(uuid)
+        inputs = (self._service_launch_power.get(uuid), svc.modulation_format)
+        memo = self._lit_channel_memo.get(uuid)
+        if memo is not None and memo[0] is allocation and memo[1] is svc and memo[2] == inputs:
+            return memo[3]
+        path = self._allocated_path_uids(uuid)
+        channel: LitChannel | None = None
+        if path and not self._out_of_band(uuid):
             centre_hz, _width_hz, power_dbm = self._service_channel(svc, path)
-            load.append(LitChannel(
+            channel = LitChannel(
                 path_uids=tuple(path),
                 centre_frequency_hz=centre_hz,
                 baud_rate_hz=get_params(svc.modulation_format).baud_rate_hz,
                 launch_power_dbm=power_dbm,
-            ))
-        return load
+            )
+        self._lit_channel_memo[uuid] = (allocation, svc, inputs, channel)
+        return channel
 
-    async def _baseline_for(self, svc: ConnectivityService) -> OpmBaseline | None:
+    async def _baseline_for(
+        self, svc: ConnectivityService, *, load: dict[str, LitChannel] | None = None,
+    ) -> OpmBaseline | None:
         """The cached baseline, else one propagated now (see
-        :meth:`get_or_compute_baseline`)."""
+        :meth:`get_or_compute_baseline`).
+
+        ``load`` is the lit channels by service (:meth:`_lit_channels`) when
+        the caller built them for several lightpaths at once; otherwise the
+        line load is built here.
+        """
         if not self._gnpy_available:
             return None
 
@@ -1995,7 +2058,10 @@ class TapiContext:
                     path, svc.modulation_format.value,
                     centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
                     launch_power_dbm=power_dbm,
-                    line_load=self._line_load(exclude=svc.uuid),
+                    line_load=(
+                        self._line_load(exclude=svc.uuid) if load is None
+                        else [c for u, c in load.items() if u != svc.uuid]
+                    ),
                 )
             except PropagationError:
                 baseline = None  # OPM falls back to mock data (logged by the backend)

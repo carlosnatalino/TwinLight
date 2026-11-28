@@ -138,8 +138,9 @@ the fibers both routes traverse, at its own frequency, symbol rate and power,
 and nowhere else; a lightpath whose route is cut is a neighbour only on the
 fibers before the cut. Lighting a lightpath therefore lowers the GSNR of every
 lightpath it shares a fiber with, and removing it restores them; the twin
-re-evaluates those lightpaths on each admission and removal. Under the GNPy
-backend every channel is evaluated on the fully loaded SI comb (GNPy
+re-evaluates those lightpaths on each admission, removal and replacement,
+before the request returns, so their operational-state never lags the change.
+Under the GNPy backend every channel is evaluated on the fully loaded SI comb (GNPy
 propagates one path at a time and cannot place a channel that joins or leaves
 mid-route), so another lightpath does not change its result. Given the same
 load, the two backends agree: within 0.05 dB on the test mesh, and within

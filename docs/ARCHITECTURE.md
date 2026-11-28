@@ -284,7 +284,9 @@ service and reattaches it if the new one is refused. Deletion reverses all of
 this: slots are released, `invalidate_baseline(uuid)` drops the cached
 propagation, the EDFA tracker records the drop event, the oam-job is removed,
 and under the EGN backend the lightpaths that shared a fiber with it are
-invalidated too; T-API reads re-evaluate them (`refresh_operational_states`).
+re-evaluated before the request returns, as an admission's are
+(`_reevaluate`, over a line load built once for all of them), so no
+neighbour's `operational-state` lags the change.
 
 ### Reading OPM
 
@@ -393,6 +395,8 @@ observe the tentative values; nothing is cached.
 | `_gnpy_uid_map` | element UID | built at startup; rebuilt by a redesign |
 | `_route_cache` | `(src_uid, dst_uid)` | topology mutation (e.g. link failure) |
 | `_baseline_cache` | service UUID | service deletion, `/config` parameter change (including `/config/parameters` batches), link failure |
+| `_lit_channel_memo` | service UUID | never needs to be: each entry is checked on use against the allocation and service objects it was built from (replaced, never mutated) and the launch power and format; deletion drops the entry to save memory |
+| EGN `_route_bands`, `_route_lit_fibers` | route (UID tuple) | bands: never (equipment models, not runtime-writable); lit fibers: every cut or restore |
 | `_physical_context_cache` | running revision | any configuration change (every write that bumps the revision: element parameters, redesign, link failure, twin config, restore). Holds the T-API `physical-context` tree, built from each element's UID, kind, `type_variety` and position (`metadata.location`, served as `geolocation`); frozen models and tuples, so no request can change the shared object |
 
 ## Middleware
