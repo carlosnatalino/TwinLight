@@ -138,8 +138,9 @@ the fibers both routes traverse, at its own frequency, symbol rate and power,
 and nowhere else; a lightpath whose route is cut is a neighbour only on the
 fibers before the cut. Lighting a lightpath therefore lowers the GSNR of every
 lightpath it shares a fiber with, and removing it restores them; the twin
-re-evaluates those lightpaths on each admission and removal. Under the GNPy
-backend every channel is evaluated on the fully loaded SI comb (GNPy
+re-evaluates those lightpaths on each admission, removal and replacement,
+before the request returns, so their operational-state never lags the change.
+Under the GNPy backend every channel is evaluated on the fully loaded SI comb (GNPy
 propagates one path at a time and cannot place a channel that joins or leaves
 mid-route), so another lightpath does not change its result. Given the same
 load, the two backends agree: within 0.05 dB on the test mesh, and within
@@ -161,9 +162,13 @@ amplifiers at identical operating points; they differ only in how the noise
 is computed.
 
 The GNPy-format topology remains the single source of truth: `TapiContext`
-parses it for the T-API model and routing exactly as before, and the designed,
-amplified view is derived from it inside the EGN backend alone — nothing else in
-the twin sees the split spans.
+parses it for the T-API model and for routing, and the designed, amplified view
+is derived from it. The EGN backend exposes that view as its
+`element_topology`, so the twin lists the same elements under both backends:
+the link index behind `/LinkList` and parameter paths, the T-API physical
+inventory, and the fibers a cut can name. A cut of a fiber the design split
+removes the parsed fiber it came from from the routing graph, and the link
+stays cut while any of its sub-spans is.
 
 Without an equipment library the design step is skipped and the topology is used
 as written, which stays correct for topologies that already specify their own
@@ -248,10 +253,40 @@ r(t) = r_ss_new + (r_ss_old − r_ss_new) · exp(−(t − t_event) / τ_e)
 ```
 
 where τ_e (Eq. 29) is input-power dependent and **asymmetric**: ≈1–10 µs for a
-channel add, ≈100–500 µs for a drop. Cascade behaviour follows Sun 1997: the
-transient rate scales linearly with amplifier count, `1/T_N = N · 1/T_1`, and
-peak excursions can reach ~28 dB p-p without AGC
-[[3]](../README.md#ref-3).
+channel add, ≈100–500 µs for a drop.
+
+**Magnitude.** A saturated amplifier holds its total output power, so the
+swing in surviving-channel power follows "the ratio of the number of channels
+initially to the number of surviving channels" (Sun *et al.* 1997, § Single
+EDFA, [[2]](../README.md#ref-2)):
+
+```
+Δ = 10·log10(N_before / N_after)
+```
+
+negative for an add, positive for a drop: −0.05 dB for one channel onto 87,
+−3 dB for one onto one. With no channel before or after there is no surviving
+channel and no swing.
+
+**Cascade.** Along a chain carrying the same channels the first amplifier sets
+a channel's share of the output power and the others conserve it; Sun *et
+al.*'s cascade simulation shows the overshoot approaching "but never
+exceed[ing]" a bounded value. The amplifiers of one ROADM-to-ROADM link carry
+the same lightpaths, so a route counts each run of consecutive amplifiers with
+the same event record (one link, one load step) once, and adds the runs: a
+further swing appears only where the channel meets amplifiers whose load
+changed differently. The transient's **rate** scales linearly with the number
+of EDFAs (Sun *et al.*, *Electron. Lett.* 1997,
+[[34]](../README.md#ref-34)), so an event that touched M of the route's
+amplifiers relaxes with τ_e / M. Without AGC, cascades in packet-like
+operation reach ~28 dB p-p [[3]](../README.md#ref-3); the AGC assumption
+below is what keeps this model's excursions transient.
+
+**Reference load.** The channel counts are the lit lightpaths through each
+amplifier, under both backends. The GNPy backend's QoT baseline assumes the
+full SI comb on every line, but the reservoir does not: an excursion is what an
+amplifier carrying only the lit lightpaths would see, not one whose empty
+slots are filled with loading channels.
 
 **The steady state is zero deviation**, and this is the load-bearing detail.
 Between events an AGC-controlled, gain-flattened EDFA delivers its designed
@@ -259,31 +294,44 @@ per-channel gain whatever its loading — and that designed operating point is
 precisely what the QoT baseline already represents, since `designed_network()`
 sets every amplifier's operating point before propagation. So `r_ss_old` and
 `r_ss_new` both map to *zero* deviation from the baseline, and what this model
-contributes is the excursion between them:
+contributes is the excursion between them, summed over the route's runs r:
 
 ```
-Δ(t) = Δ_event · exp(−(t − t_event) / τ_e),   Δ_event = −gain_per_channel_db · Δchannels
+Δ(t) = Σ_r Δ_r · exp(−(t − t_r) · M_r / τ_e),   Δ_r = 10·log10(N_before / N_after)
 ```
 
-Adding channels depletes the reservoir, so gain drops and surviving channels
-lose GSNR (negative excursion); dropping channels lets gain overshoot
-(positive). Treating the steady state itself as a load-dependent penalty would
-double-count loading the baseline has already priced in — and, summed over a
-long cascade, would swamp it: 30 amplifiers × 0.3 dB × one channel is 9 dB.
+The peak is the saturated amplifier's swing, the upper bound for an AGC loop
+slower than the reservoir; the loop's own response is not modelled. Treating
+the steady state itself as a load-dependent penalty would double-count loading
+the baseline has already priced in. Before this revision every amplifier added
+its own fixed 0.3 dB per channel: one channel onto a 40-amplifier route swung
+the GSNR by −12 dB, where the ratio gives −0.05 dB on a loaded line.
 
 `EdfaStateTracker` is owned by `TapiContext` and updated whenever a service is
 created or deleted — so an add/drop event on one lightpath perturbs every other
 lightpath sharing those amplifiers, which is the whole point of modelling it.
-When no tracker is supplied, the model degrades to a stateless sinusoidal
-approximation.
+Every reader of a lightpath (the OPM endpoints, the gNMI stream, Prometheus
+and the eye and constellation diagrams) applies that one tracker; there is no
+stateless form of the model.
 
 ### 2.2 Polarization: PMD drift and PDL
 
 `physics/transients/polarization.py`. Two distinct effects.
 
-**PMD.** Per-fiber differential group delay drifts sinusoidally (default ±10 %,
-90 s period) and accumulates in quadrature along the path, per the
-Gordon–Kogelnik framework `[Gordon-Kogelnik]` [[4]](../README.md#ref-4).
+**PMD.** The DGDs of concatenated fibers add in quadrature, per the
+Gordon–Kogelnik framework `[Gordon-Kogelnik]` [[4]](../README.md#ref-4). Fiber
+i carries τᵢ ∝ √Lᵢ (the PMD coefficient is in ps/√km), normalised so that
+√(Σ τᵢ²) is the baseline PMD, and each τᵢ drifts sinusoidally (default ±10 %,
+90 s period, phase from the fiber UID):
+
+```
+ΔPMD(t) = √(Σ (τᵢ · (1 + a·sin(2πt/T + φᵢ)))²) − √(Σ τᵢ²)
+```
+
+The drift is signed, has period T, and stays within ±a of the baseline; a
+single fiber moves by exactly ±a. Before this revision the twin returned the
+root-sum-square of the perturbations alone: never below the baseline, with
+period T/2, and about 0.3 % peak to peak on a 32-fiber route.
 
 **PDL.** A coherent link is treated as a cascade of N discrete *hinges* —
 ROADMs/WSSs and EDFAs — following Zarkosvky & Shtaif 2020
@@ -348,10 +396,34 @@ because a 24-hour cycle is longer than most experiments.
 Ambient temperature follows a diurnal sinusoid (`temp_variation_c`,
 `temp_cycle_period_s`, shifted by `timezone_offset`), driving two effects:
 
-- **Chromatic dispersion drift** via dD/dT ≈ 0.002 ps/(nm·km·°C) for G.652 SSMF
-  (Kato *et al.* 2000 `[Kato]` [[13]](../README.md#ref-13)).
-- **Fiber loss variation** via dα/dT ≈ 2×10⁻⁴ dB/(km·°C) on deployed fiber,
-  which penalises both GSNR and OSNR.
+- **Chromatic dispersion drift** via dD/dT = −0.0015 ps/(nm·km·°C): dispersion
+  falls as the fiber warms. Kato *et al.* 2000 `[Kato]`
+  [[13]](../README.md#ref-13) measure −0.0005 (dispersion-flattened fiber) to
+  −0.0038 (large-core NZ-DSF) and find the coefficient follows the dispersion
+  slope; they give no G.652 value (see [Known limitations](#known-limitations)).
+- **Fiber loss variation** via dα/dT ≈ 2×10⁻⁴ dB/(km·°C)
+  **[CITATION NEEDED]**: no published measurement on deployed G.652 fiber is
+  recorded for this value. A 5 °C swing changes a 100 km span's loss by
+  δ ≈ 0.1 dB.
+
+  The amplifiers hold their output power: GNPy's `designed_network()` designs
+  them in power mode (`Span.power_mode` in the equipment library), and the EGN
+  backend uses the same design. Each amplifier makes up its span's extra
+  loss, so the launch powers and the NLI do not move, while each one's ASE
+  relative to the signal rises by its span's δ. With the noise terms adding
+  incoherently (Carena *et al.* 2012 `[Carena_2012]`
+  [[8]](../README.md#ref-8)):
+
+  ```
+  1/OSNR' = 10^(δ/10) / OSNR
+  1/GSNR' = 1/GSNR + (10^(δ/10) − 1) / OSNR
+  ```
+
+  The OSNR falls by δ, the change of **one** span, whatever the route's span
+  count, and the GSNR by less: by the share of ASE in its noise. δ is taken
+  at the route's mean span length. Before this revision the GSNR fell by the
+  summed loss change of every span, ±2.85 dB for a 5 °C swing on a 2847 km
+  route, where output-power control gives ±0.1 dB.
 
 ## 3. From GSNR to BER, Q, post-FEC BER and GMI
 
@@ -463,8 +535,9 @@ jitter σ_t = PMD/√3, and optional amplitude variation from PDL. The approach
 follows the time-domain digital-twin framing of OCATA
 [[17]](../README.md#ref-17).
 
-These are illustrative and consistent with the reported OPM; they are not a
-substitute for DSP-level simulation.
+These are illustrative, and drawn from the OPM the twin reports at that
+instant (the same `sample_service_opm` computation as the OPM endpoints and the
+gNMI stream); they are not a substitute for DSP-level simulation.
 
 ## Known limitations
 
@@ -473,12 +546,12 @@ used for research.
 
 | Area | What TwinLight does | What the literature does | Severity |
 |------|---------------------|--------------------------|----------|
-| **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop, linear dB cascade | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events |
+| **EDFA reservoir** | Exponential step response (Bononi & Rusch Eq. 19/29) with asymmetric τ_add/τ_drop; the peak is the saturated amplifier's swing, reached at the event and relaxing to the AGC set point with τ_e/M | Full ODE integration (their Eq. 5) including spectral hole burning and gain clamping, and the AGC loop's own response | Low — the step response is accurate for add/drop events; the full ODE would matter for fast repeated events, and an AGC loop faster than the reservoir would cut the peak below the saturated swing |
 | **EDFA excursion visibility** | τ_e is 10–100 µs, so a wall-clock poll essentially always samples the relaxed state and the model reads ~0 dB between events | Same physics — this *is* what AGC does | Low, but easy to mistake for an inactive model: to see the excursion you must sample near an add/drop, which the twin only produces on service create/delete |
-| **EDFA excursion magnitude** | Excursion scales with the absolute load step, `gain_per_channel_db × \|Δchannels\|` | Sun 1997 scales it with the *fraction* of channels added or dropped, so one channel added to a full C-band perturbs far less than one added to an empty one | Low at the loadings the bundled scenarios reach; refine before claiming excursion magnitudes on heavily loaded spans |
+| **EDFA excursion magnitude** | 10·log10(N_before/N_after) per run of amplifiers with the same event record, the runs added; N counts the lit lightpaths through the amplifier, under both backends | Sun *et al.* 1997: the same ratio for a saturated amplifier, with spectral hole burning and gain tilt adding channel-dependent terms | Low — two links whose loads change by the same counts at the same event are taken for one run, which can undercount a route whose companions differ; under GNPy the QoT baseline assumes the full comb while the reservoir sees only the lit lightpaths, so its excursions are those of a line without loading channels |
 | **EGN kernel** | The incoherent GN model (Poggiolini 2014 Eq. 120/123) for the channel itself and each co-propagating lightpath, over GNPy's designed amplifiers at their operating points and noise figures; γ, \|β₂\| and the NF at one frequency; no EGN correction on the cross-channel term; no ROADM or transceiver noise (GNPy adds none on these paths either: the adapter's transmitter is ideal) | GNPy evaluates each channel at its own frequency, with gain and NF ripple and the dispersion slope | Low — with the same load the backends agree within 0.05 dB on 80–160 km routes and 0.25 dB at 2,850 km. Before this revision the self-channel term used π²/4 inside the asinh (≈2 dB too little NLI) and the boosters, connector losses and operating-gain NF were missing, which put EGN OSNR ~7 dB above GNPy |
 | **Phase noise (EEPN)** | Shieh & Ho Eq. 33–41, contributing ≈ −0.1 dB at 2150 km on CORONET | Same | None — implemented per the reference; the penalty scales with accumulated dispersion as Shieh & Ho predict |
-| **PMD drift** | Sinusoidal, 10 % amplitude, 90 s period | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — magnitude and quadrature accumulation are right; the trajectory shape is an approximation |
+| **PMD drift** | Each fiber's DGD (τᵢ ∝ √Lᵢ) drifts sinusoidally, ±10 % with a 90 s period, and the path DGD is their quadrature sum | Maxwell-distributed DGD with a stochastic drift process; field drift timescale is not universal | Low — the quadrature accumulation and the per-fiber magnitudes are right; the trajectory shape is an approximation, and on a long route the incoherent phases shrink the path's swing well below ±10 % |
 | **PDL ensemble** | Deterministic incommensurate drift covers the alignment ensemble over time | Explicit Monte-Carlo over hinge alignments | Low — equivalent in the long run, and reproducible, but a short window is not a fair ensemble sample |
 | **EDFA noise figure at runtime (GNPy)** | `nf_offset` adds a frequency-flat dB offset to the NF GNPy's equipment model computes, by folding it into the per-channel NF ripple (`Edfa._calc_nf`); the gain dependence of a variable-gain NF is kept. `nf0` is not a GNPy knob: `params.nf0` is an equipment-library input that propagation never reads. The EGN backend exposes the NF itself as `nf0`: a write replaces the equipment model's figure at the operating gain | An ageing amplifier's NF rises by a different amount across the band and with gain | Low — a flat offset is the usual first-order model of NF degradation; the equipment model's `nf_min`/`nf_max`/`nf0` are not runtime-mutable |
 | **Post-FEC BER, threshold model** | A step at the configured pre-FEC BER limit; beyond it the input passes through | Measured waterfall per code | Low for planning, where the step is the convention; it says nothing about how close to the cliff a link is — read `q-factor-db` against the limit for that |
@@ -486,6 +559,8 @@ used for research.
 | **Soft-decision post-FEC BER** | GMI and NGMI are reported but not mapped to a post-FEC BER | Per-code NGMI threshold or waterfall (Alvarado *et al.* 2015) | Known gap — needs per-code NGMI data, which specifications rarely publish |
 | **Admission thresholds** | Required GSNRs sit at pre-FEC BERs of 3.9e-3 (QPSK), 6.6e-3 (16QAM), 6.1e-3 (64QAM) | One FEC limit for every format: 8.5 / 15.2 / 21.1 dB at 3.8e-3 | **Moderate** — 16QAM and 64QAM admission is 0.6–0.7 dB optimistic against the 7% HD-FEC limit, absorbed by the default 1.5 dB `qot_margin_db`. The values are unchanged so admission behaves as before |
 | **Line load** | GNPy: every channel on the fully loaded SI comb. EGN: the admitted lightpaths, each in the fibers it shares with the channel under test, up to the first failed fiber of its route (the transmitter still emits; the cut stops the light); a lightpath outside its amplifier band counts nowhere | Network-wide propagation of the actual spectrum | Low — the GNPy number is the worst case the line is designed for; the EGN number follows the network's load, and the two agree at full load |
+| **Environmental loss drift** | Every span's loss changes by dα/dT·ΔT at the route's mean span length; the amplifiers hold their output power, so the OSNR loses that δ and the GSNR its ASE share of it; the NF's dependence on the amplifier's gain is ignored; dα/dT has no recorded source | Per-span temperatures and lengths, each amplifier's own ASE share and NF at its new gain | Low — δ is ≈0.1 dB per 100 km span for 5 °C; with unequal spans the mean-length δ weights every amplifier's ASE equally, and the coefficient itself is uncited |
+| **Thermal CD coefficient** | dD/dT = −0.0015 ps/(nm·km·°C) for every fiber | Kato *et al.* 2000 measure −0.0005 to −0.0038 ps/(nm·km·°C) across fiber types, set by the dispersion slope, with no G.652 value | Low — the default is inside their range, not a G.652 measurement; the CD swing it gives (≈0.75 ps/nm per 100 km for 5 °C) is far below what a coherent DSP compensates |
 | **Spectral scope** | C-band only | C+L, multi-band | Known gap — the grid is parameterised but the physics is not |
 | **Filtering / ROADM penalties** | Not modelled beyond PDL | Cascaded filter narrowing penalties | Known gap |
 | **BER conversion** | Textbook Gaussian approximation per format | Curri 2022 uses measured back-to-back thresholds | Low — standard practice |

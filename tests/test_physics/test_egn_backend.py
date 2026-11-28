@@ -122,6 +122,9 @@ class TestEgnBackendBaseline:
         # ~0.39 ms over 80 km of SSMF.
         assert 0.3 < baseline.latency_ms < 0.5
         assert baseline.total_fiber_km == pytest.approx(80.0)
+        # One length per fiber, for the PMD drift's √L weights.
+        assert len(baseline.fiber_lengths_km) == len(baseline.fiber_uids) > 0
+        assert sum(baseline.fiber_lengths_km) == pytest.approx(baseline.total_fiber_km)
 
 
 class TestEgnBackendMutation:

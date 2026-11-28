@@ -10,8 +10,6 @@ References:
 
 from __future__ import annotations
 
-import time
-
 from fastapi import APIRouter, HTTPException, Query, Request
 
 router = APIRouter(prefix="/internal", tags=["diagrams"])
@@ -22,12 +20,22 @@ async def _get_measurements_and_modulation(
 ) -> tuple[dict[str, float], str, float]:
     """Fetch current OPM measurements and modulation format for a service.
 
+    The measurements are the OPM endpoints' and the measurement stream's
+    own (``sample_service_opm``), so a diagram is drawn from the GSNR they
+    report at the same instant.
+
     Returns:
         Tuple of (measurements dict, modulation_format string, linewidth_hz).
+
+    Raises:
+        HTTPException: 404 for an unknown service; 409 when the service
+            carries no signal (its path is cut, or its channel lies outside
+            the amplifier band), which leaves nothing to draw.
     """
+    from twinlight.api.internal import sample_service_opm, wall_clock
+
     ctx = request.app.state.context
     cfg = request.app.state.config
-    t = time.time()
 
     svc = ctx.get_service(service_uuid)
     if svc is None:
@@ -36,19 +44,13 @@ async def _get_measurements_and_modulation(
             detail=f"Service {service_uuid} not found",
         )
 
-    baseline = await ctx.get_or_compute_baseline(svc)
-    if baseline is None:
-        from twinlight.api.internal import _mock_measurements
-        measurements = _mock_measurements(service_uuid, t)
-    else:
-        from twinlight.physics.transients.cascade import apply_all_transients
-        measurements = apply_all_transients(
-            baseline,
-            svc.uuid,
-            svc.modulation_format.value,
-            t,
-            cfg.transients,
+    entry = await sample_service_opm(ctx, cfg, svc, wall_clock())
+    if (status := entry.get("status")) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Service {service_uuid} carries no signal to draw ({status})",
         )
+    measurements = entry["measurements"]
 
     pn_cfg = cfg.transients.phase_noise
     linewidth_hz = pn_cfg.tx_linewidth_hz + pn_cfg.lo_linewidth_hz

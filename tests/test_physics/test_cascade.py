@@ -37,7 +37,7 @@ class TestApplyAllTransients:
         cfg = TransientsConfig()
         baseline = self._make_baseline()
         result = apply_all_transients(
-            baseline, "svc-1", "DP-QPSK", t=100.0, cfg=cfg,
+            baseline, "svc-1", "DP-QPSK", t=100.0, cfg=cfg, edfa_tracker=EdfaStateTracker(),
         )
         expected_keys = {
             "gsnr-db", "osnr-db", "osnr-01nm-db", "pre-fec-ber",
@@ -60,7 +60,7 @@ class TestApplyAllTransients:
 
         real = apply_all_transients(
             self._make_baseline(), "svc-1", "DP-QPSK", t=100.0,
-            cfg=TransientsConfig(),
+            cfg=TransientsConfig(), edfa_tracker=EdfaStateTracker(),
         )
         assert set(_mock_measurements("svc-1", 100.0)) == set(real)
         assert set(_no_signal_measurements()) == set(real)
@@ -70,7 +70,7 @@ class TestApplyAllTransients:
         fec = FecConfig(threshold=FecThresholdConfig(pre_fec_ber_threshold=2e-2))
         result = apply_all_transients(
             self._make_baseline(gsnr_db=12.0), "svc-1", "DP-16QAM", t=100.0,
-            cfg=TransientsConfig(), fec_cfg=fec,
+            cfg=TransientsConfig(), fec_cfg=fec, edfa_tracker=EdfaStateTracker(),
         )
         assert result == {
             **result,
@@ -91,7 +91,7 @@ class TestApplyAllTransients:
 
         for t in (0.0, 37.0, 100.0, 600.0):
             result = apply_all_transients(
-                self._make_baseline(), "svc-1", "DP-QPSK", t=t, cfg=cfg,
+                self._make_baseline(), "svc-1", "DP-QPSK", t=t, cfg=cfg, edfa_tracker=EdfaStateTracker(),
             )
             assert result["osnr-01nm-db"] - result["osnr-db"] == pytest.approx(
                 offset
@@ -109,11 +109,11 @@ class TestApplyAllTransients:
 
         short = apply_all_transients(
             self._make_baseline(cd_ps_nm=100.0),
-            "svc-1", "DP-QPSK", t=0.0, cfg=cfg,
+            "svc-1", "DP-QPSK", t=0.0, cfg=cfg, edfa_tracker=EdfaStateTracker(),
         )
         long = apply_all_transients(
             self._make_baseline(cd_ps_nm=10000.0),
-            "svc-1", "DP-QPSK", t=0.0, cfg=cfg,
+            "svc-1", "DP-QPSK", t=0.0, cfg=cfg, edfa_tracker=EdfaStateTracker(),
         )
         # Long link should have lower GSNR (bigger EEPN penalty)
         assert long["gsnr-db"] < short["gsnr-db"]
@@ -126,17 +126,23 @@ class TestApplyAllTransients:
         cfg.environmental.enabled = False
 
         tracker = EdfaStateTracker()
+        for _ in range(3):
+            tracker.notify_channel_change(
+                ["edfa1", "edfa2"], +1, cfg.edfa_reservoir, t=-1.0,
+            )
         tracker.notify_channel_change(
             ["edfa1", "edfa2"], +1, cfg.edfa_reservoir, t=0.0,
         )
 
         baseline = self._make_baseline()
-        # At the event: 2 EDFAs × -0.3 dB of gain excursion.
+        # At the event: one swing of 10·log10(3/4) for the two amplifiers of
+        # one link (Sun et al. 1997), on both the GSNR and the OSNR track.
         peak = apply_all_transients(
-            baseline, "svc-1", "DP-QPSK", t=1e-9,
+            baseline, "svc-1", "DP-QPSK", t=0.0,
             cfg=cfg, edfa_tracker=tracker,
         )
-        assert abs(peak["gsnr-db"] - (25.0 - 0.6)) < 0.1
+        assert peak["gsnr-db"] == pytest.approx(25.0 + 10 * math.log10(3 / 4))
+        assert peak["osnr-db"] == pytest.approx(28.0 + 10 * math.log10(3 / 4))
 
         # Once relaxed, the cascade is back at the designed operating
         # point the baseline already represents — no standing offset.
@@ -152,7 +158,7 @@ class TestApplyAllTransients:
         cfg.environmental.enabled = True
         baseline = self._make_baseline(cd_ps_nm=5000.0)
         result = apply_all_transients(
-            baseline, "svc-1", "DP-16QAM", t=50.0, cfg=cfg,
+            baseline, "svc-1", "DP-16QAM", t=50.0, cfg=cfg, edfa_tracker=EdfaStateTracker(),
         )
         assert result["gsnr-db"] <= baseline.gsnr_db
 
@@ -161,9 +167,46 @@ class TestApplyAllTransients:
         cfg = TransientsConfig()
         baseline = self._make_baseline(gsnr_db=15.0, cd_ps_nm=5000.0)
         result = apply_all_transients(
-            baseline, "svc-1", "DP-QPSK", t=0.0, cfg=cfg,
+            baseline, "svc-1", "DP-QPSK", t=0.0, cfg=cfg, edfa_tracker=EdfaStateTracker(),
         )
         # BER should be computable and positive
         assert result["pre-fec-ber"] > 0
         # Q-factor should be finite
         assert result["q-factor-db"] > 0
+
+
+class TestEveryReaderAppliesTheTracker:
+    """The EDFA reservoir has no stateless form: a reader that left out the
+    tracker would report a different GSNR from every other reader."""
+
+    def test_the_tracker_is_a_required_argument(self):
+        import inspect
+
+        param = inspect.signature(apply_all_transients).parameters["edfa_tracker"]
+        assert param.default is inspect.Parameter.empty
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+    def test_every_call_site_passes_the_tracker(self):
+        import ast
+        from pathlib import Path
+
+        import twinlight
+
+        calls = []
+        for path in Path(twinlight.__file__).parent.rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+                if name != "apply_all_transients":
+                    continue
+                tracker = next(
+                    (kw.value for kw in node.keywords if kw.arg == "edfa_tracker"), None,
+                )
+                calls.append((path.name, node.lineno, tracker))
+        assert calls, "no call site found"
+        for where, line, tracker in calls:
+            assert tracker is not None, f"{where}:{line} does not pass edfa_tracker"
+            assert not (isinstance(tracker, ast.Constant) and tracker.value is None), (
+                f"{where}:{line} passes edfa_tracker=None"
+            )

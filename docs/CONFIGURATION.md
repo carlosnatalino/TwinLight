@@ -194,29 +194,23 @@ isolate one effect in an experiment. The physics is described in
 edfa_reservoir:
   enabled: true
   tau_ms: 10.0
-  gain_per_channel_db: 0.3
   tau_add_factor: 0.001
   tau_drop_factor: 0.01
-  drift_period_multiplier: 100.0
-  gain_drift_amp_db: 0.3
   solver_method: "RK45"
   solver_max_step_ms: 0.1
 ```
 
 | Field | Default | Meaning and source |
 |-------|---------|--------------------|
-| `tau_ms` | `10.0` | Erbium metastable lifetime [ms] — Sun, Zyskind & Srivastava 1997 |
-| `gain_per_channel_db` | `0.3` | Peak gain excursion [dB] per channel of load step, at the moment of an add/drop; the cascade accumulates linearly in dB (Sun 1997). It decays to zero with τ_e — it is **not** a standing per-channel penalty, see [PHYSICS.md § 2.1](PHYSICS.md) |
+| `tau_ms` | `10.0` | Erbium metastable lifetime [ms] — Sun, Zyskind & Srivastava 1997. The excursion's size is not a parameter: it is 10·log10(N_before/N_after) from the channel counts at the event, and it relaxes to zero with τ_e/M on a route whose M amplifiers the event touched, see [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir) |
 | `tau_add_factor` | `0.001` | τ_e/τ for channel-add events — Bononi & Rusch 1998 Eq. 29 (≈1–10 µs) |
 | `tau_drop_factor` | `0.01` | τ_e/τ for channel-drop events — ibid. (≈100–500 µs) |
-| `drift_period_multiplier` | `100.0` | Sinusoidal-fallback drift period multiplier |
-| `gain_drift_amp_db` | `0.3` | Sinusoidal-fallback peak gain excursion [dB] |
 | `solver_method` | `RK45` | `scipy.integrate.solve_ivp` method |
 | `solver_max_step_ms` | `0.1` | Maximum solver step [ms] |
 
-The last four apply only to the **stateless fallback**, used when no
-`EdfaStateTracker` is available. In normal operation the stateful exponential
-step response is used instead.
+`solver_method` and `solver_max_step_ms` are read by no model: the step
+response is closed form, so nothing integrates the ODE. A runtime write to
+either is refused (see [Runtime overrides](#runtime-overrides)).
 
 ### `transients.polarization`
 
@@ -274,7 +268,7 @@ environmental:
   temp_variation_c: 5.0
   temp_cycle_period_s: 86400.0
   timezone_offset: 0.0
-  cd_temp_coeff_ps_nm_km_c: 0.002
+  cd_temp_coeff_ps_nm_km_c: -0.0015
   alpha_temp_coeff_db_km_c: 0.0002
 ```
 
@@ -284,8 +278,8 @@ environmental:
 | `temp_variation_c` | `5.0` | Ambient temperature swing [°C] |
 | `temp_cycle_period_s` | `86400.0` | Diurnal period [s] |
 | `timezone_offset` | `0.0` | Hours to shift the cycle relative to wall-clock time |
-| `cd_temp_coeff_ps_nm_km_c` | `0.002` | dD/dT [ps/(nm·km·°C)] — G.652 SSMF, Kato *et al.* 2000 |
-| `alpha_temp_coeff_db_km_c` | `0.0002` | dα/dT [dB/(km·°C)] on deployed G.652 fiber |
+| `cd_temp_coeff_ps_nm_km_c` | `-0.0015` | dD/dT [ps/(nm·km·°C)]. Negative: dispersion falls as the fiber warms. Kato *et al.* 2000 measured −0.0005 to −0.0038 and give no G.652 value, so the default is a value inside their range (see [PHYSICS.md § Known limitations](PHYSICS.md#known-limitations)) |
+| `alpha_temp_coeff_db_km_c` | `0.0002` | dα/dT [dB/(km·°C)] on deployed G.652 fiber, no recorded source. Each span's loss changes by this times its length and the temperature swing; the output-power-controlled amplifiers turn that into an OSNR loss of one span's change, whatever the route length (see [PHYSICS.md § 2.4](PHYSICS.md#24-environmental-drift)) |
 
 ## `rmsa` — routing, modulation and spectrum assignment
 

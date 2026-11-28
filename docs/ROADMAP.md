@@ -32,20 +32,6 @@ which is a modelling question rather than a configuration one.
 **What to do now:** nothing — the option is safe to leave in place. Results are
 those of a GNPy-designed, fully amplified network whatever its value.
 
-### EDFA gain excursion does not scale with channel load
-
-**Current behaviour:** the transient gain excursion at an add/drop event is
-`gain_per_channel_db × |Δchannels|`, independent of how many channels the
-amplifier already carries.
-
-**Planned:** scale the excursion by the *fraction* of channels added or dropped,
-following Sun *et al.* 1997 [[2]](../README.md#ref-2): one channel added to a
-full C-band should perturb far less than one added to an empty span.
-
-**What to do now:** the bundled scenarios run at low occupancy, where the two
-forms agree closely. Do not rely on excursion magnitudes on heavily loaded
-spans. See [PHYSICS.md § 2.1](PHYSICS.md#21-edfa-gain-reservoir).
-
 ---
 
 ## Not yet implemented

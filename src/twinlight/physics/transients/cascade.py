@@ -20,12 +20,16 @@ from __future__ import annotations
 
 import hashlib
 import math
+from typing import TYPE_CHECKING
 
 from twinlight.config import FecConfig, TransientsConfig
 from twinlight.physics.ber_conversion import ber_to_q_db, gsnr_to_ber
 from twinlight.physics.fec import fec_measurements
 from twinlight.physics.gnpy_adapter import OpmBaseline
 from twinlight.physics.modulation import get_params, osnr_to_01nm_db
+
+if TYPE_CHECKING:
+    from twinlight.physics.transients.edfa_reservoir import EdfaStateTracker
 
 
 def hash_phase(uid: str, metric: str) -> float:
@@ -53,7 +57,8 @@ def apply_all_transients(
     modulation_format: str,
     t: float,
     cfg: TransientsConfig,
-    edfa_tracker=None,
+    *,
+    edfa_tracker: EdfaStateTracker,
     fec_cfg: FecConfig | None = None,
 ) -> dict[str, float]:
     """Apply all enabled transient perturbations to a GNPy baseline.
@@ -70,8 +75,9 @@ def apply_all_transients(
         modulation_format: Format string (e.g. "DP-QPSK").
         t: Wall-clock time [s].
         cfg: Transient model configuration.
-        edfa_tracker: Optional EdfaStateTracker for Bononi exponential
-            step model.  When None, falls back to sinusoidal approximation.
+        edfa_tracker: The context's EdfaStateTracker, which holds the
+            add/drop events of the reservoir model.  Required: every reader
+            must apply the same events (the twin's one tracker).
         fec_cfg: FEC models for the post-FEC BERs; defaults when None.
 
     Returns:
@@ -99,10 +105,7 @@ def apply_all_transients(
 
     # 1. EDFA gain reservoir (Bononi-Rusch JLT 1998 / Sun 1997)
     if cfg.edfa_reservoir.enabled and baseline.edfa_uids:
-        d = edfa_reservoir.delta_gsnr_db(
-            t, baseline.edfa_uids, cfg.edfa_reservoir,
-            edfa_tracker=edfa_tracker,
-        )
+        d = edfa_reservoir.delta_gsnr_db(t, baseline.edfa_uids, edfa_tracker)
         gsnr += d
         osnr += d
 
@@ -112,7 +115,8 @@ def apply_all_transients(
     #    power fluctuation degrades both ASE-limited and NLI-limited SNR.
     if cfg.polarization.enabled:
         pmd += polarization.delta_pmd_ps(
-            t, baseline.fiber_uids, baseline.pmd_ps, cfg.polarization
+            t, baseline.fiber_uids, baseline.pmd_ps, cfg.polarization,
+            fiber_lengths_km=baseline.fiber_lengths_km,
         )
         pdl_penalty = polarization.delta_osnr_from_pdl_db(
             t, baseline.pdl_elements, cfg.polarization,
@@ -130,18 +134,20 @@ def apply_all_transients(
             gsnr_db=gsnr,
         )
 
-    # 4. Environmental: thermal CD drift + loss variation
-    #    Fiber loss variation affects both GSNR and OSNR: higher loss
-    #    reduces signal power reaching EDFAs, degrading ASE-limited SNR.
+    # 4. Environmental: thermal CD drift (Kato et al. 2000) + span loss
+    #    variation.  The output-power-controlled amplifiers make up the extra
+    #    loss, so each one's ASE rises by its span's loss change while the
+    #    NLI stays put: OSNR falls by one span's change, GSNR by its ASE
+    #    share of that (environmental.py docstring).
     if cfg.environmental.enabled:
         cd += environmental.delta_cd_ps_nm(
             t, baseline.total_fiber_km, cfg.environmental,
         )
-        env_loss_penalty = environmental.delta_gsnr_from_temp_db(
-            t, baseline.total_fiber_km, cfg.environmental,
+        span_delta_db = environmental.span_loss_change_db(
+            t, baseline.total_fiber_km, len(baseline.fiber_uids),
+            cfg.environmental,
         )
-        gsnr += env_loss_penalty
-        osnr += env_loss_penalty
+        gsnr, osnr = environmental.apply_span_loss_change(gsnr, osnr, span_delta_db)
 
     # Recompute BER and Q from perturbed GSNR
     ber = gsnr_to_ber(gsnr, modulation_format)

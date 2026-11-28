@@ -139,6 +139,23 @@ class TestSnapshotV2RoundTrip:
         assert ctx2._config.rmsa.qot_margin_db == pytest.approx(2.5)
         assert ctx2.get_twin_overrides() == {"rmsa.qot_margin_db": 2.5}
 
+    def test_an_override_of_a_removed_field_is_dropped_with_a_warning(
+        self, gnpy_twin_config: TwinConfig, tmp_path: Path,
+    ) -> None:
+        """A snapshot from before an EDFA knob was removed still restores."""
+        ctx1 = TapiContext(gnpy_twin_config)
+        ctx1.apply_twin_overrides({"rmsa.qot_margin_db": 2.5})
+        path = tmp_path / "old.json"
+        ctx1.snapshot(path)
+        data = json.loads(path.read_text())
+        data["twin_overrides"]["transients.edfa_reservoir.gain_per_channel_db"] = 0.5
+        path.write_text(json.dumps(data))
+
+        ctx2 = TapiContext(gnpy_twin_config)
+        warnings = ctx2.restore_from(path)
+        assert ctx2.get_twin_overrides() == {"rmsa.qot_margin_db": 2.5}
+        assert any("gain_per_channel_db" in w for w in warnings)
+
     @pytest.mark.asyncio
     async def test_restore_resets_then_reapplies(
         self,

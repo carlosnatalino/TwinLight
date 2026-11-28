@@ -61,8 +61,6 @@ transients:
   edfa_reservoir:
     enabled: true
     tau_ms: 10.0                       # Sun-Saleh-Zyskind τ ≈ 10 ms; Analytical Models §1
-    drift_period_multiplier: 100.0
-    gain_drift_amp_db: 0.3             # Tancevski-Bononi-Rusch IEEE JLT 1999 (cascade ref)
     solver_method: "RK45"
     solver_max_step_ms: 0.1
 
@@ -90,7 +88,7 @@ transients:
     temp_variation_c: 5.0
     temp_cycle_period_s: 86400.0
     timezone_offset: 0.0
-    cd_temp_coeff_ps_nm_km_c: 0.002   # G.652; Kato et al. Opt. Lett. 2000
+    cd_temp_coeff_ps_nm_km_c: -0.0015 # within Kato et al. Opt. Lett. 2000 (-0.0005 to -0.0038)
     alpha_temp_coeff_db_km_c: 0.0002  # deployed G.652; Analytical Models §6
 
 # ---------------------------------------------------------------------------

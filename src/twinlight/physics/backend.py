@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     import networkx as nx
 
+    from twinlight.loader.gnpy_topology import GnpyTopology
     from twinlight.physics.channel_plan import SpectralDefaults
     from twinlight.physics.gnpy_adapter import OpmBaseline
 
@@ -73,6 +74,13 @@ class PhysicalBackend(Protocol):
     # computation; the EGN backend leaves this ``None`` (path computation
     # falls back to the TopologyGraph-based NetworkX k-shortest).
     network: nx.DiGraph | None
+    # The elements a backend without a ``network`` propagates over, and their
+    # connections, as GNPy JSON: the EGN backend's is GNPy's designed network
+    # (boosters, preamplifiers, split fibers), the same elements as the GNPy
+    # backend's ``network``. The context indexes links and lists the physical
+    # inventory from whichever of the two the backend has. ``None`` when
+    # ``network`` describes the elements.
+    element_topology: GnpyTopology | None
     # The equipment library's SI.default: reference comb, symbol rate, design
     # launch power (physics/channel_plan.py).
     spectral_defaults: SpectralDefaults

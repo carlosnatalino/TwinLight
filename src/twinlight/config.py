@@ -261,15 +261,10 @@ class EdfaReservoirConfig(BaseModel):
         default=10.0, gt=0,
         description=(
             "Erbium metastable lifetime [ms]. "
-            "Sun-Saleh-Zyskind 1997, Electron. Lett. vol. 33."
-        ),
-    )
-    gain_per_channel_db: float = Field(
-        default=0.3, ge=0,
-        description=(
-            "Per-channel GSNR contribution [dB] for Bononi "
-            "reservoir model. Cascade accumulates linearly "
-            "(Sun 1997)."
+            "Sun-Saleh-Zyskind 1997, Electron. Lett. vol. 33. "
+            "The excursion's magnitude is not a knob: it follows from the "
+            "channel counts before and after the event (Sun, Zyskind & "
+            "Srivastava, IEEE JSTQE 3(4):991, 1997)."
         ),
     )
     tau_add_factor: float = Field(
@@ -285,15 +280,6 @@ class EdfaReservoirConfig(BaseModel):
             "tau_e/tau ratio for channel-drop events. "
             "Bononi-Rusch JLT 1998 Eq. 29: ~100-500 us."
         ),
-    )
-    # Legacy sinusoidal fallback (used when no event tracker)
-    drift_period_multiplier: float = Field(
-        default=100.0, gt=0,
-        description="Sinusoidal fallback: drift period multiplier.",
-    )
-    gain_drift_amp_db: float = Field(
-        default=0.3, ge=0,
-        description="Sinusoidal fallback: peak gain excursion [dB].",
     )
     solver_method: str = "RK45"
     solver_max_step_ms: float = Field(default=0.1, gt=0)
@@ -377,13 +363,16 @@ class EnvironmentalConfig(BaseModel):
         default=0.0,
         description="Hours to shift diurnal cycle relative to wall clock",
     )
+    # Kato, Koyano & Nishimura, Opt. Lett. 25(16):1156 (2000) measure negative
+    # coefficients, -0.0005 (dispersion-flattened) to -0.0038 (large-core
+    # NZ-DSF), and give no G.652 value; see PHYSICS.md § Known limitations.
     cd_temp_coeff_ps_nm_km_c: float = Field(
-        default=0.002, ge=0,
-        description="dD/dT [ps/(nm·km·°C)]. Default: G.652 SSMF, Kato et al. Opt. Lett. 2000 (range -0.0015 to -0.0038).",
+        default=-0.0015,
+        description="dD/dT [ps/(nm·km·°C)]; negative: dispersion falls as the fiber warms. Default: within the range Kato et al. Opt. Lett. 2000 measured (-0.0005 to -0.0038), which has no G.652 value.",
     )
     alpha_temp_coeff_db_km_c: float = Field(
         default=2e-4, ge=0,
-        description="dα/dT [dB/(km·°C)]. Default: measured on deployed G.652 fibers (Analytical Models §6).",
+        description="dα/dT [dB/(km·°C)] of each span; the OSNR loses one span's change under output-power control. Default: deployed G.652 fiber, no recorded source.",
     )
 
 

@@ -468,10 +468,13 @@ class TreeBuilder:
     def _fiber_length_km(self, uid: str) -> float | None:
         from twinlight.state.context import _fiber_length_km
 
+        # The EGN backend's elements are GNPy's design (its element_topology),
+        # whose split fibers the parsed topology does not have.
+        designed = getattr(self.ctx._backend.element_topology, "elements_by_uid", {})
         parsed = getattr(self.ctx._topo_graph._gnpy_topo, "elements_by_uid", {})
         el = self._uid_map().get(uid)
         gnpy_el = el if hasattr(el, "params") else None
-        km = _fiber_length_km(gnpy_el, parsed.get(uid))
+        km = _fiber_length_km(gnpy_el, designed.get(uid) or parsed.get(uid))
         return None if km is None else round(km, 6)
 
     # -- links -----------------------------------------------------------

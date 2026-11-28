@@ -52,6 +52,22 @@ INERT: dict[str, str] = {
 }
 
 
+# Fields removed from the config, with why. A snapshot that overrides one is
+# still restored: the override is dropped and the restore says so.
+REMOVED: dict[str, str] = {
+    "transients.edfa_reservoir.gain_per_channel_db": (
+        "the EDFA excursion follows the channel-count ratio (Sun et al. 1997), "
+        "so its size is no longer a parameter"
+    ),
+    "transients.edfa_reservoir.drift_period_multiplier": (
+        "it configured the stateless EDFA fallback, which is removed"
+    ),
+    "transients.edfa_reservoir.gain_drift_amp_db": (
+        "it configured the stateless EDFA fallback, which is removed"
+    ),
+}
+
+
 class TwinOverrideError(ValueError):
     """Raised when a twin-config override fails validation."""
 

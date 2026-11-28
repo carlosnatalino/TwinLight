@@ -186,8 +186,14 @@ failure and twin-config changes. A mutation that skips it, or a route that
 mutates a model directly, makes a `304` confirm a body that has changed.
 
 Under a backend with `uses_line_load` (EGN), a baseline also depends on the
-lightpaths sharing its fibers: `add_service` re-evaluates them and
-`delete_service` invalidates them (`_sharing_services`). The reverse index
+lightpaths sharing its fibers (`_sharing_services`): an admission, a removal
+and a replacement re-evaluate them inside the request (`_reevaluate`), over a
+line load built once for all of them. Each lightpath's channel in that load is
+memoised in `_lit_channel_memo` and checked against its inputs on every use
+(the allocation and service objects, which are replaced rather than mutated,
+and the launch power and format); the EGN backend memoises each route's
+amplifier bands (never written) and lit fibers (cleared on every cut). Keep
+those properties if you add an input to a lightpath's channel. The reverse index
 holds the backend's designed UIDs too (`_note_baseline`), since a route's
 UIDs are the topology's as written. A service's `operational-state` is
 derived from its baseline in `get_or_compute_baseline`; T-API reads call

@@ -275,6 +275,10 @@ class EgnBackend:
         # equipment library is available the topology is first run through
         # GNPy's design step, so both backends see the same amplifiers.
         gnpy_topo, self._models = _load_topology_with_amplifiers(config)
+        # The elements propagated over, designed when an equipment library is
+        # configured: the context indexes links and the inventory from them,
+        # so both backends list the same elements (PhysicalBackend).
+        self.element_topology: GnpyTopology | None = gnpy_topo
         # The reference channel and design launch power: the configured
         # equipment library's SI, else GNPy's bundled one (channel_plan.py).
         self.spectral_defaults = load_spectral_defaults(config.gnpy.equipment)
@@ -303,6 +307,13 @@ class EgnBackend:
         # link_id → plan of the reference channel; dropped when a write
         # touches an element of the link.
         self._link_plans: dict[int, _LinkPlan] = {}
+        # Route → the bands common to its amplifiers. The bands are the
+        # equipment models', taken at load and never written, and a write
+        # changes no link's amplifiers, so an entry never goes stale.
+        self._route_bands: dict[tuple[str, ...], list[tuple[float, float]]] = {}
+        # Route → the fibers its light reaches; dropped on every cut or
+        # restore, the only thing that changes it.
+        self._route_lit_fibers: dict[tuple[str, ...], frozenset[str]] = {}
 
         logger.info(
             "EGN backend ready: %d links, %d spans, %d boosters",
@@ -377,7 +388,8 @@ class EgnBackend:
         qot = budget.result()
         # Treat infinite GSNR (no noise source) as a saturated 60 dB so
         # the BER calculation downstream stays finite.
-        total_km = sum(f.length_km for plan in plans for f in plan.fibers)
+        lengths_km = [f.length_km for plan in plans for f in plan.fibers]
+        total_km = sum(lengths_km)
         return OpmBaseline(
             gsnr_db=min(qot.gsnr_db, 60.0),
             osnr_ase_db=min(qot.osnr_ase_db, 60.0),
@@ -387,6 +399,7 @@ class EgnBackend:
             total_fiber_km=total_km,
             edfa_uids=edfa_uids,
             fiber_uids=fiber_uids,
+            fiber_lengths_km=lengths_km,
             pdl_elements=self._pdl_hinges(path_uids),
         )
 
@@ -407,16 +420,17 @@ class EgnBackend:
         fiber with it (spectrum assignment forbids it), so it is left out.
         """
         reference_dbm = self.spectral_defaults.power_dbm
-        by_route: dict[tuple[str, ...], set[str]] = {}
         result: dict[str, list[tuple[float, float, float]]] = {}
         for channel in line_load:
             offset_hz = channel.centre_frequency_hz - centre_frequency_hz
             if abs(offset_hz) < (baud_hz + channel.baud_rate_hz) / 2:
                 continue
-            if channel.path_uids not in by_route:
-                by_route[channel.path_uids] = set(self._lit_fibers(list(channel.path_uids)))
+            lit = self._route_lit_fibers.get(channel.path_uids)
+            if lit is None:
+                lit = frozenset(self._lit_fibers(list(channel.path_uids)))
+                self._route_lit_fibers[channel.path_uids] = lit
             entry = (offset_hz, channel.launch_power_dbm - reference_dbm, channel.baud_rate_hz)
-            for uid in by_route[channel.path_uids] & fibers:
+            for uid in lit & fibers:
                 result.setdefault(uid, []).append(entry)
         return result
 
@@ -563,6 +577,9 @@ class EgnBackend:
         (``find_common_range``). Without a designed topology the EDFAs' bands
         are unknown and the SI comb range applies, as GNPy does for a path
         with no amplifier."""
+        key = tuple(path_uids)
+        if key in self._route_bands:
+            return self._route_bands[key]
         link_ids = self._links_for_path(path_uids) or []
         bands = [
             self._models.edfa_bands[a.uid]
@@ -570,7 +587,8 @@ class EgnBackend:
             for a in self._link_plan(link_id).amplifiers
             if a.uid in self._models.edfa_bands
         ]
-        return common_band(bands, self.spectral_defaults)
+        self._route_bands[key] = common = common_band(bands, self.spectral_defaults)
+        return common
 
     # -- /config plane: per-element parameter reads/writes ---------------
 
@@ -684,6 +702,7 @@ class EgnBackend:
             self._failed_fibers.add(fiber_uid)
         else:
             self._failed_fibers.discard(fiber_uid)
+        self._route_lit_fibers.clear()
 
     # -- Internals -------------------------------------------------------
 

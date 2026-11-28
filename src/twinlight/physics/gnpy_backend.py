@@ -27,6 +27,7 @@ from twinlight.physics.channel_plan import (
 if TYPE_CHECKING:
     import networkx as nx
 
+    from twinlight.loader.gnpy_topology import GnpyTopology
     from twinlight.physics.backend import LitChannel
     from twinlight.physics.gnpy_adapter import OpmBaseline
 
@@ -47,6 +48,8 @@ class GnpyBackend:
         self.available: bool = False
         self.uid_map: dict[str, Any] = {}
         self.network: nx.DiGraph | None = None
+        # The network describes the elements (PhysicalBackend).
+        self.element_topology: GnpyTopology | None = None
         # Retained for ``redesign()`` so we don't re-read the equipment
         # JSON from disk on every override.
         self.equipment: Any = None

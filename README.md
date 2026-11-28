@@ -557,7 +557,7 @@ deliberately excluded from OSNR.
 
 | Model | Effect | Formulation | Timescale |
 |-------|--------|-------------|-----------|
-| **EDFA gain reservoir** | ΔGSNR, ΔOSNR | Exponential step response of the erbium reservoir, asymmetric add/drop time constants, cascaded in dB — Bononi & Rusch [[1]](#ref-1), Sun *et al.* [[2]](#ref-2), Tancevski *et al.* [[3]](#ref-3) | µs–ms |
+| **EDFA gain reservoir** | ΔGSNR, ΔOSNR | Exponential step response of the erbium reservoir with asymmetric add/drop time constants (Bononi & Rusch [[1]](#ref-1)); the swing follows the channel-count ratio and stays bounded along a link's amplifiers, relaxing faster on a longer cascade (Sun *et al.* [[2]](#ref-2) [[34]](#ref-34)); without AGC, Tancevski *et al.* [[3]](#ref-3) | µs–ms |
 | **Polarization** | ΔPMD, PDL→OSNR penalty | PMD drift accumulated in quadrature (Gordon & Kogelnik [[4]](#ref-4)); PDL as a cascade of discrete hinges with Maxwell-distributed per-hinge PDL and incommensurate drift — Zarkosvky & Shtaif [[5]](#ref-5), applied to coherent systems per D'Amico [[15]](#ref-15) and Miotto [[16]](#ref-16) | 90 s / 300 s |
 | **Phase noise (EEPN)** | ΔGSNR | Dispersion-dependent equalization-enhanced phase noise, `α = π·c/(2f₀²)·|D_t|·B·Δν_LO` — Shieh & Ho [[11]](#ref-11), linewidth model per Henry [[12]](#ref-12) | ~120 s |
 | **Environmental** | ΔCD, fiber-loss penalty | Thermal dispersion drift `dD/dT` and loss variation over a diurnal cycle — Kato *et al.* [[13]](#ref-13) | 86 400 s |
@@ -714,7 +714,7 @@ implement. Citation keys used in code comments are shown in brackets.
 ### Physical-layer transients
 
 1. <a id="ref-1"></a>A. Bononi and L. A. Rusch, "Doped-fiber amplifier dynamics: a system perspective," *IEEE/OSA Journal of Lightwave Technology*, vol. 16, no. 5, pp. 945–956, 1998. `[Bononi-Rusch]` — EDFA gain-reservoir step response (Eq. 5/19/29).
-2. <a id="ref-2"></a>Y. Sun, J. L. Zyskind, and A. K. Srivastava, "Average inversion level, modeling, and physics of erbium-doped fiber amplifiers," *IEEE Journal of Selected Topics in Quantum Electronics*, vol. 3, no. 4, pp. 991–1007, 1997. `[Sun_1997]` — reservoir time constant and dB-domain cascade.
+2. <a id="ref-2"></a>Y. Sun, J. L. Zyskind, and A. K. Srivastava, "Average inversion level, modeling, and physics of erbium-doped fiber amplifiers," *IEEE Journal of Selected Topics in Quantum Electronics*, vol. 3, no. 4, pp. 991–1007, 1997. `[Sun_1997]` — surviving-channel swing set by the channel-count ratio, bounded along a cascade.
 3. <a id="ref-3"></a>L. Tancevski, A. Bononi, and L. A. Rusch, "Output power and SNR swings in cascades of EDFAs for circuit- and packet-switched optical networks," *IEEE/OSA Journal of Lightwave Technology*, vol. 17, no. 5, pp. 733–742, 1999. — cascade gain-excursion magnitudes.
 4. <a id="ref-4"></a>J. P. Gordon and H. Kogelnik, "PMD fundamentals: polarization mode dispersion in optical fibers," *Proceedings of the National Academy of Sciences*, vol. 97, no. 9, pp. 4541–4550, 2000. `[Gordon-Kogelnik]` — Maxwell-distributed DGD, quadrature accumulation.
 5. <a id="ref-5"></a>E. Zarkosvky and M. Shtaif, "Statistics of the optical signal-to-noise ratio in systems with polarization-dependent loss," *Optics Letters*, vol. 45, no. 5, pp. 1224–1227, 2020. `[Zarkosvky-Shtaif 2020]` — PDL hinge model (Eq. 3–5).
@@ -761,6 +761,7 @@ implement. Citation keys used in code comments are shown in brackets.
 31. <a id="ref-31"></a>A. Alvarado, E. Agrell, D. Lavery, R. Maher, and P. Bayvel, "Replacing the soft-decision FEC limit paradigm in the design of optical communication systems," *IEEE/OSA Journal of Lightwave Technology*, vol. 33, no. 20, pp. 4338–4352, 2015. — GMI as the predictor of post-FEC BER for soft-decision decoding.
 32. <a id="ref-32"></a>ITU-T Recommendation G.709, *Interfaces for the optical transport network*. — the RS(255,239) GFEC, default code of the hard-decision model.
 33. <a id="ref-33"></a>P. Poggiolini, G. Bosco, A. Carena, V. Curri, Y. Jiang, and F. Forghieri, "The GN-model of fiber non-linear propagation and its applications," *IEEE/OSA Journal of Lightwave Technology*, vol. 32, no. 4, pp. 694–721, 2014 (arXiv:1209.0394). `[Poggiolini_2014]` — incoherent closed form (Eq. 120/123) for the EGN kernel's cross-channel NLI, as GNPy's `gn_model_analytic` implements it.
+34. <a id="ref-34"></a>Y. Sun, A. K. Srivastava, J. L. Zyskind, J. W. Sulhoff, C. Wolf, and R. W. Tkach, "Fast power transients in WDM optical networks with cascaded EDFAs," *Electronics Letters*, vol. 33, no. 4, pp. 313–314, 1997. `[Sun_1997_FastPowerTransients]` — the transient's rate scales linearly with the number of EDFAs.
 
 ## License and acknowledgements
 

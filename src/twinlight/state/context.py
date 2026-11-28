@@ -21,7 +21,7 @@ import json
 import logging
 import math
 import uuid as uuid_lib
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -331,6 +331,10 @@ class TapiContext:
         self._service_allocation: dict[str, tuple[list[tuple[str, str]], int, int]] = {}
         # service_uuid -> launch power in effect [dBm] (requested or SI default)
         self._service_launch_power: dict[str, float] = {}
+        # service_uuid -> (allocation, service, (launch power, format), its
+        # channel as a neighbour): see _lit_channel. Entries are checked on
+        # use; dropping one only saves memory.
+        self._lit_channel_memo: dict[str, tuple[Any, Any, tuple[Any, Any], LitChannel | None]] = {}
 
         # -- Path computation: GNPy UID <-> TAPI topology refs -------------
         # gnpy_uid -> (topology_uuid, node_uuid)
@@ -355,22 +359,14 @@ class TapiContext:
         # traverses it. Maintained in add_service / delete_service so a
         # parameter mutation can invalidate only the affected baselines.
         self._element_to_services: dict[str, set[str]] = {}
-        # NetworkX edges removed by set_link_failed, keyed by fiber UID, so
-        # set_link_failed(False) can restore them exactly. Each entry is a
-        # list of per-graph stashes — the two routing graphs (topo_graph
-        # and the GNPy network) key nodes differently, so we store
-        # (graph_ref, node_key, in_edges, out_edges) for each.
-        self._removed_edges: dict[str, list[tuple]] = {}
-        # Fiber UID → list of TAPI (topology_uuid, link_uuid) refs the fiber
-        # backs. Built once below by walking through inline EDFAs out to the
-        # nearest ROADM/TRX on each side. Used to flip Link.operational_state
-        # when a fiber fails. Topologies with multiple fibers per TAPI link
-        # are handled the same way: failing any one fiber disables the link.
-        self._fiber_to_link_refs: dict[str, list[tuple[str, str]]] = {}
-        if self._backend.available:
-            self._build_fiber_to_link_index()
+        # NetworkX edges removed by set_link_failed, keyed by (routing graph,
+        # node key) — the two routing graphs (topo_graph and the GNPy network)
+        # key nodes differently — so a restore re-adds the exact original
+        # edges, once no failed fiber still cuts that node.
+        self._removed_edges: dict[tuple[Any, Any], tuple[list, list]] = {}
         # Inline element UID (Fiber/Edfa) → (upstream, downstream) terminal
-        # UID (Roadm/Transceiver). Built once, before any link can fail, so
+        # UID (Roadm/Transceiver), over the elements the backend propagates
+        # over (``_element_graph``). Built once, before any link can fail, so
         # removing a failed fiber's edges never hides it from the index.
         # Backs the /Link scope of parameter paths.
         self._element_terminals: dict[str, tuple[str | None, str | None]] = {}
@@ -378,7 +374,18 @@ class TapiContext:
         # propagation order. Built by the same walk; backs /LinkList in the
         # transparent controller.
         self._link_elements: dict[tuple[str, str], list[str]] = {}
+        # The same, over the route graph: what route constraints hide or pin.
+        # The element index itself under GNPy, whose route graph is the
+        # designed network; the parsed topology's under EGN.
+        self._route_link_elements: dict[tuple[str, str], list[str]] = {}
         self._build_element_terminal_index()
+        # Fiber UID → list of TAPI (topology_uuid, link_uuid) refs the fiber
+        # backs, from the element index. Used to flip Link.operational_state
+        # when a fiber fails. Topologies with multiple fibers per TAPI link
+        # are handled the same way: failing any one fiber disables the link.
+        self._fiber_to_link_refs: dict[str, list[tuple[str, str]]] = {}
+        if self._backend.available:
+            self._build_fiber_to_link_index()
 
         # -- Running-datastore revision and startup values -------------------
         # Every change to configuration state — element parameters, failed
@@ -498,7 +505,11 @@ class TapiContext:
         """Delete a service and bring the others' operational-state up to
         date (it may have been a neighbour of theirs)."""
         async with self._admission_lock:
+            neighbours = self._sharing_services(uuid)
             removed = self.delete_service(uuid)
+            # Its neighbours lost a channel: re-evaluate them now, as an
+            # admission does, so their operational-state never lags.
+            await self._reevaluate(neighbours)
         await self.refresh_operational_states()
         return removed
 
@@ -517,6 +528,7 @@ class TapiContext:
             Whatever admission raises, after the rollback.
         """
         async with self._admission_lock:
+            old_neighbours = self._sharing_services(svc.uuid)
             detached = self._detach_service(svc.uuid)
             try:
                 await self._add_service(svc)
@@ -530,6 +542,9 @@ class TapiContext:
                 self._edfa_tracker.notify_channel_change(
                     detached.edfa_uids, -1, self._config.transients.edfa_reservoir,
                 )
+            # The old route's neighbours lost it; the new route's were
+            # re-evaluated by the admission.
+            await self._reevaluate(old_neighbours - self._sharing_services(svc.uuid))
 
     def _detach_service(self, uuid: str) -> _DetachedService:
         """Take a service out of every structure, keeping what puts it back.
@@ -664,10 +679,24 @@ class TapiContext:
 
         # The new channel is a neighbour of every lightpath sharing a fiber
         # with it: their GSNR drops, possibly below what their format needs.
-        for uuid in self._sharing_services(svc.uuid):
+        await self._reevaluate(self._sharing_services(svc.uuid))
+
+    async def _reevaluate(self, uuids: Collection[str]) -> None:
+        """Propagate the lightpaths ``uuids`` anew and set their
+        operational-state: the line load changed under them.
+
+        Called with the admission lock held, which every coroutine that adds
+        or removes a lightpath takes, so the load is the same for all of
+        them and is built once rather than once per lightpath.
+        """
+        if not uuids:
+            return
+        load = self._lit_channels()
+        for uuid in uuids:
             self.invalidate_baseline(uuid)
             if (other := self._services.get(uuid)) is not None:
-                await self.get_or_compute_baseline(other)
+                baseline = await self._baseline_for(other, load=load)
+                self._apply_operational_state(other, baseline)
 
     async def _admit(
         self, svc: ConnectivityService, paths: list[list[str]],
@@ -1269,6 +1298,7 @@ class TapiContext:
             )
 
         self.invalidate_baseline(uuid)
+        self._lit_channel_memo.pop(uuid, None)
         self._oam_jobs.pop(oam_job_uuid(uuid), None)
         # Strip this service from the /config reverse index.
         for svc_set in self._element_to_services.values():
@@ -1357,7 +1387,7 @@ class TapiContext:
     def _link_inline_elements(self, pair: tuple[str, str]) -> list[str]:
         """Inline elements (fibers, amplifiers) of a terminal-to-terminal link,
         in propagation order, as they appear in the route graph."""
-        return list(self._link_elements.get(pair, []))
+        return list(self._route_link_elements.get(pair, []))
 
     def _resolve_route_query(
         self, constraints: PathConstraints, src: str, dst: str,
@@ -1889,8 +1919,9 @@ class TapiContext:
         The one rule for "no signal", shared by the OPM baseline and the QoT
         what-if, in precedence order:
 
-        * ``link-failed`` — a fiber on the route is in ``failed`` (the
-          current failures, or those a what-if would leave);
+        * ``link-failed`` — a fiber on the route, or one of the backend's
+          fibers on it, is in ``failed`` (the current failures, or those a
+          what-if would leave);
         * ``out-of-band`` — the block lies outside the band every amplifier
           on the route passes, so the first of them drops the channel. Only
           a restored snapshot from before the band was enforced holds one.
@@ -1903,7 +1934,12 @@ class TapiContext:
         and PMD, never a band, and the spectrum grid is restart-only. A
         what-if can therefore evaluate it against the current state.
         """
-        if any(uid in failed for uid in path):
+        # The route's own UIDs, and the backend's fibers on it: under EGN the
+        # route is the parsed topology's while a cut can name a fiber the
+        # design split from one of its fibers.
+        if failed and (
+            any(uid in failed for uid in path) or not failed.isdisjoint(self._fibers_of(uuid))
+        ):
             return "link-failed"
         if self._out_of_band(uuid):
             return "out-of-band"
@@ -1924,27 +1960,63 @@ class TapiContext:
         """The admitted lightpaths' channels (all but ``exclude``), for a
         backend that models the actual line load; empty for one that
         assumes a fully loaded line."""
+        return [c for uuid, c in self._lit_channels().items() if uuid != exclude]
+
+    def _lit_channels(self) -> dict[str, LitChannel]:
+        """Every admitted lightpath's channel, by service, for a backend that
+        models the actual line load; empty for one that assumes a fully
+        loaded line."""
         if not self._backend.uses_line_load:
-            return []
+            return {}
+        return {
+            uuid: channel for uuid, svc in self._services.items()
+            if (channel := self._lit_channel(uuid, svc)) is not None
+        }
+
+    def _lit_channel(self, uuid: str, svc: ConnectivityService) -> LitChannel | None:
+        """``svc``'s channel as the neighbour of others, or None when it
+        lights nothing: no route recorded, or a block outside the band its
+        amplifiers pass (the first EDFA drops it).
+
+        Memoised per service on what it is computed from, and checked
+        against those on every use, so no change can leave it stale: the
+        allocation and the service objects, which admission, replacement and
+        restore assign anew rather than mutate; the launch power and the
+        format, by value. The amplifier bands are never written and the
+        spectrum grid is restart-only. An admission re-evaluates every
+        neighbour, each over every lit lightpath, so this is what keeps the
+        line load from being rebuilt service by service each time.
+        """
         from twinlight.physics.modulation import get_params
 
-        load: list[LitChannel] = []
-        for uuid, svc in self._services.items():
-            path = self._allocated_path_uids(uuid)
-            if uuid == exclude or not path or self._out_of_band(uuid):
-                continue  # an out-of-band channel is dropped by the first EDFA
+        allocation = self._service_allocation.get(uuid)
+        inputs = (self._service_launch_power.get(uuid), svc.modulation_format)
+        memo = self._lit_channel_memo.get(uuid)
+        if memo is not None and memo[0] is allocation and memo[1] is svc and memo[2] == inputs:
+            return memo[3]
+        path = self._allocated_path_uids(uuid)
+        channel: LitChannel | None = None
+        if path and not self._out_of_band(uuid):
             centre_hz, _width_hz, power_dbm = self._service_channel(svc, path)
-            load.append(LitChannel(
+            channel = LitChannel(
                 path_uids=tuple(path),
                 centre_frequency_hz=centre_hz,
                 baud_rate_hz=get_params(svc.modulation_format).baud_rate_hz,
                 launch_power_dbm=power_dbm,
-            ))
-        return load
+            )
+        self._lit_channel_memo[uuid] = (allocation, svc, inputs, channel)
+        return channel
 
-    async def _baseline_for(self, svc: ConnectivityService) -> OpmBaseline | None:
+    async def _baseline_for(
+        self, svc: ConnectivityService, *, load: dict[str, LitChannel] | None = None,
+    ) -> OpmBaseline | None:
         """The cached baseline, else one propagated now (see
-        :meth:`get_or_compute_baseline`)."""
+        :meth:`get_or_compute_baseline`).
+
+        ``load`` is the lit channels by service (:meth:`_lit_channels`) when
+        the caller built them for several lightpaths at once; otherwise the
+        line load is built here.
+        """
         if not self._gnpy_available:
             return None
 
@@ -1986,7 +2058,10 @@ class TapiContext:
                     path, svc.modulation_format.value,
                     centre_frequency_hz=centre_hz, media_channel_width_hz=width_hz,
                     launch_power_dbm=power_dbm,
-                    line_load=self._line_load(exclude=svc.uuid),
+                    line_load=(
+                        self._line_load(exclude=svc.uuid) if load is None
+                        else [c for u, c in load.items() if u != svc.uuid]
+                    ),
                 )
             except PropagationError:
                 baseline = None  # OPM falls back to mock data (logged by the backend)
@@ -2452,51 +2527,15 @@ class TapiContext:
             return []
         return [edges[0][0]] + [b for _a, b in edges]
 
-    def _walk_to_terminal(self, start_uid: str, direction: str) -> str | None:
-        """Walk through inline Edfa/Fiber elements to the nearest Roadm/Transceiver.
-
-        ``direction`` is ``"pred"`` (predecessors) or ``"succ"`` (successors).
-        Returns the first ROADM or Transceiver UID encountered, or ``None`` if
-        the walk dead-ends or loops. Used by ``_build_fiber_to_link_index``.
-        """
-        g = self._topo_graph.graph
-        # GNPy's designed_network() may split a long fiber into
-        # sub-span Fiber nodes (e.g. ``fiber (A → B)-_(1/4)``) that
-        # exist in the GNPy uid_map but not in the parsed topo_graph.
-        # Walking from such a node is meaningless here; bail.
-        if start_uid not in g:
-            return None
-        cur = start_uid
-        seen = {cur}
-        while True:
-            neighbours = (
-                list(g.predecessors(cur)) if direction == "pred"
-                else list(g.successors(cur))
-            )
-            if not neighbours:
-                return None
-            nxt = neighbours[0]
-            if nxt in seen:
-                return None
-            seen.add(nxt)
-            el = self._gnpy_uid_map.get(nxt)
-            if el is None:
-                return None
-            kind = _kind_name(el)
-            if kind in ("Roadm", "Transceiver"):
-                return nxt
-            if kind not in ("Edfa", "Fiber"):
-                return None
-            cur = nxt
-
     def _build_fiber_to_link_index(self) -> None:
-        """Populate ``_fiber_to_link_refs`` for every Fiber in the network."""
-        for uid, el in self._gnpy_uid_map.items():
-            if _kind_name(el) != "Fiber":
-                continue
-            a = self._walk_to_terminal(uid, "pred")
-            z = self._walk_to_terminal(uid, "succ")
-            if not a or not z:
+        """Populate ``_fiber_to_link_refs`` for every Fiber the backend models.
+
+        Reads the element index, so a fiber the design split or inserted
+        (``fiber (A → B)-_(1/4)``) disables its link as the fiber it came
+        from does.
+        """
+        for uid, (a, z) in self._element_terminals.items():
+            if a is None or z is None or not self._backend.is_fiber(uid):
                 continue
             refs: list[tuple[str, str]] = []
             # Both directions: GNPy uses unidirectional links so the user-
@@ -2508,55 +2547,38 @@ class TapiContext:
             if refs:
                 self._fiber_to_link_refs[uid] = refs
 
-    def _build_element_terminal_index(self) -> None:
-        """Populate ``_element_terminals`` for every inline Fiber and Edfa.
+    def _element_graph(self) -> tuple[Any, Callable[[Any], str], Callable[[Any], str]]:
+        """(graph, UID of a node, kind of a node) of the elements the backend
+        propagates over.
 
-        Walks the backend's own graph when it has one: GNPy's designed
-        network contains booster amplifiers and fiber sub-spans that the
-        parsed topology graph does not. The EGN backend has no graph, so it
-        falls back to the parsed topology.
+        GNPy's designed network, or for a backend without one its
+        ``element_topology``: the EGN backend's is the same designed network,
+        with the boosters, preamplifiers and split fibers that the parsed
+        topology lacks. The topology as parsed only when neither is there.
         """
-        net = getattr(self._backend, "network", None)
-        uid_map = self._backend.uid_map
-        graph = net if net is not None else self._topo_graph.graph
+        net = self._backend.network
+        if net is not None:
+            return net, lambda node: str(node.uid), _kind_name
+        topo = self._backend.element_topology or self._topo_graph._gnpy_topo
+        return _topology_graph(topo)
 
-        def uid_of(node: Any) -> str:
-            return str(node.uid) if net is not None else str(node)
+    def _build_element_terminal_index(self) -> None:
+        """Populate ``_element_terminals`` and ``_link_elements`` from the
+        backend's elements, and ``_route_link_elements`` from the route graph.
 
-        def kind_of(node: Any) -> str:
-            return _kind_name(node if net is not None else uid_map.get(node))
-
-        def walk(start: Any, step: Any) -> tuple[str | None, int]:
-            """(terminal UID or None, number of hops to it)."""
-            cur, seen = start, {start}
-            while True:
-                neighbours = list(step(cur))
-                if len(neighbours) != 1:
-                    return None, 0
-                cur = neighbours[0]
-                if cur in seen:
-                    return None, 0
-                seen.add(cur)
-                kind = kind_of(cur)
-                if kind in ("Roadm", "Transceiver"):
-                    return uid_of(cur), len(seen) - 1
-                if kind not in ("Edfa", "Fiber"):
-                    return None, 0
-
-        positions: dict[tuple[str, str], list[tuple[int, str]]] = {}
-        for node in graph.nodes:
-            if kind_of(node) in ("Fiber", "Edfa"):
-                (a, hops), (z, _) = (
-                    walk(node, graph.predecessors),
-                    walk(node, graph.successors),
-                )
-                self._element_terminals[uid_of(node)] = (a, z)
-                if a is not None and z is not None:
-                    positions.setdefault((a, z), []).append((hops, uid_of(node)))
-        self._link_elements = {
-            pair: [uid for _hops, uid in sorted(items)]
-            for pair, items in positions.items()
-        }
+        The two differ only for a backend that routes over the parsed topology
+        but propagates over a designed one (EGN): its links list the designed
+        elements, as the GNPy backend's do, while route constraints hide or
+        pin the route graph's own nodes.
+        """
+        self._element_terminals, self._link_elements = _index_links(*self._element_graph())
+        if self._gnpy_network is not None:
+            self._route_link_elements = self._link_elements
+            return
+        parsed = {el.uid: el.type for el in self._topo_graph._gnpy_topo.elements}
+        _terminals, self._route_link_elements = _index_links(
+            self._topo_graph.graph, str, lambda uid: parsed.get(uid, ""),
+        )
 
     def link_elements(self) -> dict[tuple[str, str], list[str]]:
         """(upstream, downstream) terminals → inline element UIDs, in order.
@@ -2600,48 +2622,37 @@ class TapiContext:
                 f"{fiber_uid!r} is not a Fiber (link failure only applies "
                 f"to fiber spans)"
             )
-        # The backend's uid_map may carry GNPy element objects (GnpyBackend)
-        # or lightweight stubs (EgnBackend) — both expose ``.uid``.
-        el = self._backend.uid_map.get(fiber_uid)
-
         # Idempotent: no-op if state is already what was requested.
         if failed and fiber_uid in self._failed_links:
             return self.services_for_element(fiber_uid)
         if not failed and fiber_uid not in self._failed_links:
             return self.services_for_element(fiber_uid)
 
-        # Mutate both routing graphs: ``_topo_graph.graph`` powers the
-        # NetworkX k-shortest fallback used by ``get_service_path``, and
-        # ``_gnpy_network`` powers GNPy's ``compute_constrained_path``
-        # (the preferred path engine when GNPy is loaded). The two graphs
-        # key nodes differently — TopologyGraph uses UID strings, the GNPy
-        # DiGraph uses element *objects* — so we resolve the right node
-        # key per graph before touching edges.
-        graphs: list = [(self._topo_graph.graph, fiber_uid)]
-        if self._gnpy_network is not None and el in self._gnpy_network:
-            graphs.append((self._gnpy_network, el))
-
-        # Each entry: (graph, node_key, in_edges, out_edges).
+        # Cut the fiber in every routing graph (``_route_cuts``), and put a
+        # node back only once no failed fiber still cuts it: two sub-spans of
+        # one parsed fiber cut the same route-graph node under EGN.
         if failed:
-            stash: list[tuple] = []
-            for g, key in graphs:
+            self._failed_links.add(fiber_uid)
+            for g, key in self._route_cuts(fiber_uid):
+                if (g, key) in self._removed_edges:
+                    continue
                 in_edges = list(g.in_edges(key, data=True))
                 out_edges = list(g.out_edges(key, data=True))
-                stash.append((g, key, in_edges, out_edges))
-                g.remove_edges_from(
-                    [(u, v) for u, v, _ in in_edges + out_edges]
-                )
-            self._removed_edges[fiber_uid] = stash
-            self._failed_links.add(fiber_uid)
+                self._removed_edges[(g, key)] = (in_edges, out_edges)
+                g.remove_edges_from([(u, v) for u, v, _ in in_edges + out_edges])
             new_op = OperationalState.DISABLED
         else:
-            stash = self._removed_edges.pop(fiber_uid, [])
-            for g, _key, in_edges, out_edges in stash:
-                for u, v, d in in_edges:
-                    g.add_edge(u, v, **d)
-                for u, v, d in out_edges:
-                    g.add_edge(u, v, **d)
             self._failed_links.discard(fiber_uid)
+            still_cut = {
+                cut for uid in self._failed_links for cut in self._route_cuts(uid)
+            }
+            for cut in self._route_cuts(fiber_uid):
+                if cut in still_cut or cut not in self._removed_edges:
+                    continue
+                g, _key = cut
+                in_edges, out_edges = self._removed_edges.pop(cut)
+                for u, v, d in in_edges + out_edges:
+                    g.add_edge(u, v, **d)
             new_op = OperationalState.ENABLED
 
         # Cached routes may include this fiber; rebuild lazily on demand.
@@ -2668,6 +2679,36 @@ class TapiContext:
         self._backend.notify_fiber_failed(fiber_uid, failed)
 
         return affected
+
+    def _route_cuts(self, fiber_uid: str) -> list[tuple[Any, Any]]:
+        """(routing graph, node key) pairs a cut of ``fiber_uid`` removes.
+
+        ``_topo_graph.graph`` powers the NetworkX k-shortest fallback used by
+        ``get_service_path``, and ``_gnpy_network`` GNPy's
+        ``compute_constrained_path`` when GNPy is loaded. The GNPy DiGraph
+        keys nodes by element object, the topology graph by UID. A fiber the
+        design split or inserted is not a node of the parsed topology graph;
+        the EGN backend routes over that graph, so there the cut removes the
+        parsed fibers of the same link.
+        """
+        topo = self._topo_graph.graph
+        cuts: list[tuple[Any, Any]] = []
+        if fiber_uid in topo:
+            cuts.append((topo, fiber_uid))
+        elif self._gnpy_network is None:
+            a, z = self._element_terminals.get(fiber_uid, (None, None))
+            link = self._route_link_elements.get((a, z), []) if a and z else []
+            parsed = self._topo_graph._gnpy_topo.elements_by_uid
+            cuts.extend(
+                (topo, uid) for uid in link
+                if (element := parsed.get(uid)) is not None and element.type == "Fiber"
+            )
+        # The backend's uid_map carries GNPy element objects (GnpyBackend), the
+        # GNPy network's node keys.
+        el = self._backend.uid_map.get(fiber_uid)
+        if self._gnpy_network is not None and el in self._gnpy_network:
+            cuts.append((self._gnpy_network, el))
+        return cuts
 
     def is_path_failed(self, path_uids: list[str]) -> bool:
         """True if any UID on the path is a currently-failed fiber."""
@@ -2960,9 +3001,13 @@ class TapiContext:
                 for uid, el in self._gnpy_uid_map.items()
             ]
         else:
+            # The elements the backend propagates over: the EGN backend's are
+            # GNPy's designed network, so both backends list the same
+            # inventory; the topology as parsed without a design.
+            topo = self._backend.element_topology or self._topo_graph._gnpy_topo
             elements = [
                 (el.uid, el.type, el.type_variety or "", location(el))
-                for el in self._topo_graph._gnpy_topo.elements
+                for el in topo.elements
             ]
 
         devices: list[Device] = []
@@ -3146,14 +3191,22 @@ class TapiContext:
         for fiber_uid in data.get("failed_links") or []:
             if fiber_uid in self._gnpy_uid_map:
                 self.set_link_failed(fiber_uid, True)
+        from twinlight.state.twin_overrides import REMOVED
+
         twin_overrides = data.get("twin_overrides") or {}
+        dropped = {key: why for key, why in REMOVED.items() if key in twin_overrides}
+        twin_overrides = {k: v for k, v in twin_overrides.items() if k not in dropped}
         if twin_overrides:
             self.apply_twin_overrides(twin_overrides)
         self._bump_revision()
         # The services and their OAM jobs were replaced.
         self._tapi_changed(config=True)
 
-        warnings: list[str] = []
+        warnings: list[str] = [
+            f"the snapshot overrides {key}, which no longer exists ({why}); "
+            "that override was not restored"
+            for key, why in dropped.items()
+        ]
         thz = 1e-12
         for uuid, svc in self._services.items():
             if self._out_of_band(uuid):
@@ -3359,3 +3412,63 @@ class TapiContext:
             "occupancy": occupancy,
             "service-allocation": service_allocation,
         }
+
+
+def _topology_graph(
+    topo: Any,
+) -> tuple[Any, Callable[[Any], str], Callable[[Any], str]]:
+    """(graph, UID of a node, kind of a node) of a parsed GNPy topology: its
+    elements as UID-keyed nodes, its connections as edges."""
+    import networkx as nx
+
+    graph = nx.DiGraph()
+    graph.add_nodes_from(el.uid for el in topo.elements)
+    graph.add_edges_from((c.from_node, c.to_node) for c in topo.connections)
+    kinds = {el.uid: el.type for el in topo.elements}
+    return graph, str, lambda uid: kinds.get(uid, "")
+
+
+def _index_links(
+    graph: Any, uid_of: Callable[[Any], str], kind_of: Callable[[Any], str],
+) -> tuple[dict[str, tuple[str | None, str | None]], dict[tuple[str, str], list[str]]]:
+    """Walk every inline Fiber and Edfa of ``graph`` out to its terminals.
+
+    Returns ``(terminals, links)``: inline element UID → (upstream,
+    downstream) ROADM/transceiver UID, either None where the walk could not
+    reach one; and (upstream, downstream) → the link's inline element UIDs in
+    propagation order.
+    """
+
+    def walk(start: Any, step: Any) -> tuple[str | None, int]:
+        """(terminal UID or None, number of hops to it)."""
+        cur, seen = start, {start}
+        while True:
+            neighbours = list(step(cur))
+            if len(neighbours) != 1:
+                return None, 0
+            cur = neighbours[0]
+            if cur in seen:
+                return None, 0
+            seen.add(cur)
+            kind = kind_of(cur)
+            if kind in ("Roadm", "Transceiver"):
+                return uid_of(cur), len(seen) - 1
+            if kind not in ("Edfa", "Fiber"):
+                return None, 0
+
+    terminals: dict[str, tuple[str | None, str | None]] = {}
+    positions: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for node in graph.nodes:
+        if kind_of(node) in ("Fiber", "Edfa"):
+            (a, hops), (z, _) = (
+                walk(node, graph.predecessors),
+                walk(node, graph.successors),
+            )
+            terminals[uid_of(node)] = (a, z)
+            if a is not None and z is not None:
+                positions.setdefault((a, z), []).append((hops, uid_of(node)))
+    links = {
+        pair: [uid for _hops, uid in sorted(items)]
+        for pair, items in positions.items()
+    }
+    return terminals, links
