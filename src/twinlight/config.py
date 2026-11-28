@@ -377,9 +377,12 @@ class EnvironmentalConfig(BaseModel):
         default=0.0,
         description="Hours to shift diurnal cycle relative to wall clock",
     )
+    # Kato, Koyano & Nishimura, Opt. Lett. 25(16):1156 (2000) measure negative
+    # coefficients, -0.0005 (dispersion-flattened) to -0.0038 (large-core
+    # NZ-DSF), and give no G.652 value; see PHYSICS.md § Known limitations.
     cd_temp_coeff_ps_nm_km_c: float = Field(
-        default=0.002, ge=0,
-        description="dD/dT [ps/(nm·km·°C)]. Default: G.652 SSMF, Kato et al. Opt. Lett. 2000 (range -0.0015 to -0.0038).",
+        default=-0.0015,
+        description="dD/dT [ps/(nm·km·°C)]; negative: dispersion falls as the fiber warms. Default: within the range Kato et al. Opt. Lett. 2000 measured (-0.0005 to -0.0038), which has no G.652 value.",
     )
     alpha_temp_coeff_db_km_c: float = Field(
         default=2e-4, ge=0,

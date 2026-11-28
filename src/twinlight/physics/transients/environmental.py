@@ -3,12 +3,14 @@
 Physical basis
 --------------
 CD drift
-    Chromatic dispersion of G.652 SSMF varies with temperature at roughly
-    dD/dT ≈ 0.002 ps/(nm·km·°C) (Kato et al., Opt. Lett. 2000;
-    range -0.0015 to -0.0038; ITU-T G.652 data sheet).
-    A 5 °C diurnal swing over a 100 km link produces ~0.1 ps/nm variation,
-    which is negligible for coherent systems with DSP but is included as a
-    realistic monitor metric.
+    Chromatic dispersion falls as the fiber warms.  Kato, Koyano & Nishimura
+    (Opt. Lett. 25(16):1156, 2000) measure dD/dT from -0.0005 ps/(nm·km·°C)
+    (dispersion-flattened fiber) to -0.0038 (large-core NZ-DSF) and find that
+    it depends strongly on the dispersion slope; they give no G.652 value.
+    The default, -0.0015 ps/(nm·km·°C), lies inside their range (PHYSICS.md
+    § Known limitations).  A 5 °C diurnal swing over a 100 km link moves CD
+    by ~0.75 ps/nm: negligible for coherent systems with DSP, but included
+    as a realistic monitor metric.
 
 Loss drift
     Fiber attenuation coefficient changes with temperature at approximately

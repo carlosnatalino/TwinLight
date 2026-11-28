@@ -96,7 +96,7 @@ transients:
     temp_variation_c: 5.0              # ambient temperature variation [deg C]
     temp_cycle_period_s: 86400.0       # diurnal cycle period [s] (24 h)
     timezone_offset: 0.0               # hours to shift diurnal cycle relative to wall clock
-    cd_temp_coeff_ps_nm_km_c: 0.002   # dD/dT [ps/(nm·km·°C)]; G.652, Kato et al. Opt. Lett. 2000
+    cd_temp_coeff_ps_nm_km_c: -0.0015 # dD/dT [ps/(nm·km·°C)]; within Kato et al. Opt. Lett. 2000 (-0.0005 to -0.0038)
     alpha_temp_coeff_db_km_c: 0.0002  # dα/dT [dB/(km·°C)]; deployed G.652, Analytical Models §6
 
 # ---------------------------------------------------------------------------
