@@ -353,8 +353,29 @@ Ambient temperature follows a diurnal sinusoid (`temp_variation_c`,
   [[13]](../README.md#ref-13) measure −0.0005 (dispersion-flattened fiber) to
   −0.0038 (large-core NZ-DSF) and find the coefficient follows the dispersion
   slope; they give no G.652 value (see [Known limitations](#known-limitations)).
-- **Fiber loss variation** via dα/dT ≈ 2×10⁻⁴ dB/(km·°C) on deployed fiber,
-  which penalises both GSNR and OSNR.
+- **Fiber loss variation** via dα/dT ≈ 2×10⁻⁴ dB/(km·°C)
+  **[CITATION NEEDED]**: no published measurement on deployed G.652 fiber is
+  recorded for this value. A 5 °C swing changes a 100 km span's loss by
+  δ ≈ 0.1 dB.
+
+  The amplifiers hold their output power: GNPy's `designed_network()` designs
+  them in power mode (`Span.power_mode` in the equipment library), and the EGN
+  backend uses the same design. Each amplifier makes up its span's extra
+  loss, so the launch powers and the NLI do not move, while each one's ASE
+  relative to the signal rises by its span's δ. With the noise terms adding
+  incoherently (Carena *et al.* 2012 `[Carena_2012]`
+  [[8]](../README.md#ref-8)):
+
+  ```
+  1/OSNR' = 10^(δ/10) / OSNR
+  1/GSNR' = 1/GSNR + (10^(δ/10) − 1) / OSNR
+  ```
+
+  The OSNR falls by δ, the change of **one** span, whatever the route's span
+  count, and the GSNR by less: by the share of ASE in its noise. δ is taken
+  at the route's mean span length. Before this revision the GSNR fell by the
+  summed loss change of every span, ±2.85 dB for a 5 °C swing on a 2847 km
+  route, where output-power control gives ±0.1 dB.
 
 ## 3. From GSNR to BER, Q, post-FEC BER and GMI
 
@@ -489,6 +510,7 @@ used for research.
 | **Soft-decision post-FEC BER** | GMI and NGMI are reported but not mapped to a post-FEC BER | Per-code NGMI threshold or waterfall (Alvarado *et al.* 2015) | Known gap — needs per-code NGMI data, which specifications rarely publish |
 | **Admission thresholds** | Required GSNRs sit at pre-FEC BERs of 3.9e-3 (QPSK), 6.6e-3 (16QAM), 6.1e-3 (64QAM) | One FEC limit for every format: 8.5 / 15.2 / 21.1 dB at 3.8e-3 | **Moderate** — 16QAM and 64QAM admission is 0.6–0.7 dB optimistic against the 7% HD-FEC limit, absorbed by the default 1.5 dB `qot_margin_db`. The values are unchanged so admission behaves as before |
 | **Line load** | GNPy: every channel on the fully loaded SI comb. EGN: the admitted lightpaths, each in the fibers it shares with the channel under test, up to the first failed fiber of its route (the transmitter still emits; the cut stops the light); a lightpath outside its amplifier band counts nowhere | Network-wide propagation of the actual spectrum | Low — the GNPy number is the worst case the line is designed for; the EGN number follows the network's load, and the two agree at full load |
+| **Environmental loss drift** | Every span's loss changes by dα/dT·ΔT at the route's mean span length; the amplifiers hold their output power, so the OSNR loses that δ and the GSNR its ASE share of it; the NF's dependence on the amplifier's gain is ignored; dα/dT has no recorded source | Per-span temperatures and lengths, each amplifier's own ASE share and NF at its new gain | Low — δ is ≈0.1 dB per 100 km span for 5 °C; with unequal spans the mean-length δ weights every amplifier's ASE equally, and the coefficient itself is uncited |
 | **Thermal CD coefficient** | dD/dT = −0.0015 ps/(nm·km·°C) for every fiber | Kato *et al.* 2000 measure −0.0005 to −0.0038 ps/(nm·km·°C) across fiber types, set by the dispersion slope, with no G.652 value | Low — the default is inside their range, not a G.652 measurement; the CD swing it gives (≈0.75 ps/nm per 100 km for 5 °C) is far below what a coherent DSP compensates |
 | **Spectral scope** | C-band only | C+L, multi-band | Known gap — the grid is parameterised but the physics is not |
 | **Filtering / ROADM penalties** | Not modelled beyond PDL | Cascaded filter narrowing penalties | Known gap |

@@ -285,7 +285,7 @@ environmental:
 | `temp_cycle_period_s` | `86400.0` | Diurnal period [s] |
 | `timezone_offset` | `0.0` | Hours to shift the cycle relative to wall-clock time |
 | `cd_temp_coeff_ps_nm_km_c` | `-0.0015` | dD/dT [ps/(nm·km·°C)]. Negative: dispersion falls as the fiber warms. Kato *et al.* 2000 measured −0.0005 to −0.0038 and give no G.652 value, so the default is a value inside their range (see [PHYSICS.md § Known limitations](PHYSICS.md#known-limitations)) |
-| `alpha_temp_coeff_db_km_c` | `0.0002` | dα/dT [dB/(km·°C)] on deployed G.652 fiber |
+| `alpha_temp_coeff_db_km_c` | `0.0002` | dα/dT [dB/(km·°C)] on deployed G.652 fiber, no recorded source. Each span's loss changes by this times its length and the temperature swing; the output-power-controlled amplifiers turn that into an OSNR loss of one span's change, whatever the route length (see [PHYSICS.md § 2.4](PHYSICS.md#24-environmental-drift)) |
 
 ## `rmsa` — routing, modulation and spectrum assignment
 

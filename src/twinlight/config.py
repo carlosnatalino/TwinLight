@@ -386,7 +386,7 @@ class EnvironmentalConfig(BaseModel):
     )
     alpha_temp_coeff_db_km_c: float = Field(
         default=2e-4, ge=0,
-        description="dα/dT [dB/(km·°C)]. Default: measured on deployed G.652 fibers (Analytical Models §6).",
+        description="dα/dT [dB/(km·°C)] of each span; the OSNR loses one span's change under output-power control. Default: deployed G.652 fiber, no recorded source.",
     )
 
 
