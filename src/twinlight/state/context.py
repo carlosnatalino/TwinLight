@@ -3191,14 +3191,22 @@ class TapiContext:
         for fiber_uid in data.get("failed_links") or []:
             if fiber_uid in self._gnpy_uid_map:
                 self.set_link_failed(fiber_uid, True)
+        from twinlight.state.twin_overrides import REMOVED
+
         twin_overrides = data.get("twin_overrides") or {}
+        dropped = {key: why for key, why in REMOVED.items() if key in twin_overrides}
+        twin_overrides = {k: v for k, v in twin_overrides.items() if k not in dropped}
         if twin_overrides:
             self.apply_twin_overrides(twin_overrides)
         self._bump_revision()
         # The services and their OAM jobs were replaced.
         self._tapi_changed(config=True)
 
-        warnings: list[str] = []
+        warnings: list[str] = [
+            f"the snapshot overrides {key}, which no longer exists ({why}); "
+            "that override was not restored"
+            for key, why in dropped.items()
+        ]
         thz = 1e-12
         for uuid, svc in self._services.items():
             if self._out_of_band(uuid):
