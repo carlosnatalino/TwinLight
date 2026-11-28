@@ -192,42 +192,20 @@ class EdfaStateTracker:
 def delta_gsnr_db(
     t: float,
     edfa_uids: list[str],
-    cfg: EdfaReservoirConfig,
-    edfa_tracker: EdfaStateTracker | None = None,
-    _phase_fn=None,
+    edfa_tracker: EdfaStateTracker,
 ) -> float:
-    """Compute GSNR perturbation [dB] from EDFA gain dynamics at time t.
+    """GSNR perturbation [dB] from the EDFA gain transients at time t.
 
-    If an EdfaStateTracker is provided, uses the Bononi exponential step
-    response model (stateful, event-driven).  Otherwise falls back to the
-    sinusoidal slow-drift approximation (stateless, for backwards compat).
+    The tracker holds the add/drop events (Bononi exponential step
+    response); there is no stateless form, so every reader of a lightpath
+    applies the same events and reports the same value.
 
     Args:
         t: Wall-clock time [s].
         edfa_uids: Ordered EDFA UIDs along the path.
-        cfg: EDFA reservoir config.
-        edfa_tracker: Optional stateful tracker with event history.
-        _phase_fn: Optional callable(uid, metric) → float for testing.
+        edfa_tracker: The context's tracker of add/drop events.
 
     Returns:
         Delta GSNR [dB].
     """
-    if edfa_tracker is not None:
-        return edfa_tracker.get_total_delta_gsnr_db(edfa_uids, t)
-
-    # Fallback: stateless sinusoidal approximation (original model)
-    # Retained for backward compatibility when no event tracking is
-    # available (e.g. snapshot restore without event history).
-    from twinlight.physics.transients.cascade import hash_phase
-    ph = _phase_fn or hash_phase
-
-    T_drift = (cfg.tau_ms / 1000.0) * cfg.drift_period_multiplier
-    amp_db = cfg.gain_drift_amp_db
-    total = 0.0
-    for uid in edfa_uids:
-        phase = ph(uid, "edfa_gain")
-        excursion = amp_db * math.sin(
-            2 * math.pi * t / T_drift + phase
-        )
-        total += excursion * 0.05 - abs(excursion) * 0.1
-    return total
+    return edfa_tracker.get_total_delta_gsnr_db(edfa_uids, t)

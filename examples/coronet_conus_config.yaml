@@ -61,8 +61,6 @@ transients:
   edfa_reservoir:
     enabled: true
     tau_ms: 10.0                       # Sun-Saleh-Zyskind τ ≈ 10 ms; Analytical Models §1
-    drift_period_multiplier: 100.0
-    gain_drift_amp_db: 0.3             # Tancevski-Bononi-Rusch IEEE JLT 1999 (cascade ref)
     solver_method: "RK45"
     solver_max_step_ms: 0.1
 

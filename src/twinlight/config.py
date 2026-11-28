@@ -286,15 +286,6 @@ class EdfaReservoirConfig(BaseModel):
             "Bononi-Rusch JLT 1998 Eq. 29: ~100-500 us."
         ),
     )
-    # Legacy sinusoidal fallback (used when no event tracker)
-    drift_period_multiplier: float = Field(
-        default=100.0, gt=0,
-        description="Sinusoidal fallback: drift period multiplier.",
-    )
-    gain_drift_amp_db: float = Field(
-        default=0.3, ge=0,
-        description="Sinusoidal fallback: peak gain excursion [dB].",
-    )
     solver_method: str = "RK45"
     solver_max_step_ms: float = Field(default=0.1, gt=0)
 

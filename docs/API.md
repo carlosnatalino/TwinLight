@@ -1176,13 +1176,14 @@ its own tags (below), which a service change does not move.
 | GET | `/internal/spectrum-context` | Grid parameters: `num-slots`, `slot-width-ghz`, `nominal-central-frequency-thz` |
 | GET | `/internal/path-info?sip_a=&sip_z=&modulation=` | Path hops and a QoT estimate without creating a service, evaluated on the channel admission would assign (reported as `central-frequency-thz` and `launch-power-dbm`) |
 | POST | `/internal/compute-path` | Up to `max-candidates` (1–10) routes ranked by fiber length between two SIPs, each with its T-API links, nodes and `fiber-length-km`; same constraints as a path-comp-service |
-| GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces |
-| GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points |
+| GET | `/internal/services/{service_uuid}/eye-diagram` | Synthesised eye-diagram traces, from the service's OPM at that instant; `409` when it carries no signal (`link-failed`, `out-of-band`) |
+| GET | `/internal/services/{service_uuid}/constellation` | Synthesised constellation points, likewise |
 | GET | `/internal/whoami` | The principal the request authenticated as; see [Authentication](#authentication) |
 
 The OPM endpoints and the [gNMI measurement stream](#gnmi-streaming) share one
 computation (`sample_service_opm`): at the same instant both report identical
-values, the stream as T-API records and these as the twin's own JSON.
+values, the stream as T-API records and these as the twin's own JSON. The eye
+and constellation diagrams are drawn from that computation too.
 
 Every OPM figure is the service's own channel — at its assigned central
 frequency and launch power — not the worst channel of the line. The rest of

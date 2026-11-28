@@ -274,8 +274,9 @@ long cascade, would swamp it: 30 amplifiers × 0.3 dB × one channel is 9 dB.
 `EdfaStateTracker` is owned by `TapiContext` and updated whenever a service is
 created or deleted — so an add/drop event on one lightpath perturbs every other
 lightpath sharing those amplifiers, which is the whole point of modelling it.
-When no tracker is supplied, the model degrades to a stateless sinusoidal
-approximation.
+Every reader of a lightpath (the OPM endpoints, the gNMI stream, Prometheus
+and the eye and constellation diagrams) applies that one tracker; there is no
+stateless form of the model.
 
 ### 2.2 Polarization: PMD drift and PDL
 
@@ -498,8 +499,9 @@ jitter σ_t = PMD/√3, and optional amplitude variation from PDL. The approach
 follows the time-domain digital-twin framing of OCATA
 [[17]](../README.md#ref-17).
 
-These are illustrative and consistent with the reported OPM; they are not a
-substitute for DSP-level simulation.
+These are illustrative, and drawn from the OPM the twin reports at that
+instant (the same `sample_service_opm` computation as the OPM endpoints and the
+gNMI stream); they are not a substitute for DSP-level simulation.
 
 ## Known limitations
 

@@ -7,10 +7,6 @@ from twinlight.physics.transients.edfa_reservoir import (
 )
 
 
-def _fixed_phase(_uid: str, _metric: str) -> float:
-    return 0.0
-
-
 class TestEdfaStateTracker:
     """Verify the stateful Bononi reservoir model."""
 
@@ -174,37 +170,17 @@ class TestEdfaStateTracker:
 class TestDeltaGsnrDbFunction:
     """Test the delta_gsnr_db entry point."""
 
-    def test_with_tracker(self):
-        """When tracker is provided, should use it."""
+    def test_reads_the_tracker(self):
         tracker = EdfaStateTracker()
         cfg = EdfaReservoirConfig(gain_per_channel_db=0.5)
         tracker.notify_channel_change(
             ["edfa1"], delta_channels=+1, cfg=cfg, t=0.0
         )
         # At the event: the full -0.5 dB excursion.
-        assert abs(
-            delta_gsnr_db(
-                t=1e-9, edfa_uids=["edfa1"],
-                cfg=cfg, edfa_tracker=tracker,
-            ) - (-0.5)
-        ) < 0.01
+        assert abs(delta_gsnr_db(1e-9, ["edfa1"], tracker) - (-0.5)) < 0.01
         # Long after: relaxed to the designed operating point.
-        assert abs(
-            delta_gsnr_db(
-                t=100.0, edfa_uids=["edfa1"],
-                cfg=cfg, edfa_tracker=tracker,
-            )
-        ) < 0.01
+        assert abs(delta_gsnr_db(100.0, ["edfa1"], tracker)) < 0.01
 
-    def test_without_tracker_uses_sinusoidal(self):
-        """Without tracker, should fall back to sinusoidal model."""
-        cfg = EdfaReservoirConfig(
-            gain_drift_amp_db=0.3,
-            drift_period_multiplier=100.0,
-        )
-        result = delta_gsnr_db(
-            t=0.5, edfa_uids=["edfa1", "edfa2"],
-            cfg=cfg, edfa_tracker=None, _phase_fn=_fixed_phase,
-        )
-        # Should produce a non-zero sinusoidal value
-        assert isinstance(result, float)
+    def test_an_empty_tracker_is_no_change(self):
+        # There is no stateless fallback: no event recorded, no excursion.
+        assert delta_gsnr_db(0.5, ["edfa1", "edfa2"], EdfaStateTracker()) == 0.0

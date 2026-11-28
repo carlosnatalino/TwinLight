@@ -67,8 +67,6 @@ transients:
   edfa_reservoir:
     enabled: true
     tau_ms: 10.0                       # erbium metastable lifetime [ms]; Sun-Saleh-Zyskind, Analytical Models §1
-    drift_period_multiplier: 100.0     # drift period = tau_ms * this / 1000 [s]
-    gain_drift_amp_db: 0.3             # peak-to-peak EDFA gain [dB]; cascade ~28 dB p-p w/o AGC (Tancevski-Bononi-Rusch, IEEE JLT 1999)
     solver_method: "RK45"              # scipy.integrate.solve_ivp method
     solver_max_step_ms: 0.1            # max solver step [ms]
 
