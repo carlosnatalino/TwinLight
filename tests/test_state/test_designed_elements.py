@@ -95,6 +95,21 @@ class TestSameElementsUnderBothBackends:
         }
         assert len(owners) == 2  # the booster and the preamplifier
 
+    def test_link_and_fiber_lengths_are_identical(self, coronet: dict[str, TapiContext]) -> None:
+        pair, fibers = _split_link(coronet["egn"])
+        link = '/LinkList/"{}"/"{}"'.format(*pair)
+
+        def value(ctx: TapiContext, path: str) -> float:
+            (node,) = resolve(TreeBuilder(ctx).root(), parse_path(path))
+            return asyncio.run(node.read())
+
+        gnpy_km = value(coronet["gnpy"], f"{link}/length_km")
+        assert gnpy_km > 0
+        assert value(coronet["egn"], f"{link}/length_km") == pytest.approx(gnpy_km)
+        for fiber in fibers:
+            path = f'{link}/ElementList/"{fiber}"/length_km'
+            assert value(coronet["egn"], path) == pytest.approx(value(coronet["gnpy"], path))
+
     def test_physical_inventory_is_identical(self, coronet: dict[str, TapiContext]) -> None:
         gnpy, egn = (
             coronet[b]._build_physical_context().model_dump(by_alias=True, mode="json")
